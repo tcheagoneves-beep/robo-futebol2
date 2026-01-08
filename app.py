@@ -6,14 +6,13 @@ import os
 import plotly.express as px
 from datetime import datetime, timedelta
 
-# --- CONFIGURAÇÃO VISUAL ---
+# --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
     page_title="Neves Analytics",
     layout="centered",
     page_icon="❄️"
 )
 
-# Estilos CSS
 st.markdown("""
 <style>
     .stApp {background-color: #121212; color: white;}
@@ -33,12 +32,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- ARQUIVO DE DADOS (AGORA EM .TXT PARA BLOCO DE NOTAS) ---
+# --- 2. FUNÇÕES DE BANCO DE DADOS (.TXT) ---
 DB_FILE = 'neves_dados.txt'
 
 def carregar_db():
     if not os.path.exists(DB_FILE):
-        # Cria o arquivo TXT se não existir
         df = pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
         df.to_csv(DB_FILE, index=False)
         return df
@@ -49,7 +47,6 @@ def carregar_db():
 
 def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
     df = carregar_db()
-    # Verifica duplicidade
     if not ((df['id'] == fixture_id) & (df['status'] == 'Pendente')).any():
         novo_registro = {
             'id': fixture_id,
@@ -71,18 +68,14 @@ def atualizar_status_db(lista_jogos_api):
     pendentes = df[df['status'] == 'Pendente']
     
     for index, row in pendentes.iterrows():
-        # Busca o jogo na lista da API
         jogo_dados = next((j for j in lista_jogos_api if j['fixture']['id'] == row['id']), None)
-        
         if jogo_dados:
             gols_agora = (jogo_dados['goals']['home'] or 0) + (jogo_dados['goals']['away'] or 0)
             status_match = jogo_dados['fixture']['status']['short']
             
-            # Green: Saiu gol
             if gols_agora > row['gols_inicial']:
                 df.at[index, 'status'] = 'Green'
                 modificado = True
-            # Red: Acabou sem gol
             elif status_match in ['FT', 'AET', 'PEN']:
                 df.at[index, 'status'] = 'Red'
                 modificado = True
@@ -91,7 +84,6 @@ def atualizar_status_db(lista_jogos_api):
         df.to_csv(DB_FILE, index=False)
     return df
 
-# --- RELATÓRIO ---
 def gerar_texto_relatorio():
     df = carregar_db()
     if df.empty: return None
@@ -99,7 +91,6 @@ def gerar_texto_relatorio():
     df['data'] = pd.to_datetime(df['data'])
     hoje = pd.Timestamp.today().normalize()
     
-    # Filtros
     df_hoje = df[df['data'] == hoje]
     start_week = hoje - timedelta(days=hoje.weekday())
     df_semana = df[df['data'] >= start_week]
@@ -115,7 +106,6 @@ def gerar_texto_relatorio():
     gh, rh, ph = calcular(df_hoje)
     gs, rs, ps = calcular(df_semana)
     gm, rm, pm = calcular(df_mes)
-    gt, rt, pt = calcular(df)
     
     msg = f"""
 📊 **FECHAMENTO NEVES ANALYTICS** 📊
@@ -134,13 +124,15 @@ def gerar_texto_relatorio():
 """
     return msg
 
-# --- SIDEBAR ---
+# --- 3. SIDEBAR E CONFIGURAÇÕES ---
 with st.sidebar:
     st.header("⚙️ Configurações")
     if 'api_key' not in st.session_state: st.session_state['api_key'] = ""
     API_KEY = st.text_input("Chave API-SPORTS:", value=st.session_state['api_key'], type="password")
     if API_KEY: st.session_state['api_key'] = API_KEY
+    
     st.markdown("---")
+    
     with st.expander("🔔 Telegram (Família)"):
         tg_token = st.text_input("Bot Token:", type="password")
         tg_chat_ids = st.text_input("Chat IDs (separados por vírgula):")
@@ -150,6 +142,7 @@ with st.sidebar:
                     try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": cid.strip(), "text": "✅ Teste Neves Analytics!"})
                     except: pass
                 st.success("Enviado!")
+    
     st.markdown("---")
     st.header("🤖 Modo Automático")
     ROBO_LIGADO = st.checkbox("LIGAR ROBÔ", value=False)
@@ -167,7 +160,55 @@ with st.sidebar:
             
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
-# --- ANALYTICS ---
+# --- 4. FUNÇÕES DE API (SIMULAÇÃO + REAL) ---
+def gerar_sinais_teste(): 
+    return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 35}}, "league": {"name": "Simulacao"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Real"}, "away": {"name": "Almeria"}}}]
+def gerar_odds_teste(fid): return (1.20, 15.00)
+def gerar_stats_teste(fid): 
+    return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 50}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 3}, {"type": "Dangerous Attacks", "value": 20}]}]
+
+# --- AQUI ESTAVAM OS ERROS (AGORA CORRIGIDO) ---
+def buscar_jogos(api_key):
+    if MODO_DEMO: return gerar_sinais_teste()
+    url = "https://v3.football.api-sports.io/fixtures"
+    headers = {"x-apisports-key": api_key}
+    try: return requests.get(url, headers=headers, params={"date": datetime.today().strftime('%Y-%m-%d')}).json().get('response', [])
+    except: return []
+
+def buscar_stats(api_key, fixture_id):
+    if MODO_DEMO: return gerar_stats_teste(fixture_id)
+    url = "https://v3.football.api-sports.io/fixtures/statistics"
+    headers = {"x-apisports-key": api_key}
+    try: return requests.get(url, headers=headers, params={"fixture": fixture_id}).json().get('response', [])
+    except: return []
+
+# A FUNÇÃO QUE FALTAVA AGORA ESTÁ AQUI
+if 'odds_cache' not in st.session_state: st.session_state['odds_cache'] = {}
+
+def buscar_odds_cached(api_key, fixture_id):
+    if MODO_DEMO: return gerar_odds_teste(fixture_id)
+    
+    # Se já tem na memória, usa a memória
+    if fixture_id in st.session_state['odds_cache']:
+        return st.session_state['odds_cache'][fixture_id]
+    
+    # Se não, busca na API
+    url = "https://v3.football.api-sports.io/odds"
+    headers = {"x-apisports-key": api_key}
+    try:
+        data = requests.get(url, headers=headers, params={"fixture": fixture_id, "bookmaker": "1"}).json()
+        if data.get('response'):
+            bets = data['response'][0]['bookmakers'][0]['bets']
+            winner_bet = next((b for b in bets if b['id'] == 1), None)
+            if winner_bet:
+                odd_casa = float(next((v['odd'] for v in winner_bet['values'] if v['value'] == 'Home'), 0))
+                odd_fora = float(next((v['odd'] for v in winner_bet['values'] if v['value'] == 'Away'), 0))
+                st.session_state['odds_cache'][fixture_id] = (odd_casa, odd_fora)
+                return odd_casa, odd_fora
+    except: pass
+    return 0, 0
+
+# --- 5. CÉREBRO (LÓGICA) ---
 def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
     gol_c = v(s_casa, 'Shots on Goal'); gol_f = v(s_fora, 'Shots on Goal')
@@ -230,37 +271,20 @@ def traduzir_instrucao(sinal, time_fav=""):
     elif "GIGANTE" in sinal: return "Entrar em **Mais 1 Gol**."
     else: return "Entrar em **Mais Gols**."
 
-# --- SIMULAÇÃO TESTE ---
-def gerar_sinais_teste(): return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 35}}, "league": {"name": "Simulacao"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Real"}, "away": {"name": "Almeria"}}}]
-def gerar_odds_teste(fid): return (1.20, 15.00)
-def gerar_stats_teste(fid): return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 50}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 3}, {"type": "Dangerous Attacks", "value": 20}]}]
-def buscar_jogos(api_key): # API CALL
-    if MODO_DEMO: return gerar_sinais_teste()
-    url = "https://v3.football.api-sports.io/fixtures"
-    try: return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": datetime.today().strftime('%Y-%m-%d')}).json().get('response', [])
-    except: return []
-def buscar_stats(api_key, fixture_id):
-    if MODO_DEMO: return gerar_stats_teste(fixture_id)
-    url = "https://v3.football.api-sports.io/fixtures/statistics"
-    try: return requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fixture_id}).json().get('response', [])
-    except: return []
-
-# --- EXECUTAR ---
+# --- 6. EXECUÇÃO PRINCIPAL ---
 st.title("❄️ Neves Analytics")
 
 if ROBO_LIGADO:
     if not API_KEY and not MODO_DEMO:
-        st.error("Coloque a API Key.")
+        st.error("⚠️ Coloque a API Key na barra lateral!")
     else:
         st.markdown('<div class="status-online">🟢 SISTEMA ONLINE</div>', unsafe_allow_html=True)
         st.caption(f"Ciclo: {INTERVALO}s | Banco de Dados: neves_dados.txt")
         
         jogos = buscar_jogos(API_KEY)
-        
-        # 1. Atualizar Green/Red
         atualizar_status_db(jogos)
         
-        # 2. Relatório Automático (22h)
+        # Relatório Automático 22h
         if 'relatorio_enviado_hoje' not in st.session_state: st.session_state['relatorio_enviado_hoje'] = None
         hora = int(datetime.now().strftime('%H'))
         if hora >= 22 and st.session_state['relatorio_enviado_hoje'] != datetime.today().strftime('%Y-%m-%d'):
@@ -290,7 +314,9 @@ if ROBO_LIGADO:
                 if zona_quente:
                     stats = buscar_stats(API_KEY, jogo['fixture']['id'])
                     if stats:
+                        # AGORA VAI FUNCIONAR: A função está definida lá em cima!
                         odd_casa, odd_fora = buscar_odds_cached(API_KEY, jogo['fixture']['id'])
+                        
                         s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
                         s_fora = {i['type']: i['value'] for i in stats[1]['statistics']}
                         tc = jogo['teams']['home']['name']; tf = jogo['teams']['away']['name']
@@ -301,19 +327,18 @@ if ROBO_LIGADO:
                         if sinal:
                             achou = True
                             cls = "multipla-box" if tipo=="multipla" else "alerta-over-box" if tipo=="over" else "sinal-box"
-                            
                             st.markdown(f"""<div class="card"><div style="display:flex; justify-content:space-between;"><div style="width:40%"><div class="titulo-time">{tc}</div><span class="odd-label">{odd_casa:.2f}</span></div><div style="width:20%;text-align:center"><div class="placar">{sc}-{sf}</div><div class="tempo">{tempo}'</div></div><div style="width:40%;text-align:right"><div class="titulo-time">{tf}</div><span class="odd-label">{odd_fora:.2f}</span></div></div><div class="{cls}">{sinal}</div><div class="insight-texto">{motivo}</div><div class="stats-row"><div><div class="metric-label">CHUTES</div><div class="metric-val">{chutes}</div></div><div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div></div></div>""", unsafe_allow_html=True)
                             
-                            # Salvar no BD
                             salvar_sinal_db(jogo['fixture']['id'], f"{tc} x {tf}", sinal, sc+sf)
                             
-                            # Enviar Telegram
                             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
                             chave = f"{jogo['fixture']['id']}_{sinal}"
                             if tg_token and tg_chat_ids and chave not in st.session_state['alertas_enviados']:
                                 fav = tc if odd_casa < odd_fora else tf
                                 msg = f"🚨 **NEVES ANALYTICS**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n✅ {traduzir_instrucao(sinal, fav)}\n\n📊 Chutes: {chutes} | Perigo: {atq_p}"
-                                enviar_telegram_multi(tg_token, tg_chat_ids, msg)
+                                for cid in tg_chat_ids.split(','):
+                                    try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
+                                    except: pass
                                 st.session_state['alertas_enviados'].add(chave)
                 else: info["Status"] = "💤"
                 radar.append(info)
@@ -328,6 +353,10 @@ if ROBO_LIGADO:
             if not df_hist.empty:
                 g = len(df_hist[df_hist['status']=='Green']); r = len(df_hist[df_hist['status']=='Red'])
                 st.metric("Total Greens", g); st.metric("Total Reds", r)
+                # Gráfico
+                if g > 0 or r > 0:
+                    fig = px.pie(names=['Green', 'Red', 'Pendente'], values=[g, r, len(df_hist[df_hist['status']=='Pendente'])], color_discrete_sequence=['#00C853', '#D50000', '#FFD600'])
+                    st.plotly_chart(fig, use_container_width=True)
                 st.dataframe(df_hist, hide_index=True, use_container_width=True)
             else: st.info("Sem dados.")
 
