@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Sniper de Gols - V15",
+    page_title="Sniper de Gols - V15.1",
     layout="centered",
     page_icon="⚽"
 )
@@ -130,8 +130,6 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
     # -------------------------------------------------------------------------
     # CENÁRIO 1: O SUPER FAVORITO LEVOU GOL NO 1º TEMPO (Reação Segura)
     # -------------------------------------------------------------------------
-    # Regra: Está perdendo no 1º tempo. Se estiver amassando SOZINHO -> Próximo Gol.
-    # Se estiver jogo aberto -> Over Gols.
     
     fav_perdendo = False
     if favorito == "CASA" and sc < sf: fav_perdendo = True
@@ -208,9 +206,20 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
 
 # --- SIMULAÇÃO ---
 def gerar_sinais_teste():
+    # LISTA CORRIGIDA SEM ERRO DE SINTAXE
     return [
-        {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 30}}, "league": {"name": "La Liga"}, "goals": {"home": 0, "away": 1}}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Almeria"}}}, # Cenário 1
-        {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 30}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 1}}, "teams": {"home": {"name": "Man City"}, "away": {"name": "Spurs"}}}  # Cenário 2
+        {
+            "fixture": {"id": 1, "status": {"short": "1H", "elapsed": 30}}, 
+            "league": {"name": "La Liga"}, 
+            "goals": {"home": 0, "away": 1}, 
+            "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Almeria"}}
+        }, 
+        {
+            "fixture": {"id": 2, "status": {"short": "1H", "elapsed": 30}}, 
+            "league": {"name": "Premier League"}, 
+            "goals": {"home": 0, "away": 1}, 
+            "teams": {"home": {"name": "Man City"}, "away": {"name": "Spurs"}}
+        }
     ]
 
 def gerar_odds_teste(fid):
@@ -227,7 +236,7 @@ def gerar_stats_teste(fid):
     return []
 
 # --- INTERFACE ---
-st.title("🎯 Sniper de Gols - V15")
+st.title("🎯 Sniper de Gols - V15.1")
 
 if st.button("📡 RASTREAR", type="primary", use_container_width=True):
     
