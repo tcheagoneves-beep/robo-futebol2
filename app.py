@@ -162,29 +162,26 @@ if st.button("📡 RASTREAR AGORA", type="primary", use_container_width=True):
                     if sinal:
                         achou = True
                         
-                        # Construção do HTML sem indentação para evitar erro
-                        html_card = f"""
-                        <div class="card">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <div style="width:40%; text-align:left;"><div class="titulo-time">{tc}</div></div>
-                                <div style="width:20%; text-align:center;">
-                                    <div class="placar">{jogo['goals']['home']} - {jogo['goals']['away']}</div>
-                                    <div class="tempo">{tempo}'</div>
-                                </div>
-                                <div style="width:40%; text-align:right;"><div class="titulo-time">{tf}</div></div>
-                            </div>
-                            
-                            <div class="sinal-box">💰 {sinal}</div>
-                            <div class="insight-texto">{motivo}</div>
-                            
-                            <div class="stats-row">
-                                <div><div class="metric-label">CHUTES</div><div class="metric-val">{chutes}</div></div>
-                                <div><div class="metric-label">NO GOL</div><div class="metric-val" style="color:#00C853;">{no_gol}</div></div>
-                                <div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div>
-                            </div>
-                        </div>
-                        """
-                        st.markdown(html_card, unsafe_allow_html=True)
+                        # AQUI ESTA A CORRECAO: O TEXTO ESTA COLADO NA ESQUERDA
+                        st.markdown(f"""
+<div class="card">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+<div style="width:40%; text-align:left;"><div class="titulo-time">{tc}</div></div>
+<div style="width:20%; text-align:center;">
+<div class="placar">{jogo['goals']['home']} - {jogo['goals']['away']}</div>
+<div class="tempo">{tempo}'</div>
+</div>
+<div style="width:40%; text-align:right;"><div class="titulo-time">{tf}</div></div>
+</div>
+<div class="sinal-box">💰 {sinal}</div>
+<div class="insight-texto">{motivo}</div>
+<div class="stats-row">
+<div><div class="metric-label">CHUTES</div><div class="metric-val">{chutes}</div></div>
+<div><div class="metric-label">NO GOL</div><div class="metric-val" style="color:#00C853;">{no_gol}</div></div>
+<div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div>
+</div>
+</div>
+""", unsafe_allow_html=True)
 
         bar.empty()
         if not achou:
