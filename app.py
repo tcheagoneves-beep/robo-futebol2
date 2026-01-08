@@ -160,14 +160,13 @@ with st.sidebar:
             
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
-# --- 4. FUNÇÕES DE API (SIMULAÇÃO + REAL) ---
+# --- 4. FUNÇÕES DE API ---
 def gerar_sinais_teste(): 
     return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 35}}, "league": {"name": "Simulacao"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Real"}, "away": {"name": "Almeria"}}}]
 def gerar_odds_teste(fid): return (1.20, 15.00)
 def gerar_stats_teste(fid): 
     return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 50}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 3}, {"type": "Dangerous Attacks", "value": 20}]}]
 
-# --- AQUI ESTAVAM OS ERROS (AGORA CORRIGIDO) ---
 def buscar_jogos(api_key):
     if MODO_DEMO: return gerar_sinais_teste()
     url = "https://v3.football.api-sports.io/fixtures"
@@ -182,17 +181,14 @@ def buscar_stats(api_key, fixture_id):
     try: return requests.get(url, headers=headers, params={"fixture": fixture_id}).json().get('response', [])
     except: return []
 
-# A FUNÇÃO QUE FALTAVA AGORA ESTÁ AQUI
 if 'odds_cache' not in st.session_state: st.session_state['odds_cache'] = {}
 
 def buscar_odds_cached(api_key, fixture_id):
     if MODO_DEMO: return gerar_odds_teste(fixture_id)
     
-    # Se já tem na memória, usa a memória
     if fixture_id in st.session_state['odds_cache']:
         return st.session_state['odds_cache'][fixture_id]
     
-    # Se não, busca na API
     url = "https://v3.football.api-sports.io/odds"
     headers = {"x-apisports-key": api_key}
     try:
@@ -314,7 +310,6 @@ if ROBO_LIGADO:
                 if zona_quente:
                     stats = buscar_stats(API_KEY, jogo['fixture']['id'])
                     if stats:
-                        # AGORA VAI FUNCIONAR: A função está definida lá em cima!
                         odd_casa, odd_fora = buscar_odds_cached(API_KEY, jogo['fixture']['id'])
                         
                         s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
@@ -346,8 +341,22 @@ if ROBO_LIGADO:
         if not achou: st.info("Monitorando mercado...")
         
         t1, t2, t3 = st.tabs(["📡 Ao Vivo", "📅 Próximos", "📊 Performance"])
-        with t1: st.dataframe(pd.DataFrame(radar), hide_index=True, use_container_width=True) if radar else st.caption("Sem jogos ao vivo.")
-        with t2: st.dataframe(pd.DataFrame(sorted(prox, key=lambda x: x['Hora'])), hide_index=True, use_container_width=True) if prox else st.caption("Sem jogos futuros.")
+        
+        # --- AQUI ESTÁ A CORREÇÃO DE SEGURANÇA (V33) ---
+        with t1: 
+            if radar:
+                df_radar = pd.DataFrame(radar)
+                st.dataframe(df_radar, hide_index=True, use_container_width=True)
+            else:
+                st.caption("Sem jogos ao vivo.")
+                
+        with t2:
+            if prox:
+                df_prox = pd.DataFrame(sorted(prox, key=lambda x: x['Hora']))
+                st.dataframe(df_prox, hide_index=True, use_container_width=True)
+            else:
+                st.caption("Sem jogos futuros.")
+        
         with t3:
             df_hist = carregar_db()
             if not df_hist.empty:
