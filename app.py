@@ -39,7 +39,8 @@ st.markdown("""
         color: #FFD700;
         font-weight: bold;
         margin-top: 15px;
-        font-size: 16px;
+        font-size: 14px;
+        text-transform: uppercase;
     }
     .insight-texto {
         font-size: 15px; 
@@ -60,7 +61,7 @@ st.markdown("""
         border-top: 1px solid #333;
     }
     .metric-val {font-size: 22px; font-weight: bold;}
-    .metric-label {font-size: 11px; color: #888;}
+    .metric-label {font-size: 10px; color: #888; text-transform: uppercase;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -89,7 +90,7 @@ def buscar_stats(api_key, fixture_id):
     try: return requests.get(url, headers=headers, params={"fixture": fixture_id}).json().get('response', [])
     except: return []
 
-# --- CÉREBRO ANALÍTICO (Sua Estratégia Detalhada) ---
+# --- CÉREBRO ANALÍTICO (Texto Objetivo) ---
 def gerar_analise_completa(tempo, s_casa, s_fora, t_casa, t_fora):
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
 
@@ -108,9 +109,6 @@ def gerar_analise_completa(tempo, s_casa, s_fora, t_casa, t_fora):
 
     # --- ESTRATÉGIA 1: INÍCIO (A Regra dos 10 Minutos) ---
     if 5 <= tempo <= 15:
-        # Regra do Pai: Mínimo 1 chute no gol do favorito ou Soma >= 2 (Clássico)
-        
-        # Tenta identificar favorito pelos Ataques Perigosos (quem ataca mais)
         favorito = t_casa if atq_c > atq_f else t_fora
         chutes_gol_fav = gol_c if atq_c > atq_f else gol_f
         
@@ -120,17 +118,16 @@ def gerar_analise_completa(tempo, s_casa, s_fora, t_casa, t_fora):
         if condicao_favorito or condicao_classico:
             sinal = "GOL CEDO (HT)"
             
-            detalhe = ""
+            fato = ""
             if condicao_classico:
-                detalhe = f"Temos **{soma_gol} chutes no gol** somados (critério de clássico batido)."
+                fato = f"Já temos **{soma_gol} chutes no alvo** somados (jogo lá e cá)."
             elif condicao_favorito:
-                detalhe = f"O favorito ({favorito}) já deu **{chutes_gol_fav} chute(s) no alvo** antes dos 10 min."
+                fato = f"O favorito ({favorito}) já obrigou o goleiro a trabalhar **{chutes_gol_fav} vez(es)**."
                 
             insight = f"""
-            **Por que entrar?**<br>
-            O jogo está com {tempo} minutos. Pela sua estratégia, o início precisa ser agressivo.
-            {detalhe}
-            As estatísticas mostram que os goleiros já estão trabalhando. A chance de sair gol na pressão inicial é altíssima.
+            Jogo com apenas {tempo} minutos e intensidade alta.
+            {fato}<br>
+            Abertura de placar iminente devido à agressividade inicial e defesas ainda desajustadas.
             """
 
     # --- ESTRATÉGIA 2: FIM DO 1º TEMPO (Pressão Acumulada) ---
@@ -144,9 +141,8 @@ def gerar_analise_completa(tempo, s_casa, s_fora, t_casa, t_fora):
             diff = abs(atq_c - atq_f)
             
             insight = f"""
-            **Análise de Pressão:**<br>
-            O {quem_pressiona} está "amassando" o adversário com {diff} ataques perigosos a mais.
-            Já tivemos {soma_chutes} finalizações no total. O gol está maduro e deve sair antes do apito do intervalo devido ao cansaço da defesa.
+            Domínio total do **{quem_pressiona}** com {diff} ataques perigosos a mais que o rival.
+            Volume de jogo acumulado ({soma_chutes} finalizações) indica gol por saturação da defesa adversária antes do intervalo.
             """
 
     # --- ESTRATÉGIA 3: FINAL DE JOGO (Tudo ou Nada) ---
@@ -155,14 +151,13 @@ def gerar_analise_completa(tempo, s_casa, s_fora, t_casa, t_fora):
         if soma_chutes >= 15:
             sinal = "GOL NO FINAL (FT)"
             insight = f"""
-            **Leitura de Jogo:**<br>
-            Jogo extremamente aberto com **{soma_chutes} finalizações**.
-            Um dos times está exposto buscando o resultado. Nesse cenário, sua estratégia aponta 80% de chance de gol tardio (seja empate ou contra-ataque).
+            Partida totalmente aberta com **{soma_chutes} finalizações**.
+            Pelo menos um dos times abandonou a defesa para buscar o resultado, gerando chances claras de gol ou contra-ataque mortal.
             """
 
     return sinal, insight, (chutes_c + chutes_f), soma_gol, (atq_c + atq_f)
 
-# --- DADOS DE TESTE (Ajustados para suas regras) ---
+# --- DADOS DE TESTE ---
 def gerar_sinais_teste():
     return [
         {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 9}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Liverpool"}}},
@@ -170,10 +165,7 @@ def gerar_sinais_teste():
     ]
 
 def gerar_stats_teste(fid):
-    # Cenário 1: Jogo com 9 min. Arsenal (Favorito) chutou 2 bolas no gol. BATE A REGRA.
     if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 4}, {"type": "Shots on Goal", "value": 2}, {"type": "Dangerous Attacks", "value": 15}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 1}, {"type": "Shots on Goal", "value": 0}, {"type": "Dangerous Attacks", "value": 5}]}]
-    
-    # Cenário 2: Final de jogo com muitos chutes
     elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 12}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 60}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 10}, {"type": "Shots on Goal", "value": 5}, {"type": "Dangerous Attacks", "value": 55}]}]
     return []
 
@@ -208,7 +200,6 @@ if st.button("📡 ANALISAR MERCADO", type="primary", use_container_width=True):
                     if sinal:
                         achou = True
                         
-                        # VISUAL: HTML COLADO NA ESQUERDA PARA NAO DAR ERRO
                         st.markdown(f"""
 <div class="card">
 <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -220,12 +211,12 @@ if st.button("📡 ANALISAR MERCADO", type="primary", use_container_width=True):
 <div style="width:40%; text-align:right;"><div class="titulo-time">{tf}</div></div>
 </div>
 <div class="sinal-box">💰 {sinal}</div>
-<div class="insight-titulo">🤖 Análise do Robô:</div>
+<div class="insight-titulo">📊 Motivo da Entrada:</div>
 <div class="insight-texto">{motivo}</div>
 <div class="stats-row">
 <div><div class="metric-label">CHUTES TOTAIS</div><div class="metric-val">{chutes}</div></div>
 <div><div class="metric-label">NO GOL (ALVO)</div><div class="metric-val" style="color:#00C853;">{no_gol}</div></div>
-<div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div>
+<div><div class="metric-label">ATQ. PERIGOSOS</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div>
 </div>
 </div>
 """, unsafe_allow_html=True)
