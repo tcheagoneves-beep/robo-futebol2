@@ -5,7 +5,7 @@ import random
 from datetime import datetime
 
 # --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="Robô de Sinais - Gols", layout="wide", page_icon="🤑")
+st.set_page_config(page_title="Robô de Sinais - Português", layout="wide", page_icon="⚽")
 
 with st.sidebar:
     st.header("⚙️ Configurações")
@@ -14,12 +14,9 @@ with st.sidebar:
     if API_KEY: st.session_state['api_key'] = API_KEY
     
     st.markdown("---")
-    MODO_DEMO = st.checkbox("🛠️ Forçar Modo Simulação", value=False, help="Use isso enquanto sua API não aprova.")
+    MODO_DEMO = st.checkbox("🛠️ Forçar Modo Simulação", value=False, help="Use isso para testar o visual se a API estiver travada.")
     
-    st.success("Estratégia Ativa: Sinais de Gols (HT/FT)")
-
-# LIGAS VIP
-LIGAS_VIP = [39, 40, 78, 79, 140, 141, 94, 88, 179, 103, 307, 201, 203, 169, 98, 292, 71, 72, 2, 3, 13, 11]
+    st.success("Estratégia: Sinais em Português + Explicação Detalhada")
 
 # --- FUNÇÕES DE DADOS ---
 
@@ -42,8 +39,8 @@ def buscar_stats(api_key, fixture_id):
         return requests.get(url, headers=headers, params={"fixture": fixture_id}).json().get('response', [])
     except: return []
 
-# --- O CÉREBRO: GERADOR DE SINAIS (SUA ESTRATÉGIA) ---
-def gerar_sinal(tempo, stats_casa, stats_fora):
+# --- O CÉREBRO TRADUZIDO (SUA ESTRATÉGIA) ---
+def gerar_sinal_explicado(tempo, stats_casa, stats_fora, time_casa, time_fora):
     
     # 1. Extrair Números
     def v(d, k): 
@@ -51,109 +48,122 @@ def gerar_sinal(tempo, stats_casa, stats_fora):
         if val is None: return 0
         return int(str(val).replace('%',''))
 
-    chutes_total = v(stats_casa, 'Total Shots') + v(stats_fora, 'Total Shots')
-    chutes_gol = v(stats_casa, 'Shots on Goal') + v(stats_fora, 'Shots on Goal')
-    ataques_p = v(stats_casa, 'Dangerous Attacks') + v(stats_fora, 'Dangerous Attacks')
+    chutes_c = v(stats_casa, 'Total Shots')
+    chutes_f = v(stats_fora, 'Total Shots')
+    chutes_total = chutes_c + chutes_f
+    
+    gol_c = v(stats_casa, 'Shots on Goal')
+    gol_f = v(stats_fora, 'Shots on Goal')
+    chutes_gol_total = gol_c + gol_f
+    
+    atq_c = v(stats_casa, 'Dangerous Attacks')
+    atq_f = v(stats_fora, 'Dangerous Attacks')
+    ataques_p = atq_c + atq_f
     
     sinal = None
-    motivo = ""
+    insight = ""
 
     # --- ESTRATÉGIA 1: GOL CEDO (5-15 min) ---
-    # "Tem que ter chute no gol logo no inicio"
     if 5 <= tempo <= 15:
-        if chutes_gol >= 2 or chutes_total >= 4:
-            sinal = "💰 ENTRADA: GOL LIMIT (HT)"
-            motivo = "Início Frenético (Muitos chutes cedo)"
+        if chutes_gol_total >= 2 or chutes_total >= 4:
+            sinal = "💰 APOSTAR: Gol logo no Início"
+            insight = (f"**Por que apostar?** O jogo mal começou ({tempo}min) e já tivemos {chutes_total} chutes! "
+                       f"As defesas estão abertas e os times entraram agressivos. A chance de sair gol cedo é altíssima.")
 
-    # --- ESTRATÉGIA 2: OVER GOLS HT (15-40 min) ---
-    # Jogo aberto, muitos ataques perigosos
+    # --- ESTRATÉGIA 2: GOL NO 1º TEMPO (15-40 min) ---
     elif 15 < tempo <= 40:
+        # Pressão Absurda
         if ataques_p >= 25 and chutes_total >= 6:
-            sinal = "💰 ENTRADA: OVER 0.5 HT (1º Tempo)"
-            motivo = f"Pressão Alta ({ataques_p} ataques perigosos)"
-
-    # --- ESTRATÉGIA 3: A REVOLTA DO FAVORITO / FINAL (FT) ---
-    # Final de jogo, favorito empatando ou perdendo, amassando
-    elif tempo >= 60:
-        if chutes_total >= 15 or ataques_p >= 60:
-            sinal = "💰 ENTRADA: GOL FINAL (FT)"
-            motivo = f"Jogo Aberto ({chutes_total} finalizações)"
+            sinal = "💰 APOSTAR: Vai sair gol no 1º Tempo"
             
-    return sinal, motivo, chutes_total, ataques_p
+            # Monta a fofoca detalhada
+            quem_pressiona = time_casa if atq_c > atq_f else time_fora
+            insight = (f"**Por que apostar?** O jogo está pegando fogo! Já são {ataques_p} ataques perigosos acumulados. "
+                       f"O time **{quem_pressiona}** está amassando o adversário. "
+                       f"Com {chutes_total} finalizações até agora, a bola vai entrar a qualquer momento.")
 
-# --- SIMULADORES PARA VOCÊ VER OS SINAIS ---
+    # --- ESTRATÉGIA 3: GOL NO FINAL (60-85 min) ---
+    elif tempo >= 60:
+        if chutes_total >= 14 or ataques_p >= 60:
+            sinal = "💰 APOSTAR: Gol no Final do Jogo"
+            insight = (f"**Por que apostar?** Estamos na reta final e o volume de jogo explodiu. "
+                       f"São {chutes_total} chutes no total! Um dos times está desesperado pelo resultado e "
+                       f"se expondo ao contra-ataque. Cenário clássico de gol tardio.")
+            
+    return sinal, insight, chutes_total, ataques_p
+
+# --- SIMULADORES ATUALIZADOS ---
 def gerar_sinais_teste():
     return [
         {"fixture": {"id": 1, "date": "2026-01-08T15:00:00", "status": {"short": "1H", "elapsed": 25}}, "league": {"name": "Premier League"}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Liverpool"}}},
-        {"fixture": {"id": 2, "date": "2026-01-08T16:00:00", "status": {"short": "2H", "elapsed": 75}}, "league": {"name": "UAE Pro League"}, "teams": {"home": {"name": "Al Ain"}, "away": {"name": "Al Dhafra"}}},
-        {"fixture": {"id": 3, "date": "2026-01-08T16:00:00", "status": {"short": "1H", "elapsed": 10}}, "league": {"name": "Série B"}, "teams": {"home": {"name": "Santos"}, "away": {"name": "Mirassol"}}}
+        {"fixture": {"id": 2, "date": "2026-01-08T16:00:00", "status": {"short": "2H", "elapsed": 75}}, "league": {"name": "UAE Pro League"}, "teams": {"home": {"name": "Al Ain"}, "away": {"name": "Al Dhafra"}}}
     ]
 
 def gerar_stats_teste(fid):
-    # ID 1 = Arsenal (Pressão HT)
+    # Arsenal amassando
     if fid == 1: 
-        return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Dangerous Attacks", "value": 20}]}, 
-                {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 3}, {"type": "Dangerous Attacks", "value": 15}]}]
-    # ID 2 = Al Ain (Pressão Final)
+        return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 8}, {"type": "Shots on Goal", "value": 4}, {"type": "Dangerous Attacks", "value": 30}]}, 
+                {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 2}, {"type": "Dangerous Attacks", "value": 5}]}]
+    # Al Ain no final
     elif fid == 2:
-        return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 12}, {"type": "Dangerous Attacks", "value": 50}]}, 
-                {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 4}, {"type": "Dangerous Attacks", "value": 20}]}]
-    # ID 3 = Jogo Morto (Sem sinal)
-    else:
-        return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 0}, {"type": "Dangerous Attacks", "value": 2}]}, 
-                {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 0}, {"type": "Dangerous Attacks", "value": 1}]}]
+        return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Dangerous Attacks", "value": 65}]}, 
+                {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Dangerous Attacks", "value": 20}]}]
+    else: return []
 
 # --- INTERFACE ---
-st.title("🤖 Central de Sinais: Gols")
+st.title("🤖 Robô de Sinais: Análise Explicada")
 
 if MODO_DEMO:
-    st.warning("⚠️ MODO SIMULAÇÃO: Sinais gerados artificialmente para teste.")
+    st.info("ℹ️ MODO TESTE: Usando dados fictícios para validar o texto.")
 
-if st.button("📡 ESCANEAR MERCADO E GERAR SINAIS"):
+if st.button("📡 ESCANEAR OPORTUNIDADES"):
     if not API_KEY and not MODO_DEMO:
         st.error("Coloque a API Key!")
     else:
         jogos = buscar_jogos(API_KEY)
-        sinais_encontrados = 0
+        achou_algo = False
         
-        with st.status("Analisando jogos em tempo real...", expanded=True) as status:
+        with st.status("Lendo estatísticas dos jogos...", expanded=True) as status:
             
             for jogo in jogos:
-                # Pega status do jogo (tempo)
                 status_short = jogo['fixture']['status']['short']
                 tempo = jogo['fixture']['status'].get('elapsed', 0)
                 
-                # Só analisa jogos AO VIVO (1H ou 2H)
+                # Só analisa jogos com bola rolando
                 if status_short in ['1H', '2H'] and tempo:
-                    
-                    # Busca estatísticas
                     stats = buscar_stats(API_KEY, jogo['fixture']['id'])
                     
                     if stats:
                         s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
                         s_fora = {i['type']: i['value'] for i in stats[1]['statistics']}
                         
-                        # APLICA A INTELIGÊNCIA
-                        ordem, motivo, chutes, atq_p = gerar_sinal(tempo, s_casa, s_fora)
+                        nome_casa = jogo['teams']['home']['name']
+                        nome_fora = jogo['teams']['away']['name']
+                        
+                        # CHAMA A INTELIGÊNCIA TRADUZIDA
+                        ordem, explicacao, chutes, atq_p = gerar_sinal_explicado(tempo, s_casa, s_fora, nome_casa, nome_fora)
                         
                         if ordem:
-                            sinais_encontrados += 1
+                            achou_algo = True
                             st.divider()
-                            col1, col2 = st.columns([3, 1])
                             
-                            with col1:
-                                st.markdown(f"### ⚽ {jogo['teams']['home']['name']} x {jogo['teams']['away']['name']}")
-                                st.caption(f"Liga: {jogo['league']['name']} | Tempo: {tempo} min")
-                                
-                                # A ORDEM DE APOSTA GRANDE E VERDE
-                                st.success(f"## {ordem}")
-                                st.write(f"**Motivo:** {motivo}")
-                                
-                            with col2:
-                                st.metric("Chutes Totais", chutes)
-                                st.metric("Ataques Perigosos", atq_p)
+                            # CABEÇALHO DO JOGO
+                            st.markdown(f"### ⚽ {nome_casa} x {nome_fora}")
+                            st.caption(f"Liga: {jogo['league']['name']} | ⏱️ Tempo: {tempo} min")
+                            
+                            # A ORDEM DE APOSTA (CARD VERDE)
+                            st.success(f"## {ordem}")
+                            
+                            # OS INSIGHTS (A EXPLICAÇÃO)
+                            with st.chat_message("assistant"):
+                                st.write(explicacao)
+                                st.markdown(f"""
+                                * **Estatísticas Reais:**
+                                    * 🎯 Chutes Totais: **{chutes}**
+                                    * 🔥 Ataques Perigosos: **{atq_p}**
+                                """)
             
-            status.update(label="Escaneamento concluído!", state="complete", expanded=False)
+            status.update(label="Fim da análise!", state="complete", expanded=False)
 
-        if sinais_encontrados == 0:
-            st.info("Nenhum jogo atende aos critérios da sua estratégia agora. Aguarde.")
+        if not achou_algo:
+            st.info("Nenhuma oportunidade clara encontrada agora. O mercado está morno.")
