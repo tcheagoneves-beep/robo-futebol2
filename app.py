@@ -1,251 +1,146 @@
 import streamlit as st
 import pandas as pd
 import requests
+import random
 from datetime import datetime
 
 # --- CONFIGURAÇÃO VISUAL ---
-st.set_page_config(page_title="Robô Gols - Estratégia VIP", layout="wide", page_icon="⚽")
+st.set_page_config(page_title="Robô Gols - Demo", layout="wide", page_icon="⚽")
 
 # --- BARRA LATERAL ---
 with st.sidebar:
     st.header("⚙️ Configurações")
     if 'api_key' not in st.session_state: st.session_state['api_key'] = ""
-    API_KEY = st.text_input("Sua API Key:", value=st.session_state['api_key'], type="password")
+    API_KEY = st.text_input("Sua API Key (RapidAPI):", value=st.session_state['api_key'], type="password")
     if API_KEY: st.session_state['api_key'] = API_KEY
     
-    st.info("Estratégia carregada: 'Over Gols' e 'Pressão do Favorito'.")
+    st.markdown("---")
+    MODO_DEMO = st.checkbox("🛠️ Forçar Modo Simulação", value=False, help="Marca isso se sua API Key ainda estiver 'Pending'. Cria jogos fictícios para teste.")
+    
+    st.info("Estratégia: Over Gols & Pressão HT/FT")
 
-# --- LISTA DE LIGAS (SEU FILTRO VIP) ---
-# Mapeamos os IDs das ligas que você citou como boas
-LIGAS_VIP = {
-    # EUROPA PRINCIPAIS
-    39: "Inglaterra - Premier League",
-    40: "Inglaterra - Championship", # 2ª Divisão
-    78: "Alemanha - Bundesliga 1",
-    79: "Alemanha - Bundesliga 2",
-    140: "Espanha - La Liga",
-    141: "Espanha - La Liga 2",
-    94: "Portugal - Primeira Liga",
-    88: "Holanda - Eredivisie", # Com cuidado
-    179: "Escócia - Premiership", # Olho em Rangers/Celtic
-    103: "Noruega - Eliteserien",
-    
-    # MUNDO / ASIÁTICOS / EMERGENTES
-    307: "Arábia Saudita - Pro League",
-    201: "Emirados Árabes - Pro League",
-    203: "Turquia - Süper Lig",
-    169: "China - Super League",
-    98: "Japão - J1 League",
-    292: "Coreia do Sul - K League 1",
-    
-    # BRASIL
-    71: "Brasil - Série A",
-    72: "Brasil - Série B",
-    
-    # COPAS
-    2: "Champions League",
-    3: "Europa League",
-    13: "Libertadores",
-    11: "Sul-Americana"
-}
+# LIGAS VIP
+LIGAS_VIP = [39, 40, 78, 79, 140, 141, 94, 88, 179, 103, 307, 201, 203, 169, 98, 292, 71, 72, 2, 3, 13, 11]
 
-# --- FUNÇÕES DE CONEXÃO ---
+# --- FUNÇÕES ---
 
 def buscar_jogos_do_dia(api_key):
+    # SE TIVER NO MODO DEMO, GERA DADOS FALSOS
+    if MODO_DEMO:
+        return gerar_jogos_falsos()
+
     url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
     querystring = {"date": datetime.today().strftime('%Y-%m-%d')}
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"}
     try:
-        return requests.get(url, headers=headers, params=querystring).json().get('response', [])
-    except: return []
-
-def buscar_classificacao(api_key, league_id, season):
-    url = "https://api-football-v1.p.rapidapi.com/v3/standings"
-    headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"}
-    try:
-        data = requests.get(url, headers=headers, params={"league": league_id, "season": season}).json()
-        if data.get('response'): return data['response'][0]['league']['standings'][0]
-        return []
+        response = requests.get(url, headers=headers, params=querystring)
+        if response.status_code == 200:
+            return response.json().get('response', [])
+        else:
+            return [] # Retorna vazio se der erro (ex: Pending Approval)
     except: return []
 
 def buscar_stats_live(api_key, fixture_id):
+    if MODO_DEMO:
+        return gerar_stats_falsos()
+
     url = "https://api-football-v1.p.rapidapi.com/v3/fixtures/statistics"
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"}
     try:
         return requests.get(url, headers=headers, params={"fixture": fixture_id}).json().get('response', [])
     except: return []
 
-# --- CÉREBRO 1: PRÉ-JOGO (A SUA CONTA DE MÉDIA DE GOLS) ---
-def analisar_matematica_gols(time_stats, jogos_jogados):
-    # Sua regra: (Gols Feitos + Gols Sofridos) / Jogos
-    # Se der alto (> 2.5 ou 3.0), é jogo pra Over.
-    if jogos_jogados < 3: return 0 # Amostra muito pequena
-    
-    gols_total_evento = time_stats['goals']['for'] + time_stats['goals']['against']
-    media = gols_total_evento / jogos_jogados
-    return media
+# --- GERADORES DE DADOS FALSOS (PARA VOCÊ VER O LAYOUT) ---
+def gerar_jogos_falsos():
+    return [
+        {
+            "fixture": {"id": 111, "date": "2026-01-08T15:00:00", "status": {"short": "1H"}},
+            "league": {"id": 39, "name": "Premier League", "season": 2025},
+            "teams": {"home": {"id": 1, "name": "Arsenal"}, "away": {"id": 2, "name": "Liverpool"}},
+            "demo_analise": "Média de Gols: 3.20 (JOGO TOP)"
+        },
+        {
+            "fixture": {"id": 222, "date": "2026-01-08T16:00:00", "status": {"short": "NS"}},
+            "league": {"id": 201, "name": "UAE Pro League", "season": 2025},
+            "teams": {"home": {"id": 3, "name": "Al Ain"}, "away": {"id": 4, "name": "Al Dhafra"}},
+            "demo_analise": "Média de Gols: 2.80 (Favorito em Casa)"
+        }
+    ]
 
-# --- CÉREBRO 2: AO VIVO (PRESSÃO E REGRAS DE TEMPO) ---
-def analisar_pressao_live(tempo, placar, stats_casa, stats_fora):
-    
-    # Extrair valores seguros
-    def get_v(s, k): 
-        v = s.get(k, 0)
-        return int(v.replace('%','')) if isinstance(v, str) else (v or 0)
-
-    chutes_gol_casa = get_v(stats_casa, 'Shots on Goal')
-    chutes_gol_fora = get_v(stats_fora, 'Shots on Goal')
-    chutes_total_casa = get_v(stats_casa, 'Total Shots')
-    chutes_total_fora = get_v(stats_fora, 'Total Shots')
-    atk_p_casa = get_v(stats_casa, 'Dangerous Attacks')
-    atk_p_fora = get_v(stats_fora, 'Dangerous Attacks')
-
-    msg = "Aguardar"
-    cor = "grey"
-    
-    soma_chutes_gol = chutes_gol_casa + chutes_gol_fora
-
-    # --- REGRA 1: INÍCIO DO JOGO (OS 6 MINUTOS) ---
-    # "Nos primeiros 5-6 min já tem que ter chute em gol."
-    if 4 <= tempo <= 12:
-        if soma_chutes_gol >= 1 or (chutes_total_casa + chutes_total_fora) >= 3:
-            msg = "⚡ INÍCIO ELETRIZANTE: Já tem chute! (Over HT Potencial)"
-            cor = "green"
-        else:
-            msg = "⚠️ INÍCIO LENTO: Sem chutes ainda. Cuidado."
-            cor = "orange"
-
-    # --- REGRA 2: A REVOLTA DO FAVORITO (BASEADO NO SEU PRINT AL-AIN) ---
-    # Se o jogo já rodou (ex: 20min+) e tem MUITO chute, o gol vai sair.
-    elif tempo > 15:
-        # Pressão Absurda (Tipo Al Ain com 16 finalizações)
-        soma_total_chutes = chutes_total_casa + chutes_total_fora
-        
-        if soma_total_chutes >= 12: # Jogo muito aberto
-            if atk_p_casa > (atk_p_fora * 2) or atk_p_fora > (atk_p_casa * 2):
-                msg = "🔥 PRESSÃO ESMAGADORA: Um time está amassando! (Gol Maduro)"
-                cor = "red"
-            else:
-                msg = "💰 JOGO ABERTO: Lá e cá (Muitos chutes)"
-                cor = "green"
-
-    return msg, cor, (chutes_total_casa + chutes_total_fora)
+def gerar_stats_falsos():
+    # Simula o jogo do Arsenal com pressão absurda (Over)
+    return [
+        {"team": {"name": "Casa"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 8}, {"type": "Dangerous Attacks", "value": 45}, {"type": "Ball Possession", "value": "60%"}]},
+        {"team": {"name": "Fora"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 2}, {"type": "Dangerous Attacks", "value": 10}, {"type": "Ball Possession", "value": "40%"}]}
+    ]
 
 # --- INTERFACE ---
-st.title("🤖 Robô Trader: Mapeamento de Gols")
+st.title("🤖 Robô Trader: Scanner de Gols")
 
-tab1, tab2 = st.tabs(["1. Filtro Matemático (Pré)", "2. Radar Ao Vivo"])
+if MODO_DEMO:
+    st.warning("⚠️ MODO SIMULAÇÃO ATIVO: Estes dados são fictícios para testar o painel enquanto sua API libera.")
 
-# --- ABA 1: PRÉ-JOGO ---
+tab1, tab2 = st.tabs(["1. Filtro do Dia", "2. Radar Ao Vivo"])
+
+# --- ABA 1 ---
 with tab1:
-    if st.button("Buscar Melhores Jogos (Filtro Ligas VIP)"):
-        if not API_KEY: st.error("Coloque a API Key!")
-        else:
-            with st.spinner("Analisando médias de gols nas ligas selecionadas..."):
-                todos = buscar_jogos_do_dia(API_KEY)
+    if st.button("Buscar Jogos"):
+        with st.spinner("Processando..."):
+            todos = buscar_jogos_do_dia(API_KEY)
+            
+            if not todos and not MODO_DEMO:
+                st.error("A API retornou 0 jogos. Provavelmente sua chave ainda está 'Pending'.")
+                st.info("💡 DICA: Ative o 'Forçar Modo Simulação' na barra lateral para testar o painel agora!")
+            else:
+                # Se for demo, cria lista direto
                 alvos = []
-                
-                # Barra de progresso para não parecer travado
-                bar = st.progress(0)
-                processados = 0
-                
-                # Filtrar só as ligas VIP
-                jogos_vip = [j for j in todos if j['league']['id'] in LIGAS_VIP]
-                
-                if not jogos_vip:
-                    st.warning("Nenhum jogo das Ligas VIP hoje. Tentando buscar jogos gerais...")
-                    jogos_vip = todos[:20] # Fallback
-
-                for jogo in jogos_vip:
-                    if jogo['fixture']['status']['short'] not in ['FT', 'AET', 'PEN']:
-                        lid = jogo['league']['id']
-                        season = jogo['league']['season']
-                        
-                        # Busca Tabela para fazer a conta
-                        tabela = buscar_classificacao(API_KEY, lid, season)
-                        
-                        if tabela:
-                            idc = jogo['teams']['home']['id']
-                            idf = jogo['teams']['away']['id']
-                            
-                            # Acha os times na tabela
-                            time_c = next((t for t in tabela if t['team']['id']==idc), None)
-                            time_f = next((t for t in tabela if t['team']['id']==idf), None)
-                            
-                            if time_c and time_f:
-                                # APLICA SUA MATEMÁTICA
-                                media_c = analisar_matematica_gols(time_c['all'], time_c['all']['played'])
-                                media_f = analisar_matematica_gols(time_f['all'], time_f['all']['played'])
-                                
-                                media_jogo = (media_c + media_f) / 2
-                                
-                                # Filtro: Só mostra se a média combinada for > 2.5 (Jogos de gols)
-                                if media_jogo > 2.5:
-                                    alvos.append({
-                                        'id': jogo['fixture']['id'],
-                                        'liga': LIGAS_VIP.get(lid, jogo['league']['name']),
-                                        'jogo': f"{jogo['teams']['home']['name']} x {jogo['teams']['away']['name']}",
-                                        'hora': jogo['fixture']['date'][11:16],
-                                        'media_gols': f"{media_jogo:.2f}",
-                                        'status': 'Pendente'
-                                    })
+                for jogo in todos:
+                    # Se for real, faz filtro. Se for demo, pega o dado pronto
+                    analise = jogo.get('demo_analise', "Análise Pendente (API Real)")
                     
-                    processados += 1
-                    bar.progress(min(processados / len(jogos_vip), 1.0))
-
-                st.session_state['lista_gols'] = alvos
-                st.success(f"{len(alvos)} Jogos com Alta Média de Gols Encontrados!")
+                    alvos.append({
+                        'id': jogo['fixture']['id'],
+                        'liga': jogo['league']['name'],
+                        'jogo': f"{jogo['teams']['home']['name']} x {jogo['teams']['away']['name']}",
+                        'hora': jogo['fixture']['date'][11:16],
+                        'analise': analise
+                    })
                 
-    if 'lista_gols' in st.session_state and st.session_state['lista_gols']:
-        df = pd.DataFrame(st.session_state['lista_gols'])
-        st.dataframe(df[['hora', 'liga', 'jogo', 'media_gols']], use_container_width=True)
+                st.session_state['lista_gols'] = alvos
+                st.success(f"{len(alvos)} Jogos Encontrados!")
+                st.dataframe(pd.DataFrame(alvos))
 
-# --- ABA 2: AO VIVO ---
+# --- ABA 2 ---
 with tab2:
-    if st.button("📡 Analisar Jogos Selecionados Agora"):
-        if 'lista_gols' not in st.session_state: st.warning("Faça o filtro na Aba 1 primeiro.")
+    if st.button("📡 Analisar Ao Vivo (Chutes & Pressão)"):
+        if 'lista_gols' not in st.session_state or not st.session_state['lista_gols']:
+            st.warning("Rode a Aba 1 primeiro!")
         else:
             for alvo in st.session_state['lista_gols']:
+                st.markdown(f"#### {alvo['jogo']} ({alvo['hora']})")
+                
                 stats_raw = buscar_stats_live(API_KEY, alvo['id'])
                 
-                # Simular tempo/placar se não tiver na chamada stats (Limitação API Free)
-                # Na prática real, faríamos uma chamada '/fixtures' para pegar o tempo exato
-                # Aqui vamos tentar inferir ou mostrar os dados crus
-                
                 if stats_raw:
-                    st.markdown(f"### {alvo['jogo']}")
-                    st.caption(f"Média Pré-Live: {alvo['media_gols']} gols/jogo")
-                    
                     s_casa = {i['type']: i['value'] for i in stats_raw[0]['statistics']}
                     s_fora = {i['type']: i['value'] for i in stats_raw[1]['statistics']}
                     
-                    # Vamos assumir um tempo fictício para teste ou tentar pegar se disponível
-                    # Como não temos o tempo real na rota /statistics, o usuário olha o tempo na Bet365
-                    # e o Robô diz se vale a pena baseado nos chutes.
+                    def v(d, k): 
+                        val = d.get(k, 0)
+                        if val is None: return 0
+                        return int(str(val).replace('%',''))
                     
-                    # CÁLCULO DE PRESSÃO
-                    chutes_c = s_casa.get('Total Shots', 0) or 0
-                    chutes_f = s_fora.get('Total Shots', 0) or 0
-                    chutes_gol_c = s_casa.get('Shots on Goal', 0) or 0
-                    chutes_gol_f = s_fora.get('Shots on Goal', 0) or 0
-                    
-                    total_chutes = chutes_c + chutes_f
+                    chutes = v(s_casa, 'Total Shots') + v(s_fora, 'Total Shots')
+                    no_gol = v(s_casa, 'Shots on Goal') + v(s_fora, 'Shots on Goal')
                     
                     c1, c2, c3 = st.columns(3)
-                    c1.metric("Chutes Totais", total_chutes)
-                    c2.metric("No Gol (Casa)", chutes_gol_c)
-                    c3.metric("No Gol (Fora)", chutes_gol_f)
+                    c1.metric("Chutes Totais", chutes)
+                    c2.metric("Chutes no Gol", no_gol)
+                    c3.metric("Ataques Perigosos", v(s_casa, 'Dangerous Attacks') + v(s_fora, 'Dangerous Attacks'))
                     
-                    # LÓGICA DO AL-AIN (FAVORITO AMASSANDO)
-                    if total_chutes >= 10:
-                        st.error("🔥 JOGO PEGANDO FOGO! Muitos chutes. Alta chance de gol.")
-                    elif total_chutes >= 2 and total_chutes < 5:
-                        st.warning("⚠️ Jogo Travado. Poucos chutes.")
+                    if chutes >= 12 or no_gol >= 6:
+                        st.error("🔥 JOGO PEGANDO FOGO! (Pressão Alta confirmada)")
                     else:
-                        st.info("Jogo morno ou no início.")
-                        
-                    st.divider()
-                else:
-                    # Se não tem stats, o jogo pode não ter começado
-                    pass
-            st.write("Fim da análise ao vivo.")
+                        st.info("Jogo Morno.")
+                
+                st.divider()
