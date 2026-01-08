@@ -3,41 +3,68 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# --- CONFIGURAÇÃO VISUAL (DARK MODE) ---
+# --- CONFIGURAÇÃO VISUAL (TEMA ESCURO PREMIUM) ---
 st.set_page_config(
-    page_title="Sniper de Gols Pro",
-    layout="centered", # Deixa mais focado no meio (bom para celular)
-    page_icon="⚽",
-    initial_sidebar_state="collapsed"
+    page_title="Sniper de Gols - Pro",
+    layout="centered",
+    page_icon="⚽"
 )
 
-# Estilo CSS para deixar mais bonito (Sumir menu padrão e ajustar cores)
+# CSS Para deixar elegante (Estilo App Nativo)
 st.markdown("""
 <style>
-    .stApp {background-color: #0e1117;}
-    div[data-testid="stMetricValue"] {font-size: 24px;}
-    .big-font {font-size:20px !important; font-weight: bold;}
-    .success-box {padding: 15px; background-color: #d4edda; color: #155724; border-radius: 10px; border: 1px solid #c3e6cb;}
+    .stApp {background-color: #121212; color: white;}
+    .card {
+        background-color: #1E1E1E;
+        padding: 20px;
+        border-radius: 15px;
+        border: 1px solid #333;
+        margin-bottom: 20px;
+    }
+    .titulo-time {font-size: 22px; font-weight: bold; color: #ffffff;}
+    .placar {font-size: 38px; font-weight: 800; color: #FFD700; text-align: center;}
+    .tempo {font-size: 16px; color: #FF4B4B; font-weight: bold; text-align: center;}
+    .sinal-box {
+        background-color: #00C853; 
+        color: white; 
+        padding: 15px; 
+        border-radius: 10px; 
+        text-align: center; 
+        font-size: 20px; 
+        font-weight: bold;
+        margin-top: 15px;
+        box-shadow: 0 4px 15px rgba(0, 200, 83, 0.4);
+    }
+    .insight-texto {
+        font-size: 15px; 
+        color: #CCCCCC; 
+        margin-top: 10px; 
+        line-height: 1.5;
+        border-left: 3px solid #FFD700;
+        padding-left: 10px;
+    }
+    .metric-label {font-size: 12px; color: #888;}
+    .metric-val {font-size: 24px; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("⚙️ Configurações")
+    st.header("⚙️ Painel de Controle")
     if 'api_key' not in st.session_state: st.session_state['api_key'] = ""
-    API_KEY = st.text_input("API Key RapidAPI:", value=st.session_state['api_key'], type="password")
+    API_KEY = st.text_input("Chave API (RapidAPI):", value=st.session_state['api_key'], type="password")
     if API_KEY: st.session_state['api_key'] = API_KEY
     
     st.markdown("---")
-    MODO_DEMO = st.checkbox("🛠️ Modo Simulação (Visual)", value=True)
+    MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=True)
+    st.info("Estratégia: Leitura de Pressão (Chutes e Ataques)")
 
-# --- FUNÇÕES (MESMA LÓGICA, SÓ MUDA O VISUAL DEPOIS) ---
+# --- INTEGRAÇÃO DE DADOS ---
 def buscar_jogos(api_key):
     if MODO_DEMO: return gerar_sinais_teste()
     url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
-    querystring = {"date": datetime.today().strftime('%Y-%m-%d')}
     headers = {"X-RapidAPI-Key": api_key, "X-RapidAPI-Host": "api-football-v1.p.rapidapi.com"}
-    try: return requests.get(url, headers=headers, params=querystring).json().get('response', [])
+    try: return requests.get(url, headers=headers, params={"date": datetime.today().strftime('%Y-%m-%d')}).json().get('response', [])
     except: return []
 
 def buscar_stats(api_key, fixture_id):
@@ -47,71 +74,91 @@ def buscar_stats(api_key, fixture_id):
     try: return requests.get(url, headers=headers, params={"fixture": fixture_id}).json().get('response', [])
     except: return []
 
-def gerar_sinal_explicado(tempo, stats_casa, stats_fora, time_casa, time_fora):
+# --- CÉREBRO: O NARRADOR INTELIGENTE ---
+def gerar_analise_completa(tempo, s_casa, s_fora, t_casa, t_fora):
+    # Função auxiliar para limpar dados
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
 
-    chutes_total = v(stats_casa, 'Total Shots') + v(stats_fora, 'Total Shots')
-    chutes_gol = v(stats_casa, 'Shots on Goal') + v(stats_fora, 'Shots on Goal')
-    ataques_p = v(stats_casa, 'Dangerous Attacks') + v(stats_fora, 'Dangerous Attacks')
-    atq_c = v(stats_casa, 'Dangerous Attacks')
-    atq_f = v(stats_fora, 'Dangerous Attacks')
+    # Extração de Dados
+    chutes_c = v(s_casa, 'Total Shots')
+    chutes_f = v(s_fora, 'Total Shots')
+    total_chutes = chutes_c + chutes_f
+    
+    gol_c = v(s_casa, 'Shots on Goal')
+    gol_f = v(s_fora, 'Shots on Goal')
+    total_gol = gol_c + gol_f
+    
+    atq_c = v(s_casa, 'Dangerous Attacks')
+    atq_f = v(s_fora, 'Dangerous Attacks')
+    
+    posse_c = v(s_casa, 'Ball Possession')
     
     sinal = None
     insight = ""
 
-    # ESTRATÉGIAS
-    if 5 <= tempo <= 20: # Inicio
-        if chutes_gol >= 2 or chutes_total >= 4:
-            sinal = "GOL CEDO (HT)"
-            insight = f"Início frenético! {chutes_total} chutes em {tempo} min."
-            
-    elif 20 < tempo <= 45: # HT
-        if ataques_p >= 25 and chutes_total >= 6:
-            sinal = "OVER 0.5 HT (1º Tempo)"
-            quem = time_casa if atq_c > atq_f else time_fora
-            insight = f"Pressão absurda do {quem}. {ataques_p} ataques perigosos acumulados."
+    # --- LÓGICA DE SINAL ---
+    
+    # 1. GOL CEDO (HT)
+    if 5 <= tempo <= 25:
+        if total_gol >= 3 or total_chutes >= 6:
+            sinal = "GOL NO 1º TEMPO (HT)"
+            insight = f"🔥 **Início Incendiário!** O jogo mal começou ({tempo} min) e já temos **{total_chutes} finalizações**. As defesas estão batendo cabeça. A chance de gol nos próximos minutos é altíssima."
 
-    elif tempo >= 60: # Final
-        if chutes_total >= 14 or ataques_p >= 60:
-            sinal = "GOL FINAL (FT)"
-            insight = f"Jogo aberto na reta final. {chutes_total} finalizações totais."
+    # 2. OVER 1º TEMPO (HT - Pressão)
+    elif 25 < tempo <= 45:
+        if (atq_c + atq_f) > 30 and total_chutes >= 8:
+            sinal = "GOL AINDA NO 1º TEMPO"
             
-    return sinal, insight, chutes_total, ataques_p, chutes_gol
+            # Narrativa dinâmica
+            quem = t_casa if atq_c > atq_f else t_fora
+            vitima = t_fora if atq_c > atq_f else t_casa
+            diff = abs(atq_c - atq_f)
+            
+            insight = f"🚨 **Pressão Absurda do {quem}!** Eles têm {diff} ataques perigosos a mais que o {vitima}. O goleiro já trabalhou {total_gol} vezes. O gol está maduro, deve sair antes do intervalo."
 
-# --- DADOS FALSOS PARA LAYOUT ---
+    # 3. GOL NO FINAL (FT)
+    elif tempo >= 65:
+        if total_chutes >= 15 or (atq_c + atq_f) >= 70:
+            sinal = "GOL NO FINAL DO JOGO"
+            insight = f"⚡ **Jogo Aberto (Tudo ou Nada)!** Estamos na reta final com **{total_chutes} chutes acumulados**. Um dos times se lançou ao ataque e deixou a defesa exposta. A estatística mostra tendência clara de gol tardio."
+
+    return sinal, insight, total_chutes, total_gol, (atq_c + atq_f)
+
+# --- DADOS DE TESTE (SIMULAÇÃO) ---
 def gerar_sinais_teste():
     return [
-        {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 32}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Arsenal", "logo": "https://media.api-sports.io/football/teams/42.png"}, "away": {"name": "Liverpool", "logo": "https://media.api-sports.io/football/teams/40.png"}}},
-        {"fixture": {"id": 2, "status": {"short": "2H", "elapsed": 78}}, "league": {"name": "Brasileirão"}, "goals": {"home": 1, "away": 1}, "teams": {"home": {"name": "Flamengo", "logo": "https://media.api-sports.io/football/teams/127.png"}, "away": {"name": "Palmeiras", "logo": "https://media.api-sports.io/football/teams/121.png"}}}
+        {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 34}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Liverpool"}}},
+        {"fixture": {"id": 2, "status": {"short": "2H", "elapsed": 82}}, "league": {"name": "Copa do Brasil"}, "goals": {"home": 1, "away": 1}, "teams": {"home": {"name": "Corinthians"}, "away": {"name": "Flamengo"}}}
     ]
 
 def gerar_stats_teste(fid):
-    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 12}, {"type": "Shots on Goal", "value": 5}, {"type": "Dangerous Attacks", "value": 40}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 4}, {"type": "Dangerous Attacks", "value": 10}]}]
-    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 8}, {"type": "Dangerous Attacks", "value": 65}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 10}, {"type": "Dangerous Attacks", "value": 50}]}]
+    # Cenário 1: Arsenal amassando no HT
+    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 14}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 45}, {"type": "Ball Possession", "value": "65%"}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 2}, {"type": "Dangerous Attacks", "value": 10}]}]
+    # Cenário 2: Jogo aberto no final
+    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 12}, {"type": "Shots on Goal", "value": 5}, {"type": "Dangerous Attacks", "value": 50}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 10}, {"type": "Shots on Goal", "value": 4}, {"type": "Dangerous Attacks", "value": 45}]}]
     return []
 
-# --- INTERFACE PRINCIPAL ---
+# --- INTERFACE ---
+st.title("🎯 Sniper de Gols")
+st.write("Monitorando oportunidades de mercado em tempo real.")
 
-st.title("⚽ Sniper de Gols")
-st.caption("Monitoramento de pressão em tempo real")
-
-if st.button("📡 RASTREAR OPORTUNIDADES", use_container_width=True, type="primary"):
+if st.button("📡 RASTREAR AGORA", type="primary", use_container_width=True):
     
     if not API_KEY and not MODO_DEMO:
-        st.error("⚠️ Insira a API Key na barra lateral.")
+        st.error("⚠️ Configure a API Key na barra lateral.")
     else:
         jogos = buscar_jogos(API_KEY)
-        encontrou = False
+        achou = False
         
-        # Barra de progresso visual
+        # Barra de progresso fake p/ UX
         bar = st.progress(0)
         
         for i, jogo in enumerate(jogos):
-            # Atualiza barra
             bar.progress(min((i+1)/len(jogos), 1.0))
             
-            status = jogo['fixture']['status']['short']
+            # Filtro básico de tempo
             tempo = jogo['fixture']['status'].get('elapsed', 0)
+            status = jogo['fixture']['status']['short']
             
             if status in ['1H', '2H'] and tempo:
                 stats = buscar_stats(API_KEY, jogo['fixture']['id'])
@@ -122,38 +169,54 @@ if st.button("📡 RASTREAR OPORTUNIDADES", use_container_width=True, type="prim
                     
                     tc = jogo['teams']['home']['name']
                     tf = jogo['teams']['away']['name']
-                    placar = f"{jogo['goals']['home']} - {jogo['goals']['away']}"
                     
-                    sinal, motivo, chutes, atq_p, no_gol = gerar_sinal_explicado(tempo, s_casa, s_fora, tc, tf)
+                    # CHAMA O NARRADOR
+                    sinal, motivo, chutes, no_gol, atq_p = gerar_analise_completa(tempo, s_casa, s_fora, tc, tf)
                     
                     if sinal:
-                        encontrou = True
+                        achou = True
                         
-                        # --- O NOVO LAYOUT DE CARTÃO (CARD) ---
-                        with st.container(border=True):
+                        # --- HTML PURO PARA O CARD (MAIS BONITO) ---
+                        st.markdown(f"""
+                        <div class="card">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <div style="text-align:left; width:40%;">
+                                    <div class="titulo-time">{tc}</div>
+                                </div>
+                                <div style="text-align:center; width:20%;">
+                                    <div class="placar">{jogo['goals']['home']} - {jogo['goals']['away']}</div>
+                                    <div class="tempo">{tempo}'</div>
+                                </div>
+                                <div style="text-align:right; width:40%;">
+                                    <div class="titulo-time">{tf}</div>
+                                </div>
+                            </div>
                             
-                            # 1. Cabeçalho do Jogo (Times e Placar)
-                            col_time1, col_placar, col_time2 = st.columns([2, 1, 2])
-                            with col_time1: st.write(f"**{tc}**")
-                            with col_placar: 
-                                st.markdown(f"<h2 style='text-align: center; margin:0;'>{placar}</h2>", unsafe_allow_html=True)
-                                st.markdown(f"<p style='text-align: center; color: red;'>{tempo}'</p>", unsafe_allow_html=True)
-                            with col_time2: st.write(f"**{tf}**", )
+                            <div class="sinal-box">💰 {sinal}</div>
                             
-                            st.divider()
+                            <div class="insight-texto">
+                                {motivo}
+                            </div>
                             
-                            # 2. A Ordem de Aposta (Destaque Verde)
-                            st.success(f"💰 **ENTRADA:** {sinal}")
-                            st.caption(f"📢 **Motivo:** {motivo}")
+                            <hr style="border-color: #333;">
                             
-                            # 3. Métricas (Painel de Controle)
-                            c1, c2, c3 = st.columns(3)
-                            c1.metric("Chutes Totais", chutes)
-                            c2.metric("No Gol", no_gol)
-                            c3.metric("Atq. Perigosos", atq_p, delta="Pressão" if atq_p > 30 else None)
-                            
-                            st.caption(f"Liga: {jogo['league']['name']}")
-
+                            <div style="display:flex; justify-content:space-around; text-align:center;">
+                                <div>
+                                    <div class="metric-label">CHUTES TOTAIS</div>
+                                    <div class="metric-val">{chutes}</div>
+                                </div>
+                                <div>
+                                    <div class="metric-label">NO GOL</div>
+                                    <div class="metric-val" style="color:#00C853;">{no_gol}</div>
+                                </div>
+                                <div>
+                                    <div class="metric-label">ATAQUES PERIGOSOS</div>
+                                    <div class="metric-val" style="color:#FFD700;">{atq_p}</div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+        
         bar.empty()
-        if not encontrou:
-            st.info("Nenhuma oportunidade clara no momento. O mercado está calmo.")
+        if not achou:
+            st.info("O Robô escaneou o mercado e não encontrou oportunidades claras de gol agora.")
