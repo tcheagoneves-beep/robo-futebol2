@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
 import requests
+import time
 from datetime import datetime
 
-# --- CONFIGURAÇÃO VISUAL (NOME LIMPO) ---
+# --- CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Sniper de Gols",
+    page_title="Sniper de Gols - AutoBot",
     layout="centered",
-    page_icon="⚽"
+    page_icon="🤖"
 )
 
 # Estilos CSS
@@ -67,6 +68,23 @@ st.markdown("""
     }
     .metric-val {font-size: 22px; font-weight: bold;}
     .metric-label {font-size: 10px; color: #888; text-transform: uppercase;}
+    
+    /* Animação de Pulso para o Status Online */
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
+    }
+    .status-online {
+        color: #00FF00;
+        font-weight: bold;
+        animation: pulse 2s infinite;
+        padding: 5px 10px;
+        border-radius: 15px;
+        border: 1px solid #00FF00;
+        text-align: center;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,20 +92,32 @@ st.markdown("""
 with st.sidebar:
     st.header("⚙️ Configurações")
     
-    # API FOOTBALL
+    # API KEY
     if 'api_key' not in st.session_state: st.session_state['api_key'] = ""
     API_KEY = st.text_input("Chave API-SPORTS:", value=st.session_state['api_key'], type="password")
     if API_KEY: st.session_state['api_key'] = API_KEY
     
     st.markdown("---")
     
-    # API TELEGRAM (NOVA)
-    with st.expander("🔔 Configurar Alertas (Telegram)"):
-        tg_token = st.text_input("Bot Token:", type="password", help="Peça ao @BotFather no Telegram")
-        tg_chat_id = st.text_input("Chat ID:", help="Use o @userinfobot para descobrir seu ID")
-        testar_tg = st.button("Testar Envio")
-
+    # TELEGRAM
+    with st.expander("🔔 Telegram"):
+        tg_token = st.text_input("Bot Token:", type="password")
+        tg_chat_id = st.text_input("Chat ID:")
+        if st.button("Testar Envio"):
+            if tg_token and tg_chat_id:
+                try:
+                    url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+                    requests.post(url, data={"chat_id": tg_chat_id, "text": "✅ Sniper Conectado!"})
+                    st.success("Enviado!")
+                except: st.error("Erro no envio.")
+    
     st.markdown("---")
+    
+    # CONTROLE DO ROBÔ (AUTO-REFRESH)
+    st.header("🤖 Controle do Robô")
+    ROBO_LIGADO = st.checkbox("LIGAR MODO AUTOMÁTICO", value=False)
+    INTERVALO = st.slider("Atualizar a cada (segundos):", 30, 300, 60)
+    
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
 # --- FUNÇÃO ENVIO TELEGRAM ---
@@ -95,14 +125,8 @@ def enviar_telegram(token, chat_id, msg):
     if token and chat_id:
         try:
             url = f"https://api.telegram.org/bot{token}/sendMessage"
-            data = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
-            requests.post(url, data=data)
-        except:
-            pass
-
-if testar_tg and tg_token and tg_chat_id:
-    enviar_telegram(tg_token, tg_chat_id, "✅ **Teste Sniper:** O robô está conectado!")
-    st.sidebar.success("Mensagem enviada!")
+            requests.post(url, data={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"})
+        except: pass
 
 # --- CONEXÕES API ---
 def buscar_jogos(api_key):
@@ -137,15 +161,10 @@ def buscar_odds_pre_match(api_key, fixture_id):
 
 # --- CÉREBRO ---
 def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
-    
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
-    gol_c = v(s_casa, 'Shots on Goal')
-    gol_f = v(s_fora, 'Shots on Goal')
-    chutes_c = v(s_casa, 'Total Shots')
-    chutes_f = v(s_fora, 'Total Shots')
-    atq_c = v(s_casa, 'Dangerous Attacks')
-    atq_f = v(s_fora, 'Dangerous Attacks')
-    
+    gol_c = v(s_casa, 'Shots on Goal'); gol_f = v(s_fora, 'Shots on Goal')
+    chutes_c = v(s_casa, 'Total Shots'); chutes_f = v(s_fora, 'Total Shots')
+    atq_c = v(s_casa, 'Dangerous Attacks'); atq_f = v(s_fora, 'Dangerous Attacks')
     total_chutes = chutes_c + chutes_f
     sinal = None; insight = ""; tipo_sinal = "normal"
     
@@ -185,10 +204,8 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
 
     # 4. Gol Cedo
     elif 5 <= tempo <= 15 and not sinal:
-        if atq_c >= atq_f: 
-            forte=t_casa; g_forte=gol_c; fraco=t_fora; g_fraco=gol_f
-        else:
-            forte=t_fora; g_forte=gol_f; fraco=t_casa; g_fraco=gol_c
+        if atq_c >= atq_f: forte=t_casa; g_forte=gol_c; fraco=t_fora; g_fraco=gol_f
+        else: forte=t_fora; g_forte=gol_f; fraco=t_casa; g_fraco=gol_c
         txt = ""
         if g_forte >= 1: txt = f"Dominante ({forte}) chutou no alvo."
         if g_fraco >= 2: txt = f"Zebra ({fraco}) chutou 2x no alvo."
@@ -204,51 +221,38 @@ def gerar_sinais_teste():
 def gerar_odds_teste(fid): return (2.5, 2.5)
 def gerar_stats_teste(fid): return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 10}, {"type": "Shots on Goal", "value": 5}, {"type": "Dangerous Attacks", "value": 30}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 8}, {"type": "Shots on Goal", "value": 4}, {"type": "Dangerous Attacks", "value": 20}]}]
 
-# --- INTERFACE ---
-st.title("🎯 Sniper de Gols")
-
-# Controle de Alertas Enviados (Anti-Spam)
-if 'alertas_enviados' not in st.session_state:
-    st.session_state['alertas_enviados'] = set()
-
-if st.button("📡 RASTREAR E ATUALIZAR", type="primary", use_container_width=True):
+# --- LÓGICA PRINCIPAL (SCANNER) ---
+def executar_scanner():
     if not API_KEY and not MODO_DEMO:
         st.error("⚠️ Coloque a API Key!")
-    else:
-        with st.spinner('Escaneando o mercado...'):
-            jogos = buscar_jogos(API_KEY)
-            
-        achou = False
-        radar_jogos = []
-        proximos_jogos = []
-        
-        for i, jogo in enumerate(jogos):
-            status = jogo['fixture']['status']['short']
-            
-            if status == 'NS':
-                hora = datetime.fromtimestamp(jogo['fixture']['timestamp']).strftime('%H:%M')
-                proximos_jogos.append({"Hora": hora, "Liga": jogo['league']['name'], "Jogo": f"{jogo['teams']['home']['name']} vs {jogo['teams']['away']['name']}"})
+        return
 
-            tempo = jogo['fixture']['status'].get('elapsed', 0)
-            if status in ['1H', '2H'] and tempo:
-                radar_jogos.append({"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']}x{jogo['goals']['away']} {jogo['teams']['away']['name']}"})
+    jogos = buscar_jogos(API_KEY)
+    achou = False
+    radar_jogos = []
+    
+    for jogo in jogos:
+        status = jogo['fixture']['status']['short']
+        tempo = jogo['fixture']['status'].get('elapsed', 0)
+        
+        if status in ['1H', '2H'] and tempo:
+            radar_jogos.append({"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']}x{jogo['goals']['away']} {jogo['teams']['away']['name']}"})
+            
+            stats = buscar_stats(API_KEY, jogo['fixture']['id'])
+            if stats:
+                odd_casa, odd_fora = buscar_odds_pre_match(API_KEY, jogo['fixture']['id'])
+                s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
+                s_fora = {i['type']: i['value'] for i in stats[1]['statistics']}
+                tc = jogo['teams']['home']['name']; tf = jogo['teams']['away']['name']
+                sc = jogo['goals']['home'] or 0; sf = jogo['goals']['away'] or 0
                 
-                stats = buscar_stats(API_KEY, jogo['fixture']['id'])
-                if stats:
-                    odd_casa, odd_fora = buscar_odds_pre_match(API_KEY, jogo['fixture']['id'])
-                    s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
-                    s_fora = {i['type']: i['value'] for i in stats[1]['statistics']}
-                    tc = jogo['teams']['home']['name']; tf = jogo['teams']['away']['name']
-                    sc = jogo['goals']['home'] or 0; sf = jogo['goals']['away'] or 0
+                sinal, motivo, chutes, no_gol, atq_p, tipo = analisar_partida(tempo, s_casa, s_fora, tc, tf, sc, sf, odd_casa, odd_fora)
+                
+                if sinal:
+                    achou = True
+                    cls = "multipla-box" if tipo == "multipla" else "sinal-box"
                     
-                    sinal, motivo, chutes, no_gol, atq_p, tipo = analisar_partida(tempo, s_casa, s_fora, tc, tf, sc, sf, odd_casa, odd_fora)
-                    
-                    if sinal:
-                        achou = True
-                        cls = "multipla-box" if tipo == "multipla" else "sinal-box"
-                        
-                        # Mostra na Tela
-                        st.markdown(f"""
+                    st.markdown(f"""
 <div class="card">
 <div style="display:flex; justify-content:space-between; align-items:center;">
 <div style="width:40%; text-align:left;"><div class="titulo-time">{tc}</div><span class="odd-label">{odd_casa:.2f}</span></div>
@@ -263,23 +267,38 @@ if st.button("📡 RASTREAR E ATUALIZAR", type="primary", use_container_width=Tr
 <div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div>
 </div></div>""", unsafe_allow_html=True)
 
-                        # Envia Alerta Telegram (Se configurado e não enviado ainda)
-                        chave_alerta = f"{jogo['fixture']['id']}_{sinal}"
-                        if tg_token and tg_chat_id and chave_alerta not in st.session_state['alertas_enviados']:
-                            msg_tg = f"🎯 **SNIPER ALERT!**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n💡 {motivo}"
-                            enviar_telegram(tg_token, tg_chat_id, msg_tg)
-                            st.session_state['alertas_enviados'].add(chave_alerta)
-                            st.toast(f"Alerta enviado para Telegram: {tc} x {tf}")
+                    # Envia Telegram
+                    if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+                    chave = f"{jogo['fixture']['id']}_{sinal}"
+                    if tg_token and tg_chat_id and chave not in st.session_state['alertas_enviados']:
+                        msg = f"🎯 **SNIPER ALERT!**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n💡 {motivo}"
+                        enviar_telegram(tg_token, tg_chat_id, msg)
+                        st.session_state['alertas_enviados'].add(chave)
 
-        if not achou:
-            st.warning("Nenhuma oportunidade 'Sniper' encontrada agora.")
-        
-        st.markdown("---")
-        
-        c1, c2 = st.tabs(["📡 Radar (Ao Vivo)", "📅 Próximos Jogos"])
-        with c1:
-            if radar_jogos: st.dataframe(pd.DataFrame(radar_jogos), hide_index=True, use_container_width=True)
-            else: st.info("Nenhum jogo ao vivo agora.")
-        with c2:
-            if proximos_jogos: st.dataframe(pd.DataFrame(proximos_jogos), hide_index=True, use_container_width=True)
-            else: st.info("Sem jogos agendados na lista.")
+    if not achou:
+        st.info("Nenhuma oportunidade 'Sniper' agora. O robô continua monitorando...")
+
+    # Exibe Radar
+    if radar_jogos:
+        with st.expander(f"📡 Radar Ao Vivo ({len(radar_jogos)} jogos monitorados)", expanded=False):
+            st.dataframe(pd.DataFrame(radar_jogos), hide_index=True, use_container_width=True)
+
+# --- INTERFACE PRINCIPAL ---
+st.title("🤖 Sniper de Gols - AutoBot")
+
+if ROBO_LIGADO:
+    st.markdown('<div class="status-online">🟢 ROBÔ ONLINE E OPERANDO</div>', unsafe_allow_html=True)
+    st.caption(f"Atualizando automaticamente a cada {INTERVALO} segundos. Não feche esta aba.")
+    
+    # Executa a Análise
+    executar_scanner()
+    
+    # Aguarda e Recarrega
+    time.sleep(INTERVALO)
+    st.rerun()
+
+else:
+    st.markdown('<div style="color: #FF4B4B; text-align: center; margin-bottom: 20px;">🔴 ROBÔ PAUSADO</div>', unsafe_allow_html=True)
+    if st.button("📡 RASTREAR APENAS UMA VEZ", type="primary", use_container_width=True):
+        with st.spinner('Escaneando...'):
+            executar_scanner()
