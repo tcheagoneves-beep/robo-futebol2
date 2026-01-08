@@ -6,9 +6,9 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Sniper de Gols - Tipster Bot",
+    page_title="Sniper de Gols - Família",
     layout="centered",
-    page_icon="🎯"
+    page_icon="👨‍👦"
 )
 
 # Estilos CSS
@@ -90,17 +90,27 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # TELEGRAM
-    with st.expander("🔔 Telegram (Alertas)"):
+    # TELEGRAM MULTI-USUÁRIO
+    with st.expander("🔔 Telegram (Família)"):
         tg_token = st.text_input("Bot Token:", type="password")
-        tg_chat_id = st.text_input("Chat ID:")
-        if st.button("Testar Envio"):
-            if tg_token and tg_chat_id:
-                try:
-                    url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-                    requests.post(url, data={"chat_id": tg_chat_id, "text": "✅ Sniper Conectado! Aguardando sinais..."})
-                    st.success("Enviado!")
-                except: st.error("Erro no envio.")
+        # Campo modificado para aceitar vários IDs
+        tg_chat_ids = st.text_input("Chat IDs (separe por vírgula):", help="Ex: 123456, 987654")
+        
+        if st.button("Testar Envio para Todos"):
+            if tg_token and tg_chat_ids:
+                lista_ids = tg_chat_ids.split(',')
+                sucesso = 0
+                for chat_id in lista_ids:
+                    chat_id = chat_id.strip() # Remove espaços
+                    if chat_id:
+                        try:
+                            url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
+                            resp = requests.post(url, data={"chat_id": chat_id, "text": "✅ Sniper Conectado! Pai e Filho no Green! 💰", "parse_mode": "Markdown"})
+                            if resp.status_code == 200: sucesso += 1
+                        except: pass
+                
+                if sucesso > 0: st.success(f"Enviado para {sucesso} pessoas!")
+                else: st.error("Erro. Verifique se todos deram /start no robô.")
     
     st.markdown("---")
     
@@ -111,13 +121,17 @@ with st.sidebar:
     
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
-# --- FUNÇÃO ENVIO TELEGRAM ---
-def enviar_telegram(token, chat_id, msg):
-    if token and chat_id:
-        try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            requests.post(url, data={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"})
-        except: pass
+# --- FUNÇÃO ENVIO TELEGRAM (MULTI) ---
+def enviar_telegram_multi(token, ids_string, msg):
+    if token and ids_string:
+        lista_ids = ids_string.split(',')
+        for chat_id in lista_ids:
+            chat_id = chat_id.strip()
+            if chat_id:
+                try:
+                    url = f"https://api.telegram.org/bot{token}/sendMessage"
+                    requests.post(url, data={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"})
+                except: pass
 
 # --- CONEXÕES API ---
 def buscar_jogos(api_key):
@@ -206,7 +220,7 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
 
     return sinal, insight, total_chutes, (gol_c + gol_f), (atq_c + atq_f), tipo_sinal
 
-# --- TRADUTOR DE SINAIS (LÓGICA DE APOSTA PARA TELEGRAM) ---
+# --- TRADUTOR DE SINAIS ---
 def traduzir_instrucao(sinal, time_fav=""):
     if "PRÓXIMO GOL" in sinal:
         return f"Apostar no mercado **Próximo Gol** (Next Goal) a favor do **{time_fav}**."
@@ -271,12 +285,11 @@ def executar_scanner():
 <div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div>
 </div></div>""", unsafe_allow_html=True)
 
-                    # --- ENVIO TELEGRAM PROFISSIONAL ---
+                    # --- ENVIO TELEGRAM (MULTI) ---
                     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
                     chave = f"{jogo['fixture']['id']}_{sinal}"
                     
-                    if tg_token and tg_chat_id and chave not in st.session_state['alertas_enviados']:
-                        # Extrai nome do favorito da string do sinal se tiver
+                    if tg_token and tg_chat_ids and chave not in st.session_state['alertas_enviados']:
                         nome_fav_msg = tc if odd_casa < odd_fora else tf
                         instrucao_acao = traduzir_instrucao(sinal, nome_fav_msg)
                         
@@ -300,7 +313,7 @@ def executar_scanner():
 • Chutes no Gol: {no_gol}
 • Ataques Perigosos: {atq_p}
 """
-                        enviar_telegram(tg_token, tg_chat_id, msg_tg)
+                        enviar_telegram_multi(tg_token, tg_chat_ids, msg_tg)
                         st.session_state['alertas_enviados'].add(chave)
 
     if not achou: st.info("Monitorando o mercado...")
@@ -309,7 +322,7 @@ def executar_scanner():
             st.dataframe(pd.DataFrame(radar_jogos), hide_index=True, use_container_width=True)
 
 # --- INTERFACE ---
-st.title("🤖 Sniper de Gols - Tipster")
+st.title("🤖 Sniper de Gols - Tipster Família")
 
 if ROBO_LIGADO:
     st.markdown('<div class="status-online">🟢 ROBÔ ONLINE</div>', unsafe_allow_html=True)
