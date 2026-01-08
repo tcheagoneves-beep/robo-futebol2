@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Sniper de Gols - Expert",
+    page_title="Sniper de Gols - V10",
     layout="centered",
     page_icon="⚽"
 )
@@ -90,7 +90,7 @@ def buscar_stats(api_key, fixture_id):
     try: return requests.get(url, headers=headers, params={"fixture": fixture_id}).json().get('response', [])
     except: return []
 
-# --- CÉREBRO ANALÍTICO V9 (COM DETECTOR DE REAÇÃO) ---
+# --- CÉREBRO ANALÍTICO V10 (Regra de Clássicos) ---
 def gerar_analise_completa(tempo, s_casa, s_fora, t_casa, t_fora, score_casa, score_fora):
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
 
@@ -101,77 +101,72 @@ def gerar_analise_completa(tempo, s_casa, s_fora, t_casa, t_fora, score_casa, sc
     atq_c = v(s_casa, 'Dangerous Attacks')
     atq_f = v(s_fora, 'Dangerous Attacks')
     
-    # Somas
     total_chutes = chutes_c + chutes_f
     total_gol_alvo = gol_c + gol_f
     
     sinal = None
     insight = ""
 
-    # --- 1. CENÁRIO: FAVORITO PERDENDO (Sua Regra do Al Ain) ---
-    # Lógica: Um time está perdendo, MAS tem muito mais pressão (ataques/chutes)
-    
-    # Casa Perdendo?
+    # --- 1. DETECTOR DE REAÇÃO (Favorito Perdendo) ---
     if score_casa < score_fora:
-        # Verifica se Casa está amassando (Dobro de ataques ou muitos chutes)
         if (atq_c > atq_f * 1.5) or (chutes_c > 12 and chutes_c > chutes_f * 2):
             sinal = f"GOL DO {t_casa} (REAÇÃO)"
-            insight = f"""
-            **O Favorito está perdendo injustamente!**<br>
-            O {t_casa} está atrás no placar, mas amassando o jogo com **{chutes_c} finalizações** contra apenas {chutes_f} do adversário.
-            Pressão total para o empate. Ótima chance para **Próximo Gol** ou **Over Gols**.
-            """
+            insight = f"O favorito ({t_casa}) está perdendo mas tem **{chutes_c} finalizações** (Volume de massacre). O empate é iminente."
             
-    # Visitante Perdendo? (Ex: Al Ain)
     elif score_fora < score_casa:
         if (atq_f > atq_c * 1.5) or (chutes_f > 12 and chutes_f > chutes_c * 2):
             sinal = f"GOL DO {t_fora} (REAÇÃO)"
-            insight = f"""
-            **O Favorito acordou!**<br>
-            O {t_fora} tomou um gol, mas reagiu com violência. São **{atq_f} ataques perigosos** contra {atq_c} do mandante.
-            O gol de empate está maduro.
-            """
+            insight = f"O favorito ({t_fora}) reagiu ao gol sofrido e já soma **{atq_f} ataques perigosos**. Pressão total para empatar."
 
-    # --- 2. CENÁRIO: GOL CEDO (Regra dos 10 min) ---
+    # --- 2. GOL CEDO (Regra Clássicos/Top Times - Até 10 min) ---
     elif 5 <= tempo <= 15 and not sinal:
-        favorito = t_casa if atq_c > atq_f else t_fora
-        chutes_fav = gol_c if atq_c > atq_f else gol_f
         
-        if (chutes_fav >= 1) or (total_gol_alvo >= 2):
+        # Regra do Usuário: 1 de cada lado OU 2 de um time só
+        condicao_classico_equilibrado = (gol_c >= 1 and gol_f >= 1)
+        condicao_massacre_solo = (gol_c >= 2 or gol_f >= 2)
+        
+        if condicao_classico_equilibrado or condicao_massacre_solo:
             sinal = "GOL CEDO (HT)"
+            
+            explicacao_regra = ""
+            if condicao_classico_equilibrado:
+                explicacao_regra = "Critério de Clássico: **1 chute no alvo de cada time**."
+            else:
+                quem = t_casa if gol_c >= 2 else t_fora
+                qtd = gol_c if gol_c >= 2 else gol_f
+                explicacao_regra = f"Critério de Pressão: O **{quem}** já chutou **{qtd} vezes no alvo** sozinho."
+            
             insight = f"""
-            Início agressivo! Com apenas {tempo} minutos já temos **{total_gol_alvo} chutes no alvo**.
-            O goleiro já está trabalhando. Critério de entrada batido (Mínimo 1 chute do favorito ou 2 somados).
+            Início frenético ({tempo} min). Goleiros já trabalhando.
+            {explicacao_regra}<br>
+            Cenário ideal para gol nos primeiros minutos (Defesas abertas ou qualidade técnica alta).
             """
 
-    # --- 3. CENÁRIO: FIM DE JOGO (Tudo ou Nada) ---
+    # --- 3. FIM DE JOGO ---
     elif tempo >= 65 and not sinal:
         if total_chutes >= 16:
             sinal = "GOL NO FINAL (FT)"
-            insight = f"""
-            Jogo totalmente aberto com **{total_chutes} finalizações**.
-            Estatística clássica de final de jogo: um time ataca desesperado e o outro tem o contra-ataque. A rede vai balançar.
-            """
+            insight = f"Jogo aberto com **{total_chutes} finalizações**. Um time ataca e o outro contra-ataca. Alta probabilidade de gol."
 
     return sinal, insight, total_chutes, total_gol_alvo, (atq_c + atq_f)
 
-# --- DADOS DE TESTE (CENÁRIO AL AIN) ---
+# --- DADOS DE TESTE V10 ---
 def gerar_sinais_teste():
     return [
-        {"fixture": {"id": 1, "status": {"short": "2H", "elapsed": 60}}, "league": {"name": "UAE League"}, "goals": {"home": 1, "away": 0}, "teams": {"home": {"name": "Al Dhafra"}, "away": {"name": "Al Ain"}}},
-        {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 8}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Man City"}, "away": {"name": "Fulham"}}}
+        {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 9}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Chelsea"}}},
+        {"fixture": {"id": 2, "status": {"short": "2H", "elapsed": 70}}, "league": {"name": "La Liga"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Barcelona"}}}
     ]
 
 def gerar_stats_teste(fid):
-    # Cenário 1: Al Ain perdendo (0x1) mas amassando (REACAO)
-    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 3}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 10}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 16}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 55}]}]
+    # Cenário 1: Clássico Equilibrado (1 chute no gol de cada)
+    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 3}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 10}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 2}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 12}]}]
     
-    # Cenário 2: Gol Cedo
-    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 4}, {"type": "Shots on Goal", "value": 2}, {"type": "Dangerous Attacks", "value": 12}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 0}, {"type": "Shots on Goal", "value": 0}, {"type": "Dangerous Attacks", "value": 2}]}]
+    # Cenário 2: Real Madrid perdendo e amassando (Reação)
+    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 18}, {"type": "Shots on Goal", "value": 8}, {"type": "Dangerous Attacks", "value": 70}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 2}, {"type": "Dangerous Attacks", "value": 20}]}]
     return []
 
 # --- INTERFACE ---
-st.title("🎯 Sniper de Gols - Analista Pro")
+st.title("🎯 Sniper de Gols - Analista V10")
 
 if st.button("📡 ANALISAR MERCADO", type="primary", use_container_width=True):
     
@@ -195,18 +190,13 @@ if st.button("📡 ANALISAR MERCADO", type="primary", use_container_width=True):
                     s_fora = {i['type']: i['value'] for i in stats[1]['statistics']}
                     tc = jogo['teams']['home']['name']
                     tf = jogo['teams']['away']['name']
-                    
-                    # PLACAR AGORA É IMPORTANTE
-                    sc = jogo['goals']['home']
-                    sf = jogo['goals']['away']
-                    if sc is None: sc = 0
-                    if sf is None: sf = 0
+                    sc = jogo['goals']['home'] if jogo['goals']['home'] is not None else 0
+                    sf = jogo['goals']['away'] if jogo['goals']['away'] is not None else 0
                     
                     sinal, motivo, chutes, no_gol, atq_p = gerar_analise_completa(tempo, s_casa, s_fora, tc, tf, sc, sf)
                     
                     if sinal:
                         achou = True
-                        
                         st.markdown(f"""
 <div class="card">
 <div style="display:flex; justify-content:space-between; align-items:center;">
