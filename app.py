@@ -4,14 +4,14 @@ import requests
 import time
 from datetime import datetime
 
-# --- CONFIGURAÇÃO VISUAL ---
+# --- CONFIGURAÇÃO VISUAL (BATISMO OFICIAL) ---
 st.set_page_config(
-    page_title="Sniper Gol dos Neves",
+    page_title="Neves Analytics",
     layout="centered",
     page_icon="❄️"
 )
 
-# Estilos CSS
+# Estilos CSS (Visual Profissional Dark)
 st.markdown("""
 <style>
     .stApp {background-color: #121212; color: white;}
@@ -106,13 +106,14 @@ with st.sidebar:
         if st.button("Testar Envio"):
             if tg_token and tg_chat_ids:
                 for cid in tg_chat_ids.split(','):
-                    try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": cid.strip(), "text": "✅ Teste Sniper!"})
+                    try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": cid.strip(), "text": "✅ Teste Neves Analytics!"})
                     except: pass
                 st.success("Teste enviado!")
 
     st.markdown("---")
     st.header("🤖 Modo Automático")
     ROBO_LIGADO = st.checkbox("LIGAR ROBÔ", value=False)
+    # 60s é o ideal para a estratégia Híbrida
     INTERVALO = st.slider("Ciclo (segundos):", 60, 300, 60)
     
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
@@ -130,8 +131,7 @@ def buscar_jogos(api_key):
     if MODO_DEMO: return gerar_sinais_teste()
     url = "https://v3.football.api-sports.io/fixtures"
     headers = {"x-apisports-key": api_key} 
-    # MUDANÇA: Buscamos por DATA (Date) em vez de LIVE.
-    # Isso traz Live + Agendados + Finalizados pelo mesmo custo (1 call).
+    # Busca por DATA (Traz Live + Próximos no mesmo request = Economia)
     try: return requests.get(url, headers=headers, params={"date": datetime.today().strftime('%Y-%m-%d')}).json().get('response', [])
     except: return []
 
@@ -165,7 +165,7 @@ def buscar_odds_cached(api_key, fixture_id):
     except: pass
     return 0, 0
 
-# --- CÉREBRO (V26 COMPLETO) ---
+# --- CÉREBRO NEVES ANALYTICS ---
 def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
     gol_c = v(s_casa, 'Shots on Goal'); gol_f = v(s_fora, 'Shots on Goal')
@@ -181,7 +181,9 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
         elif odd_casa <= 1.90: favorito = "CASA"; nome_favorito = t_casa
         elif odd_fora <= 1.90: favorito = "FORA"; nome_favorito = t_fora
 
-    # 1. Múltipla
+    # --- ESTRATÉGIAS ---
+
+    # 1. Múltipla (Porteira Aberta)
     if tempo <= 30 and (sc + sf) >= 2:
         sinal = "CANDIDATO P/ MÚLTIPLA (2+ Gols)"
         tipo_sinal = "multipla"
@@ -196,15 +198,17 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
             zc = chutes_f if favorito == "CASA" else chutes_c
             za = atq_f if favorito == "CASA" else atq_c
             
+            # Pressão Mínima do Gigante
             if fc >= 6 and fa > 30:
                 zebra_viva = (zc >= 4) or (za >= 15)
+                
                 if not zebra_viva:
                     sinal = f"PRÓXIMO GOL: {nome_favorito}"
                     insight = f"Gigante ({nome_favorito}) perde mas domina. Zebra inofensiva."
                     tipo_sinal = "normal"
                 else:
                     sinal = "JOGO ABERTO (OVER GOLS)"
-                    insight = f"Favorito desesperado, mas Zebra perigosa! Tendência de chuva de gols."
+                    insight = f"Favorito desesperado, mas Zebra perigosa no contra-ataque!"
                     tipo_sinal = "over"
 
     # 3. Pressão Final
@@ -240,20 +244,19 @@ def traduzir_instrucao(sinal, time_fav=""):
 # --- SIMULAÇÃO ---
 def gerar_sinais_teste():
     return [
-        {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 25}}, "league": {"name": "Simulacao"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "City"}, "away": {"name": "Luton"}}},
-        {"fixture": {"id": 2, "status": {"short": "NS", "timestamp": 1730000000}}, "league": {"name": "Brasileirão"}, "teams": {"home": {"name": "Flamengo"}, "away": {"name": "Palmeiras"}}}
+        {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 35}}, "league": {"name": "Simulacao"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Almeria"}}},
+        {"fixture": {"id": 2, "status": {"short": "NS", "timestamp": 1730000000}}, "league": {"name": "Champions"}, "teams": {"home": {"name": "Bayern"}, "away": {"name": "PSG"}}}
     ]
-def gerar_odds_teste(fid): return (1.15, 18.00)
+def gerar_odds_teste(fid): return (1.20, 15.00)
 def gerar_stats_teste(fid): 
     return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 50}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 3}, {"type": "Dangerous Attacks", "value": 20}]}]
 
-# --- SCANNER COMPLETO (LIVE + PRÓXIMOS) ---
+# --- SCANNER COMPLETO ---
 def executar_scanner():
     if not API_KEY and not MODO_DEMO:
         st.error("⚠️ Coloque a API Key!")
         return
 
-    # Busca jogos do dia (LIVE + NS + FT)
     jogos = buscar_jogos(API_KEY)
     
     achou = False
@@ -264,9 +267,7 @@ def executar_scanner():
         status = jogo['fixture']['status']['short']
         tempo = jogo['fixture']['status'].get('elapsed', 0)
         
-        # SEPARA O QUE É AO VIVO DO QUE É FUTURO
-        
-        # 1. FUTURO (NS = Not Started)
+        # 1. FUTURO
         if status == 'NS':
             hora = datetime.fromtimestamp(jogo['fixture']['timestamp']).strftime('%H:%M')
             proximos_jogos.append({
@@ -275,11 +276,11 @@ def executar_scanner():
                 "Jogo": f"{jogo['teams']['home']['name']} vs {jogo['teams']['away']['name']}"
             })
             
-        # 2. AO VIVO (1H, 2H) -> Vai pro Sniper
+        # 2. AO VIVO
         elif status in ['1H', '2H'] and tempo:
             info_radar = {"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']}x{jogo['goals']['away']} {jogo['teams']['away']['name']}", "Status": "👁️"}
             
-            # Filtro Inteligente (Economia de API)
+            # Filtro Inteligente de Zona Quente
             zona_quente = (tempo <= 50) or (70 <= tempo <= 75)
             
             if zona_quente:
@@ -319,7 +320,7 @@ def executar_scanner():
                         if tg_token and tg_chat_ids and chave not in st.session_state['alertas_enviados']:
                             nome_fav_msg = tc if odd_casa < odd_fora else tf
                             inst = traduzir_instrucao(sinal, nome_fav_msg)
-                            msg_tg = f"🚨 **SNIPER GOL DOS NEVES!**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n✅ {inst}\n\n📊 Chutes: {chutes} | Perigo: {atq_p}"
+                            msg_tg = f"🚨 **NEVES ANALYTICS**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n✅ {inst}\n\n📊 Chutes: {chutes} | Perigo: {atq_p}"
                             enviar_telegram_multi(tg_token, tg_chat_ids, msg_tg)
                             st.session_state['alertas_enviados'].add(chave)
             else:
@@ -327,35 +328,29 @@ def executar_scanner():
             
             radar_jogos.append(info_radar)
 
-    if not achou: st.info(f"Monitorando o mercado... (Híbrido Ativo)")
+    if not achou: st.info(f"Monitorando o mercado...")
     
-    # ABAS: RADAR E PRÓXIMOS
+    # ABAS
     tab1, tab2 = st.tabs(["📡 Ao Vivo", "📅 Próximos Jogos"])
-    
     with tab1:
-        if radar_jogos:
-            st.dataframe(pd.DataFrame(radar_jogos), hide_index=True, use_container_width=True)
-        else:
-            st.caption("Nenhum jogo ao vivo no momento.")
-
+        if radar_jogos: st.dataframe(pd.DataFrame(radar_jogos), hide_index=True, use_container_width=True)
+        else: st.caption("Nenhum jogo ao vivo agora.")
     with tab2:
         if proximos_jogos:
-            # Ordena por horário
             proximos_jogos = sorted(proximos_jogos, key=lambda x: x['Hora'])
             st.dataframe(pd.DataFrame(proximos_jogos), hide_index=True, use_container_width=True)
-        else:
-            st.caption("Sem mais jogos agendados para hoje.")
+        else: st.caption("Sem jogos futuros na lista de hoje.")
 
 # --- INTERFACE ---
-st.title("❄️ Sniper Gol dos Neves")
+st.title("❄️ Neves Analytics")
 
 if ROBO_LIGADO:
-    st.markdown('<div class="status-online">🟢 ROBÔ ONLINE</div>', unsafe_allow_html=True)
-    st.caption(f"Ciclo: {INTERVALO}s | Custo API: Otimizado (1 call/ciclo)")
+    st.markdown('<div class="status-online">🟢 SISTEMA ONLINE</div>', unsafe_allow_html=True)
+    st.caption(f"Ciclo: {INTERVALO}s | API: Otimizada")
     executar_scanner()
     time.sleep(INTERVALO)
     st.rerun()
 else:
-    st.markdown('<div style="color: #FF4B4B; text-align: center; margin-bottom: 20px;">🔴 ROBÔ PAUSADO</div>', unsafe_allow_html=True)
+    st.markdown('<div style="color: #FF4B4B; text-align: center; margin-bottom: 20px;">🔴 SISTEMA PAUSADO</div>', unsafe_allow_html=True)
     if st.button("📡 RASTREAR MANUALMENTE", type="primary", use_container_width=True):
         executar_scanner()
