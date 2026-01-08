@@ -6,9 +6,9 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Sniper de Gols - AutoBot",
+    page_title="Sniper de Gols - Tipster Bot",
     layout="centered",
-    page_icon="🤖"
+    page_icon="🎯"
 )
 
 # Estilos CSS
@@ -58,23 +58,6 @@ st.markdown("""
         border-radius: 5px;
         border-left: 4px solid #FFD700;
     }
-    .stats-row {
-        display: flex; 
-        justify-content: space-around; 
-        text-align: center; 
-        margin-top: 15px; 
-        padding-top: 15px; 
-        border-top: 1px solid #333;
-    }
-    .metric-val {font-size: 22px; font-weight: bold;}
-    .metric-label {font-size: 10px; color: #888; text-transform: uppercase;}
-    
-    /* Animação de Pulso para o Status Online */
-    @keyframes pulse {
-        0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); }
-        70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); }
-        100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
-    }
     .status-online {
         color: #00FF00;
         font-weight: bold;
@@ -85,6 +68,14 @@ st.markdown("""
         text-align: center;
         margin-bottom: 20px;
     }
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); }
+    }
+    .metric-val {font-size: 22px; font-weight: bold;}
+    .metric-label {font-size: 10px; color: #888; text-transform: uppercase;}
+    .stats-row { display: flex; justify-content: space-around; text-align: center; margin-top: 15px; padding-top: 15px; border-top: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -100,23 +91,23 @@ with st.sidebar:
     st.markdown("---")
     
     # TELEGRAM
-    with st.expander("🔔 Telegram"):
+    with st.expander("🔔 Telegram (Alertas)"):
         tg_token = st.text_input("Bot Token:", type="password")
         tg_chat_id = st.text_input("Chat ID:")
         if st.button("Testar Envio"):
             if tg_token and tg_chat_id:
                 try:
                     url = f"https://api.telegram.org/bot{tg_token}/sendMessage"
-                    requests.post(url, data={"chat_id": tg_chat_id, "text": "✅ Sniper Conectado!"})
+                    requests.post(url, data={"chat_id": tg_chat_id, "text": "✅ Sniper Conectado! Aguardando sinais..."})
                     st.success("Enviado!")
                 except: st.error("Erro no envio.")
     
     st.markdown("---")
     
-    # CONTROLE DO ROBÔ (AUTO-REFRESH)
-    st.header("🤖 Controle do Robô")
-    ROBO_LIGADO = st.checkbox("LIGAR MODO AUTOMÁTICO", value=False)
-    INTERVALO = st.slider("Atualizar a cada (segundos):", 30, 300, 60)
+    # AUTO BOT
+    st.header("🤖 Modo Automático")
+    ROBO_LIGADO = st.checkbox("LIGAR ROBÔ", value=False)
+    INTERVALO = st.slider("Ciclo (segundos):", 30, 300, 60)
     
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
@@ -180,7 +171,7 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
     if tempo <= 30 and gols_totais >= 2:
         sinal = "CANDIDATO P/ MÚLTIPLA (2+ Gols)"
         tipo_sinal = "multipla"
-        insight = f"**Porteira Aberta!** {gols_totais} gols em {tempo} min."
+        insight = f"Porteira Aberta! {gols_totais} gols em {tempo} min."
 
     # 2. Reação Gigante
     elif tempo <= 50 and eh_gigante and not sinal:
@@ -191,7 +182,7 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
             zc = chutes_f if favorito == "CASA" else chutes_c
             if fc >= 6 and fa > 30 and zc < 4:
                 sinal = f"PRÓXIMO GOL: {nome_favorito}"
-                insight = f"Gigante ({nome_favorito}) perde mas domina."
+                insight = f"Gigante ({nome_favorito}) perde mas domina totalmente."
 
     # 3. Janela 70-75
     elif 70 <= tempo <= 75 and eh_gigante and not sinal:
@@ -200,7 +191,7 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
             stats_chutes = chutes_c if favorito == "CASA" else chutes_f
             if stats_chutes >= 18:
                 sinal = "GOL (GIGANTE PRESSIONA)"
-                insight = f"Gigante precisa do gol. {stats_chutes} chutes acumulados."
+                insight = f"Gigante precisa do gol urgente."
 
     # 4. Gol Cedo
     elif 5 <= tempo <= 15 and not sinal:
@@ -215,13 +206,26 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
 
     return sinal, insight, total_chutes, (gol_c + gol_f), (atq_c + atq_f), tipo_sinal
 
+# --- TRADUTOR DE SINAIS (LÓGICA DE APOSTA PARA TELEGRAM) ---
+def traduzir_instrucao(sinal, time_fav=""):
+    if "PRÓXIMO GOL" in sinal:
+        return f"Apostar no mercado **Próximo Gol** (Next Goal) a favor do **{time_fav}**."
+    elif "MÚLTIPLA" in sinal:
+        return "Adicionar este jogo na sua **Múltipla de Mais Gols** (Over 2.5 ou 3.5)."
+    elif "GOL CEDO" in sinal:
+        return "Entrar no mercado **Gol no 1º Tempo** (Over 0.5 HT)."
+    elif "GIGANTE PRESSIONA" in sinal:
+        return "Entrar em **Mais 1 Gol na partida** (Asian Goal ou Gol Limite)."
+    else:
+        return "Entrar em **Mais Gols** (Over Gols) na partida."
+
 # --- SIMULAÇÃO ---
 def gerar_sinais_teste():
-    return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 28}}, "league": {"name": "Teste"}, "goals": {"home": 1, "away": 1}, "teams": {"home": {"name": "Ajax"}, "away": {"name": "PSV"}}}]
-def gerar_odds_teste(fid): return (2.5, 2.5)
-def gerar_stats_teste(fid): return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 10}, {"type": "Shots on Goal", "value": 5}, {"type": "Dangerous Attacks", "value": 30}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 8}, {"type": "Shots on Goal", "value": 4}, {"type": "Dangerous Attacks", "value": 20}]}]
+    return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 35}}, "league": {"name": "La Liga"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Almeria"}}}]
+def gerar_odds_teste(fid): return (1.20, 15.00)
+def gerar_stats_teste(fid): return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 45}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 1}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 5}]}]
 
-# --- LÓGICA PRINCIPAL (SCANNER) ---
+# --- SCANNER PRINCIPAL ---
 def executar_scanner():
     if not API_KEY and not MODO_DEMO:
         st.error("⚠️ Coloque a API Key!")
@@ -236,7 +240,7 @@ def executar_scanner():
         tempo = jogo['fixture']['status'].get('elapsed', 0)
         
         if status in ['1H', '2H'] and tempo:
-            radar_jogos.append({"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']}x{jogo['goals']['away']} {jogo['teams']['away']['name']}"})
+            radar_jogos.append({"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} vs {jogo['teams']['away']['name']}"})
             
             stats = buscar_stats(API_KEY, jogo['fixture']['id'])
             if stats:
@@ -267,38 +271,54 @@ def executar_scanner():
 <div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div>
 </div></div>""", unsafe_allow_html=True)
 
-                    # Envia Telegram
+                    # --- ENVIO TELEGRAM PROFISSIONAL ---
                     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
                     chave = f"{jogo['fixture']['id']}_{sinal}"
+                    
                     if tg_token and tg_chat_id and chave not in st.session_state['alertas_enviados']:
-                        msg = f"🎯 **SNIPER ALERT!**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n💡 {motivo}"
-                        enviar_telegram(tg_token, tg_chat_id, msg)
+                        # Extrai nome do favorito da string do sinal se tiver
+                        nome_fav_msg = tc if odd_casa < odd_fora else tf
+                        instrucao_acao = traduzir_instrucao(sinal, nome_fav_msg)
+                        
+                        msg_tg = f"""
+🚨 **ALERTA DE OPORTUNIDADE** 🚨
+
+⚽ **{tc} x {tf}**
+🏆 {jogo['league']['name']}
+⏰ **{tempo}'** (Placar: {sc}-{sf})
+
+💰 **SINAL:** {sinal}
+
+✅ **O QUE FAZER:**
+{instrucao_acao}
+
+🧠 **MOTIVO:**
+{motivo}
+
+📊 **Estatísticas:**
+• Chutes Totais: {chutes}
+• Chutes no Gol: {no_gol}
+• Ataques Perigosos: {atq_p}
+"""
+                        enviar_telegram(tg_token, tg_chat_id, msg_tg)
                         st.session_state['alertas_enviados'].add(chave)
 
-    if not achou:
-        st.info("Nenhuma oportunidade 'Sniper' agora. O robô continua monitorando...")
-
-    # Exibe Radar
+    if not achou: st.info("Monitorando o mercado...")
     if radar_jogos:
-        with st.expander(f"📡 Radar Ao Vivo ({len(radar_jogos)} jogos monitorados)", expanded=False):
+        with st.expander(f"📡 Radar Ao Vivo ({len(radar_jogos)} jogos)", expanded=False):
             st.dataframe(pd.DataFrame(radar_jogos), hide_index=True, use_container_width=True)
 
-# --- INTERFACE PRINCIPAL ---
-st.title("🤖 Sniper de Gols - AutoBot")
+# --- INTERFACE ---
+st.title("🤖 Sniper de Gols - Tipster")
 
 if ROBO_LIGADO:
-    st.markdown('<div class="status-online">🟢 ROBÔ ONLINE E OPERANDO</div>', unsafe_allow_html=True)
-    st.caption(f"Atualizando automaticamente a cada {INTERVALO} segundos. Não feche esta aba.")
-    
-    # Executa a Análise
+    st.markdown('<div class="status-online">🟢 ROBÔ ONLINE</div>', unsafe_allow_html=True)
+    st.caption(f"Atualizando a cada {INTERVALO}s...")
     executar_scanner()
-    
-    # Aguarda e Recarrega
     time.sleep(INTERVALO)
     st.rerun()
-
 else:
     st.markdown('<div style="color: #FF4B4B; text-align: center; margin-bottom: 20px;">🔴 ROBÔ PAUSADO</div>', unsafe_allow_html=True)
-    if st.button("📡 RASTREAR APENAS UMA VEZ", type="primary", use_container_width=True):
-        with st.spinner('Escaneando...'):
+    if st.button("📡 RASTREAR MANUALMENTE", type="primary", use_container_width=True):
+        with st.spinner('Analisando...'):
             executar_scanner()
