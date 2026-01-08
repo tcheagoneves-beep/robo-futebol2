@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Sniper de Gols - Odds Edition",
+    page_title="Sniper de Gols - V13",
     layout="centered",
     page_icon="⚽"
 )
@@ -68,7 +68,7 @@ with st.sidebar:
     
     st.markdown("---")
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=True)
-    st.info("Estratégia: Odds Pré-Live definem o Favorito.")
+    st.info("Estratégia V13: Gigantes no Final & Regra dos 10 min.")
 
 # --- CONEXÕES API ---
 def buscar_jogos(api_key):
@@ -83,16 +83,13 @@ def buscar_stats(api_key, fixture_id):
     try: return requests.get(url, headers={"X-RapidAPI-Key": api_key}, params={"fixture": fixture_id}).json().get('response', [])
     except: return []
 
-# NOVA FUNÇÃO: BUSCAR ODDS REAIS
 def buscar_odds_pre_match(api_key, fixture_id):
     if MODO_DEMO: return gerar_odds_teste(fixture_id)
     url = "https://api-football-v1.p.rapidapi.com/v3/odds"
     try:
-        # Busca odds da Bet365 (bookmaker=1)
         data = requests.get(url, headers={"X-RapidAPI-Key": api_key}, params={"fixture": fixture_id, "bookmaker": "1"}).json()
         if data.get('response'):
             bets = data['response'][0]['bookmakers'][0]['bets']
-            # Procura a aposta "Match Winner" (id=1)
             winner_bet = next((b for b in bets if b['id'] == 1), None)
             if winner_bet:
                 odd_casa = float(next((v['odd'] for v in winner_bet['values'] if v['value'] == 'Home'), 0))
@@ -101,10 +98,9 @@ def buscar_odds_pre_match(api_key, fixture_id):
         return 0, 0
     except: return 0, 0
 
-# --- CÉREBRO V12 (ODDS REAIS) ---
+# --- CÉREBRO V13 (GIGANTES NO FINAL) ---
 def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
     
-    # 1. Tratamento de Stats
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
     gol_c = v(s_casa, 'Shots on Goal')
     gol_f = v(s_fora, 'Shots on Goal')
@@ -118,105 +114,123 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
     sinal = None
     insight = ""
     
-    # --- DEFINIÇÃO DE FAVORITO PELAS ODDS ---
+    # Identificar Gigante / Super Favorito
+    # Odd abaixo de 1.55 indica favoritismo muito forte (Real, Barça, City, etc)
     favorito = None
     nome_favorito = ""
-    eh_classico = False
+    eh_gigante = False
     
     if odd_casa > 0 and odd_fora > 0:
-        if odd_casa <= 1.90: 
+        if odd_casa <= 1.55: 
             favorito = "CASA"
             nome_favorito = t_casa
-        elif odd_fora <= 1.90: 
+            eh_gigante = True
+        elif odd_fora <= 1.55: 
             favorito = "FORA"
             nome_favorito = t_fora
-        elif abs(odd_casa - odd_fora) < 0.5: # Odds próximas (Ex: 2.40 vs 2.60)
-            eh_classico = True
-    else:
-        # Se não tiver odd (fallback), usa stats
-        if atq_c > atq_f * 1.5: favorito = "CASA"; nome_favorito = t_casa
-        elif atq_f > atq_c * 1.5: favorito = "FORA"; nome_favorito = t_fora
+            eh_gigante = True
+        elif odd_casa <= 1.90: favorito = "CASA"; nome_favorito = t_casa
+        elif odd_fora <= 1.90: favorito = "FORA"; nome_favorito = t_fora
 
-    # --- CENÁRIO 1: GOL CEDO (5-15 min) ---
-    if 5 <= tempo <= 15:
-        # REGRA DO USUÁRIO BASEADA EM ODDS
-        gatilho = False
-        texto_gatilho = ""
+    # --- CENÁRIO 1: GIGANTE PRESSIONANDO NO FINAL (70+ min) ---
+    if tempo >= 70 and eh_gigante:
+        # Se o Gigante estiver ganhando de goleada, ignora.
+        # Só interessa se estiver empatando, perdendo, ou ganhando só por 1 gol e querendo matar o jogo.
         
-        if favorito == "CASA":
-            if gol_c >= 1: # Favorito chutou 1
-                gatilho = True
-                texto_gatilho = f"O Favorito ({t_casa} - Odd {odd_casa}) já chutou no gol."
-            elif gol_f >= 2: # Zebra chutou 2
-                gatilho = True
-                texto_gatilho = f"A Zebra ({t_fora}) surpreende com 2 chutes no alvo!"
-                
-        elif favorito == "FORA":
-            if gol_f >= 1: # Favorito chutou 1
-                gatilho = True
-                texto_gatilho = f"O Favorito ({t_fora} - Odd {odd_fora}) já chutou no gol."
-            elif gol_c >= 2: # Zebra chutou 2
-                gatilho = True
-                texto_gatilho = f"A Zebra ({t_casa}) surpreende com 2 chutes no alvo!"
+        diff_placar = sc - sf if favorito == "CASA" else sf - sc
         
-        # Se for clássico/equilibrado, exige 1 de cada ou 2 de alguém
-        elif eh_classico:
-            if (gol_c >= 1 and gol_f >= 1) or (gol_c + gol_f >= 3):
-                gatilho = True
-                texto_gatilho = "Jogo Equilibrado (Clássico) com chances claras para ambos."
+        if diff_placar <= 1: # Jogo vivo
+            # Regra: PRESSÃO MUITO GRANDE (User: "Real, Barça, etc contra pequenos")
+            
+            stats_gigante_chutes = chutes_c if favorito == "CASA" else chutes_f
+            stats_gigante_atq = atq_c if favorito == "CASA" else atq_f
+            
+            # Critérios de Pressão Extrema
+            criterio_chutes = stats_gigante_chutes >= 20 # Muitos chutes
+            criterio_perigo = stats_gigante_atq >= 80    # Sufoco total
+            
+            if criterio_chutes or criterio_perigo:
+                sinal = "GOL NO FINAL (GIGANTE)"
+                insight = f"""
+                **Atenção: Gigante ({nome_favorito}) em Pressão Máxima!**<br>
+                Jogo contra time menor, passado dos 70 min.
+                O Favorito já acumula **{stats_gigante_chutes} chutes** e **{stats_gigante_atq} ataques perigosos**.
+                A regra é clara: quando o grande pressiona assim no final, o gol é inevitável.
+                """
 
-        if gatilho:
+    # --- CENÁRIO 2: FAVORITO PERDENDO (REAÇÃO) - Qualquer tempo ---
+    elif not sinal and ((favorito == "CASA" and sc < sf) or (favorito == "FORA" and sf < sc)):
+        stats_fav_chutes = chutes_c if favorito == "CASA" else chutes_f
+        if stats_fav_chutes >= 10: # Pressão de reação
+            sinal = f"GOL DO {nome_favorito} (REAÇÃO)"
+            insight = f"O Favorito ({nome_favorito}) está perdendo, mas amassando com {stats_fav_chutes} finalizações. O empate está maduro."
+
+    # --- CENÁRIO 3: GOL CEDO (5-15 min) - Regra Assimétrica ---
+    elif 5 <= tempo <= 15 and not sinal:
+        
+        # Lógica de quem é o "Dono do Jogo" agora (quem ataca mais)
+        if atq_c >= atq_f: 
+            lado_forte = "CASA"; nome_forte = t_casa; gol_forte = gol_c
+            lado_fraco = "FORA"; nome_fraco = t_fora; gol_fraco = gol_f
+        else:
+            lado_forte = "FORA"; nome_forte = t_fora; gol_forte = gol_f
+            lado_fraco = "CASA"; nome_fraco = t_casa; gol_fraco = gol_c
+        
+        # Se o favorito de Odds também é o forte em campo, melhor ainda.
+        texto_base = ""
+        bateu_regra = False
+        
+        # Regra 1: Favorito deu 1 chute no gol
+        if gol_forte >= 1:
+            bateu_regra = True
+            texto_base = f"O time que pressiona ({nome_forte}) já chutou no alvo."
+            
+        # Regra 2: Zebra deu 2 chutes no gol
+        if gol_fraco >= 2:
+            bateu_regra = True
+            texto_base = f"A Zebra ({nome_fraco}) surpreende com 2 chutes no alvo!"
+            
+        if bateu_regra:
             sinal = "GOL CEDO (HT)"
             insight = f"""
-            **Critério de Odds Batido:**
-            {texto_gatilho}<br>
-            Jogo intenso com {tempo} minutos. Probabilidade alta de abertura de placar.
+            **Início Intenso ({tempo} min):**
+            {texto_base}<br>
+            Critério batido (1 chute do favorito ou 2 do adversário). Probabilidade alta de gol.
             """
 
-    # --- CENÁRIO 2: FAVORITO PERDENDO (REAÇÃO) ---
-    elif (favorito == "CASA" and sc < sf) or (favorito == "FORA" and sf < sc):
-        # Time favorito perdendo... ele está amassando?
-        quem_perde = s_casa if favorito == "CASA" else s_fora
-        chutes_fav = chutes_c if favorito == "CASA" else chutes_f
-        
-        if chutes_fav >= 8 or (atq_c + atq_f) > 40:
-            sinal = f"GOL DO {nome_favorito} (REAÇÃO)"
-            insight = f"O Favorito (Odd {odd_casa if favorito=='CASA' else odd_fora}) está perdendo, mas amassa com {chutes_fav} finalizações."
-
-    # --- CENÁRIO 3: FIM DE JOGO ---
-    elif tempo >= 70:
+    # --- CENÁRIO 4: JOGO ABERTO GENÉRICO (Se não for jogo de gigante) ---
+    elif tempo >= 70 and not eh_gigante and not sinal:
         if total_chutes >= 18:
-            sinal = "GOL NO FINAL (FT)"
-            insight = f"Jogo totalmente aberto. {total_chutes} finalizações totais."
+            sinal = "GOL NO FINAL (JOGO ABERTO)"
+            insight = f"Jogo lá e cá com **{total_chutes} finalizações**. Defesas cansadas e ataques ativos."
 
     return sinal, insight, total_chutes, (gol_c + gol_f), (atq_c + atq_f)
 
-# --- SIMULAÇÃO DE DADOS + ODDS ---
+# --- SIMULAÇÃO ---
 def gerar_sinais_teste():
     return [
-        {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 9}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Man City"}, "away": {"name": "Luton"}}},
-        {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 10}}, "league": {"name": "La Liga"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Alaves"}, "away": {"name": "Real Madrid"}}}
+        {"fixture": {"id": 1, "status": {"short": "2H", "elapsed": 78}}, "league": {"name": "La Liga"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Mallorca"}}},
+        {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 12}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Wolves"}}}
     ]
 
 def gerar_odds_teste(fid):
-    # Jogo 1: City Favoritaço (1.10 vs 15.0)
-    if fid == 1: return 1.10, 15.00
-    # Jogo 2: Real Madrid Favorito Fora (5.00 vs 1.40)
-    elif fid == 2: return 5.00, 1.40
+    if fid == 1: return 1.25, 11.00 # Real Madrid Super Favorito
+    if fid == 2: return 1.40, 7.00  # Arsenal Favorito
     return 0, 0
 
 def gerar_stats_teste(fid):
-    # Jogo 1: City (Fav) deu 1 chute no gol. TEM QUE DAR GREEN (Regra: Fav 1 chute).
-    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 3}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 15}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 0}, {"type": "Shots on Goal", "value": 0}, {"type": "Dangerous Attacks", "value": 0}]}]
+    # Jogo 1: Real Madrid (78 min, 0x0). Tem que ter MUITA pressão.
+    # Vamos dar 22 chutes para o Real. Regra DEVE ativar.
+    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 22}, {"type": "Shots on Goal", "value": 8}, {"type": "Dangerous Attacks", "value": 95}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 2}, {"type": "Shots on Goal", "value": 0}, {"type": "Dangerous Attacks", "value": 10}]}]
     
-    # Jogo 2: Real (Fav) não chutou. Alaves (Zebra) chutou 2 vezes. TEM QUE DAR GREEN (Regra: Zebra 2 chutes).
-    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 3}, {"type": "Shots on Goal", "value": 2}, {"type": "Dangerous Attacks", "value": 10}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 1}, {"type": "Shots on Goal", "value": 0}, {"type": "Dangerous Attacks", "value": 5}]}]
+    # Jogo 2: Arsenal (12 min). Favorito chutou 1 no gol. Regra DEVE ativar.
+    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 4}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 18}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 0}, {"type": "Shots on Goal", "value": 0}, {"type": "Dangerous Attacks", "value": 2}]}]
     return []
 
 # --- INTERFACE ---
-st.title("🎯 Sniper de Gols - Odds")
+st.title("🎯 Sniper de Gols - V13 (Gigantes)")
 
-if st.button("📡 RASTREAR (COM ODDS)", type="primary", use_container_width=True):
+if st.button("📡 RASTREAR", type="primary", use_container_width=True):
     
     if not API_KEY and not MODO_DEMO:
         st.error("⚠️ Coloque a API Key!")
@@ -231,15 +245,9 @@ if st.button("📡 RASTREAR (COM ODDS)", type="primary", use_container_width=Tru
             tempo = jogo['fixture']['status'].get('elapsed', 0)
             status = jogo['fixture']['status']['short']
             
-            # FILTRO DE TEMPO INTELIGENTE PARA POUPAR API DE ODDS
-            # Só busca odd se o jogo estiver nos momentos chave ou no modo demo
             if status in ['1H', '2H'] and tempo:
-                
-                # 1. Busca Estatísticas
                 stats = buscar_stats(API_KEY, jogo['fixture']['id'])
-                
                 if stats:
-                    # 2. Busca Odds (AQUI GASTA COTA NO MODO REAL)
                     odd_casa, odd_fora = buscar_odds_pre_match(API_KEY, jogo['fixture']['id'])
                     
                     s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
@@ -286,4 +294,4 @@ if st.button("📡 RASTREAR (COM ODDS)", type="primary", use_container_width=Tru
 
         bar.empty()
         if not achou:
-            st.info("Nenhuma oportunidade encontrada agora.")
+            st.info("Nenhuma oportunidade encontrada.")
