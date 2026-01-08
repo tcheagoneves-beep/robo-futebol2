@@ -120,7 +120,7 @@ def gerar_texto_relatorio():
 📈 {gs} x {rs} ({ps:.1f}%)
 
 **MÊS:**
-🏆 {gm} Greens / {rm} Reds
+🏆 {gm} Greens / {rm} Reds ({pm:.1f}%)
 """
     return msg
 
@@ -341,9 +341,7 @@ if ROBO_LIGADO:
         
         t1, t2, t3 = st.tabs(["📡 Ao Vivo", "📅 Próximos", "📊 Performance"])
         
-        # --- AQUI ESTÁ A CORREÇÃO DE COMPATIBILIDADE PYTHON 3.13 ---
-        # Criamos as tabelas FORA do comando st.dataframe para evitar o bug de leitura de código
-        
+        # Correção de Compatibilidade (Tabela fora do st.dataframe)
         with t1: 
             if radar:
                 df_radar = pd.DataFrame(radar)
