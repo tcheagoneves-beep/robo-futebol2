@@ -3,9 +3,9 @@ import pandas as pd
 import requests
 from datetime import datetime
 
-# --- CONFIGURAÇÃO VISUAL ---
+# --- CONFIGURAÇÃO VISUAL (NOME LIMPO) ---
 st.set_page_config(
-    page_title="Sniper de Gols - V18 Radar",
+    page_title="Sniper de Gols",
     layout="centered",
     page_icon="⚽"
 )
@@ -72,16 +72,39 @@ st.markdown("""
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header("⚙️ Configurações (Direct)")
+    st.header("⚙️ Configurações")
+    
+    # API FOOTBALL
     if 'api_key' not in st.session_state: st.session_state['api_key'] = ""
-    API_KEY = st.text_input("Cole sua Chave API-SPORTS aqui:", value=st.session_state['api_key'], type="password")
+    API_KEY = st.text_input("Chave API-SPORTS:", value=st.session_state['api_key'], type="password")
     if API_KEY: st.session_state['api_key'] = API_KEY
     
     st.markdown("---")
-    MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
-    st.info("V18: Com Radar de Jogos.")
+    
+    # API TELEGRAM (NOVA)
+    with st.expander("🔔 Configurar Alertas (Telegram)"):
+        tg_token = st.text_input("Bot Token:", type="password", help="Peça ao @BotFather no Telegram")
+        tg_chat_id = st.text_input("Chat ID:", help="Use o @userinfobot para descobrir seu ID")
+        testar_tg = st.button("Testar Envio")
 
-# --- CONEXÕES API (DIRECT) ---
+    st.markdown("---")
+    MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
+
+# --- FUNÇÃO ENVIO TELEGRAM ---
+def enviar_telegram(token, chat_id, msg):
+    if token and chat_id:
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            data = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}
+            requests.post(url, data=data)
+        except:
+            pass
+
+if testar_tg and tg_token and tg_chat_id:
+    enviar_telegram(tg_token, tg_chat_id, "✅ **Teste Sniper:** O robô está conectado!")
+    st.sidebar.success("Mensagem enviada!")
+
+# --- CONEXÕES API ---
 def buscar_jogos(api_key):
     if MODO_DEMO: return gerar_sinais_teste()
     url = "https://v3.football.api-sports.io/fixtures"
@@ -182,44 +205,34 @@ def gerar_odds_teste(fid): return (2.5, 2.5)
 def gerar_stats_teste(fid): return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 10}, {"type": "Shots on Goal", "value": 5}, {"type": "Dangerous Attacks", "value": 30}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 8}, {"type": "Shots on Goal", "value": 4}, {"type": "Dangerous Attacks", "value": 20}]}]
 
 # --- INTERFACE ---
-st.title("🎯 Sniper de Gols - V18 Radar")
+st.title("🎯 Sniper de Gols")
+
+# Controle de Alertas Enviados (Anti-Spam)
+if 'alertas_enviados' not in st.session_state:
+    st.session_state['alertas_enviados'] = set()
 
 if st.button("📡 RASTREAR E ATUALIZAR", type="primary", use_container_width=True):
     if not API_KEY and not MODO_DEMO:
         st.error("⚠️ Coloque a API Key!")
     else:
-        with st.spinner('Escaneando todos os jogos do mundo...'):
+        with st.spinner('Escaneando o mercado...'):
             jogos = buscar_jogos(API_KEY)
             
         achou = False
         radar_jogos = []
         proximos_jogos = []
         
-        # Filtros de Radar
-        for jogo in jogos:
+        for i, jogo in enumerate(jogos):
             status = jogo['fixture']['status']['short']
             
-            # Lista de Próximos (NS = Not Started)
             if status == 'NS':
                 hora = datetime.fromtimestamp(jogo['fixture']['timestamp']).strftime('%H:%M')
-                proximos_jogos.append({
-                    "Hora": hora,
-                    "Liga": jogo['league']['name'],
-                    "Jogo": f"{jogo['teams']['home']['name']} vs {jogo['teams']['away']['name']}"
-                })
+                proximos_jogos.append({"Hora": hora, "Liga": jogo['league']['name'], "Jogo": f"{jogo['teams']['home']['name']} vs {jogo['teams']['away']['name']}"})
 
-            # Processamento de AO VIVO
             tempo = jogo['fixture']['status'].get('elapsed', 0)
             if status in ['1H', '2H'] and tempo:
+                radar_jogos.append({"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']}x{jogo['goals']['away']} {jogo['teams']['away']['name']}"})
                 
-                # Adiciona ao Radar (Para mostrar que está vendo)
-                radar_jogos.append({
-                    "Liga": jogo['league']['name'],
-                    "Tempo": f"{tempo}' ({status})",
-                    "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']} x {jogo['goals']['away']} {jogo['teams']['away']['name']}"
-                })
-                
-                # Executa Sniper
                 stats = buscar_stats(API_KEY, jogo['fixture']['id'])
                 if stats:
                     odd_casa, odd_fora = buscar_odds_pre_match(API_KEY, jogo['fixture']['id'])
@@ -233,6 +246,8 @@ if st.button("📡 RASTREAR E ATUALIZAR", type="primary", use_container_width=Tr
                     if sinal:
                         achou = True
                         cls = "multipla-box" if tipo == "multipla" else "sinal-box"
+                        
+                        # Mostra na Tela
                         st.markdown(f"""
 <div class="card">
 <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -247,27 +262,24 @@ if st.button("📡 RASTREAR E ATUALIZAR", type="primary", use_container_width=Tr
 <div><div class="metric-label">NO GOL</div><div class="metric-val" style="color:#00C853;">{no_gol}</div></div>
 <div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div>
 </div></div>""", unsafe_allow_html=True)
-        
+
+                        # Envia Alerta Telegram (Se configurado e não enviado ainda)
+                        chave_alerta = f"{jogo['fixture']['id']}_{sinal}"
+                        if tg_token and tg_chat_id and chave_alerta not in st.session_state['alertas_enviados']:
+                            msg_tg = f"🎯 **SNIPER ALERT!**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n💡 {motivo}"
+                            enviar_telegram(tg_token, tg_chat_id, msg_tg)
+                            st.session_state['alertas_enviados'].add(chave_alerta)
+                            st.toast(f"Alerta enviado para Telegram: {tc} x {tf}")
+
         if not achou:
-            st.warning("Nenhuma oportunidade 'Sniper' encontrada no momento.")
+            st.warning("Nenhuma oportunidade 'Sniper' encontrada agora.")
         
         st.markdown("---")
         
-        # --- MOSTRAR O RADAR (TABELAS) ---
-        c1, c2 = st.tabs(["📡 Radar (Ao Vivo)", "📅 Próximos Jogos (Hoje)"])
-        
+        c1, c2 = st.tabs(["📡 Radar (Ao Vivo)", "📅 Próximos Jogos"])
         with c1:
-            if radar_jogos:
-                st.caption(f"Analisando {len(radar_jogos)} jogos ao vivo agora:")
-                df_radar = pd.DataFrame(radar_jogos)
-                st.dataframe(df_radar, hide_index=True, use_container_width=True)
-            else:
-                st.info("Nenhum jogo ao vivo (1H ou 2H) neste momento.")
-                
+            if radar_jogos: st.dataframe(pd.DataFrame(radar_jogos), hide_index=True, use_container_width=True)
+            else: st.info("Nenhum jogo ao vivo agora.")
         with c2:
-            if proximos_jogos:
-                st.caption(f"Jogos agendados para hoje:")
-                df_prox = pd.DataFrame(proximos_jogos)
-                st.dataframe(df_prox, hide_index=True, use_container_width=True)
-            else:
-                st.info("Não encontrei mais jogos agendados para hoje na lista.")
+            if proximos_jogos: st.dataframe(pd.DataFrame(proximos_jogos), hide_index=True, use_container_width=True)
+            else: st.info("Sem jogos agendados na lista.")
