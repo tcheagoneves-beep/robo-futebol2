@@ -32,7 +32,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. FUNÇÕES DE BANCO DE DADOS (.TXT) ---
+# --- 2. FUNÇÕES DE BANCO DE DADOS ---
 DB_FILE = 'neves_dados.txt'
 
 def carregar_db():
@@ -185,7 +185,6 @@ if 'odds_cache' not in st.session_state: st.session_state['odds_cache'] = {}
 
 def buscar_odds_cached(api_key, fixture_id):
     if MODO_DEMO: return gerar_odds_teste(fixture_id)
-    
     if fixture_id in st.session_state['odds_cache']:
         return st.session_state['odds_cache'][fixture_id]
     
@@ -204,7 +203,7 @@ def buscar_odds_cached(api_key, fixture_id):
     except: pass
     return 0, 0
 
-# --- 5. CÉREBRO (LÓGICA) ---
+# --- 5. CÉREBRO ---
 def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
     gol_c = v(s_casa, 'Shots on Goal'); gol_f = v(s_fora, 'Shots on Goal')
@@ -342,7 +341,9 @@ if ROBO_LIGADO:
         
         t1, t2, t3 = st.tabs(["📡 Ao Vivo", "📅 Próximos", "📊 Performance"])
         
-        # --- AQUI ESTÁ A CORREÇÃO DE SEGURANÇA (V33) ---
+        # --- AQUI ESTÁ A CORREÇÃO DE COMPATIBILIDADE PYTHON 3.13 ---
+        # Criamos as tabelas FORA do comando st.dataframe para evitar o bug de leitura de código
+        
         with t1: 
             if radar:
                 df_radar = pd.DataFrame(radar)
