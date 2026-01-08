@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Sniper de Gols - V13",
+    page_title="Sniper de Gols - V14",
     layout="centered",
     page_icon="⚽"
 )
@@ -68,7 +68,7 @@ with st.sidebar:
     
     st.markdown("---")
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=True)
-    st.info("Estratégia V13: Gigantes no Final & Regra dos 10 min.")
+    st.info("Regra V14: Gigantes só até 75 min e sem estar ganhando.")
 
 # --- CONEXÕES API ---
 def buscar_jogos(api_key):
@@ -98,7 +98,7 @@ def buscar_odds_pre_match(api_key, fixture_id):
         return 0, 0
     except: return 0, 0
 
-# --- CÉREBRO V13 (GIGANTES NO FINAL) ---
+# --- CÉREBRO V14 (SEGURANÇA TOTAL) ---
 def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
     
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
@@ -114,121 +114,101 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
     sinal = None
     insight = ""
     
-    # Identificar Gigante / Super Favorito
-    # Odd abaixo de 1.55 indica favoritismo muito forte (Real, Barça, City, etc)
+    # Identificar Gigante
     favorito = None
     nome_favorito = ""
     eh_gigante = False
     
     if odd_casa > 0 and odd_fora > 0:
         if odd_casa <= 1.55: 
-            favorito = "CASA"
-            nome_favorito = t_casa
-            eh_gigante = True
+            favorito = "CASA"; nome_favorito = t_casa; eh_gigante = True
         elif odd_fora <= 1.55: 
-            favorito = "FORA"
-            nome_favorito = t_fora
-            eh_gigante = True
+            favorito = "FORA"; nome_favorito = t_fora; eh_gigante = True
         elif odd_casa <= 1.90: favorito = "CASA"; nome_favorito = t_casa
         elif odd_fora <= 1.90: favorito = "FORA"; nome_favorito = t_fora
 
-    # --- CENÁRIO 1: GIGANTE PRESSIONANDO NO FINAL (70+ min) ---
-    if tempo >= 70 and eh_gigante:
-        # Se o Gigante estiver ganhando de goleada, ignora.
-        # Só interessa se estiver empatando, perdendo, ou ganhando só por 1 gol e querendo matar o jogo.
+    # --- CENÁRIO 1: GIGANTE PRESSIONANDO (Janela 70-75 min) ---
+    # Só analisa se estiver dentro da janela exata. Passou de 75, esquece.
+    if 70 <= tempo <= 75 and eh_gigante:
         
-        diff_placar = sc - sf if favorito == "CASA" else sf - sc
+        # REGRA 1: PLACAR (Não pode estar ganhando)
+        # Se Favorito é Casa, SC deve ser <= SF (Empate ou Perdendo)
+        # Se Favorito é Fora, SF deve ser <= SC
         
-        if diff_placar <= 1: # Jogo vivo
-            # Regra: PRESSÃO MUITO GRANDE (User: "Real, Barça, etc contra pequenos")
-            
+        placar_favoravel_aposta = False
+        if favorito == "CASA" and sc <= sf: placar_favoravel_aposta = True
+        if favorito == "FORA" and sf <= sc: placar_favoravel_aposta = True
+        
+        if placar_favoravel_aposta:
+            # REGRA 2: PRESSÃO EXTREMA
             stats_gigante_chutes = chutes_c if favorito == "CASA" else chutes_f
             stats_gigante_atq = atq_c if favorito == "CASA" else atq_f
             
-            # Critérios de Pressão Extrema
-            criterio_chutes = stats_gigante_chutes >= 20 # Muitos chutes
-            criterio_perigo = stats_gigante_atq >= 80    # Sufoco total
+            criterio_chutes = stats_gigante_chutes >= 20
+            criterio_perigo = stats_gigante_atq >= 80
             
             if criterio_chutes or criterio_perigo:
-                sinal = "GOL NO FINAL (GIGANTE)"
+                sinal = "GOL (GIGANTE EM APUROS)"
                 insight = f"""
-                **Atenção: Gigante ({nome_favorito}) em Pressão Máxima!**<br>
-                Jogo contra time menor, passado dos 70 min.
-                O Favorito já acumula **{stats_gigante_chutes} chutes** e **{stats_gigante_atq} ataques perigosos**.
-                A regra é clara: quando o grande pressiona assim no final, o gol é inevitável.
+                **Janela de Ouro ({tempo} min):**<br>
+                O Gigante ({nome_favorito}) **NÃO ESTÁ GANHANDO** e a pressão é absurda ({stats_gigante_chutes} chutes).
+                O Robô detectou que o time precisa do gol urgentemente antes do fim. Entrada válida somente até os 75 min.
                 """
 
-    # --- CENÁRIO 2: FAVORITO PERDENDO (REAÇÃO) - Qualquer tempo ---
-    elif not sinal and ((favorito == "CASA" and sc < sf) or (favorito == "FORA" and sf < sc)):
+    # --- CENÁRIO 2: FAVORITO PERDENDO (REAÇÃO) - Qualquer tempo antes dos 80 ---
+    elif not sinal and tempo < 80 and ((favorito == "CASA" and sc < sf) or (favorito == "FORA" and sf < sc)):
         stats_fav_chutes = chutes_c if favorito == "CASA" else chutes_f
-        if stats_fav_chutes >= 10: # Pressão de reação
+        if stats_fav_chutes >= 10:
             sinal = f"GOL DO {nome_favorito} (REAÇÃO)"
-            insight = f"O Favorito ({nome_favorito}) está perdendo, mas amassando com {stats_fav_chutes} finalizações. O empate está maduro."
+            insight = f"O Favorito ({nome_favorito}) está perdendo, mas amassando com {stats_fav_chutes} finalizações."
 
-    # --- CENÁRIO 3: GOL CEDO (5-15 min) - Regra Assimétrica ---
+    # --- CENÁRIO 3: GOL CEDO (5-15 min) - Assimétrica ---
     elif 5 <= tempo <= 15 and not sinal:
-        
-        # Lógica de quem é o "Dono do Jogo" agora (quem ataca mais)
         if atq_c >= atq_f: 
-            lado_forte = "CASA"; nome_forte = t_casa; gol_forte = gol_c
-            lado_fraco = "FORA"; nome_fraco = t_fora; gol_fraco = gol_f
+            nome_forte = t_casa; gol_forte = gol_c
+            nome_fraco = t_fora; gol_fraco = gol_f
         else:
-            lado_forte = "FORA"; nome_forte = t_fora; gol_forte = gol_f
-            lado_fraco = "CASA"; nome_fraco = t_casa; gol_fraco = gol_c
+            nome_forte = t_fora; gol_forte = gol_f
+            nome_fraco = t_casa; gol_fraco = gol_c
         
-        # Se o favorito de Odds também é o forte em campo, melhor ainda.
-        texto_base = ""
         bateu_regra = False
+        texto_base = ""
         
-        # Regra 1: Favorito deu 1 chute no gol
         if gol_forte >= 1:
             bateu_regra = True
             texto_base = f"O time que pressiona ({nome_forte}) já chutou no alvo."
-            
-        # Regra 2: Zebra deu 2 chutes no gol
         if gol_fraco >= 2:
             bateu_regra = True
             texto_base = f"A Zebra ({nome_fraco}) surpreende com 2 chutes no alvo!"
             
         if bateu_regra:
             sinal = "GOL CEDO (HT)"
-            insight = f"""
-            **Início Intenso ({tempo} min):**
-            {texto_base}<br>
-            Critério batido (1 chute do favorito ou 2 do adversário). Probabilidade alta de gol.
-            """
-
-    # --- CENÁRIO 4: JOGO ABERTO GENÉRICO (Se não for jogo de gigante) ---
-    elif tempo >= 70 and not eh_gigante and not sinal:
-        if total_chutes >= 18:
-            sinal = "GOL NO FINAL (JOGO ABERTO)"
-            insight = f"Jogo lá e cá com **{total_chutes} finalizações**. Defesas cansadas e ataques ativos."
+            insight = f"**Início Intenso ({tempo} min):** {texto_base} Critério batido."
 
     return sinal, insight, total_chutes, (gol_c + gol_f), (atq_c + atq_f)
 
 # --- SIMULAÇÃO ---
 def gerar_sinais_teste():
     return [
-        {"fixture": {"id": 1, "status": {"short": "2H", "elapsed": 78}}, "league": {"name": "La Liga"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Mallorca"}}},
-        {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 12}}, "league": {"name": "Premier League"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Wolves"}}}
+        {"fixture": {"id": 1, "status": {"short": "2H", "elapsed": 73}}, "league": {"name": "La Liga"}, "goals": {"home": 1, "away": 1}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Mallorca"}}},
+        {"fixture": {"id": 2, "status": {"short": "2H", "elapsed": 78}}, "league": {"name": "Ligue 1"}, "goals": {"home": 1, "away": 1}, "teams": {"home": {"name": "PSG"}, "away": {"name": "Nantes"}}}
     ]
 
 def gerar_odds_teste(fid):
-    if fid == 1: return 1.25, 11.00 # Real Madrid Super Favorito
-    if fid == 2: return 1.40, 7.00  # Arsenal Favorito
+    if fid == 1: return 1.25, 11.00 # Real Gigante
+    if fid == 2: return 1.20, 13.00 # PSG Gigante
     return 0, 0
 
 def gerar_stats_teste(fid):
-    # Jogo 1: Real Madrid (78 min, 0x0). Tem que ter MUITA pressão.
-    # Vamos dar 22 chutes para o Real. Regra DEVE ativar.
-    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 22}, {"type": "Shots on Goal", "value": 8}, {"type": "Dangerous Attacks", "value": 95}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 2}, {"type": "Shots on Goal", "value": 0}, {"type": "Dangerous Attacks", "value": 10}]}]
+    # Jogo 1: Real Madrid (73 min, 1x1). DENTRO DA JANELA E EMPATANDO. (DEVE DAR SINAL)
+    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 24}, {"type": "Shots on Goal", "value": 10}, {"type": "Dangerous Attacks", "value": 90}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 3}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 15}]}]
     
-    # Jogo 2: Arsenal (12 min). Favorito chutou 1 no gol. Regra DEVE ativar.
-    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 4}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 18}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 0}, {"type": "Shots on Goal", "value": 0}, {"type": "Dangerous Attacks", "value": 2}]}]
+    # Jogo 2: PSG (78 min, 1x1). FORA DA JANELA (>75). (NÃO DEVE DAR SINAL)
+    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 25}, {"type": "Shots on Goal", "value": 12}, {"type": "Dangerous Attacks", "value": 100}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 2}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 10}]}]
     return []
 
 # --- INTERFACE ---
-st.title("🎯 Sniper de Gols - V13 (Gigantes)")
+st.title("🎯 Sniper de Gols - V14")
 
 if st.button("📡 RASTREAR", type="primary", use_container_width=True):
     
