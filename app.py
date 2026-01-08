@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- CONFIGURAÇÃO VISUAL ---
 st.set_page_config(
-    page_title="Sniper de Gols - V15.1",
+    page_title="Sniper de Gols - V16",
     layout="centered",
     page_icon="⚽"
 )
@@ -35,6 +35,17 @@ st.markdown("""
         font-weight: bold;
         margin-top: 15px;
         box-shadow: 0 4px 15px rgba(0, 200, 83, 0.4);
+    }
+    .multipla-box {
+        background-color: #9C27B0; 
+        color: white; 
+        padding: 10px; 
+        border-radius: 8px; 
+        text-align: center; 
+        font-size: 18px; 
+        font-weight: bold;
+        margin-top: 15px;
+        box-shadow: 0 4px 15px rgba(156, 39, 176, 0.4);
     }
     .insight-texto {
         font-size: 15px; 
@@ -68,7 +79,7 @@ with st.sidebar:
     
     st.markdown("---")
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=True)
-    st.info("Regra V15: Reação Segura (Próximo Gol).")
+    st.info("V16: Alerta de Múltiplas (2 gols em 30 min).")
 
 # --- CONEXÕES API ---
 def buscar_jogos(api_key):
@@ -98,7 +109,7 @@ def buscar_odds_pre_match(api_key, fixture_id):
         return 0, 0
     except: return 0, 0
 
-# --- CÉREBRO V15 (REGRAS BLINDADAS) ---
+# --- CÉREBRO V16 (MÚLTIPLAS + GIGANTES) ---
 def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
     
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
@@ -113,130 +124,114 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
     
     sinal = None
     insight = ""
+    tipo_sinal = "normal" # normal (verde) ou multipla (roxo)
     
-    # Identificar Favorito
+    # Identificar Gigante
     favorito = None
     nome_favorito = ""
     eh_gigante = False
     
     if odd_casa > 0 and odd_fora > 0:
-        if odd_casa <= 1.55: 
-            favorito = "CASA"; nome_favorito = t_casa; eh_gigante = True
-        elif odd_fora <= 1.55: 
-            favorito = "FORA"; nome_favorito = t_fora; eh_gigante = True
+        if odd_casa <= 1.55: favorito = "CASA"; nome_favorito = t_casa; eh_gigante = True
+        elif odd_fora <= 1.55: favorito = "FORA"; nome_favorito = t_fora; eh_gigante = True
         elif odd_casa <= 1.90: favorito = "CASA"; nome_favorito = t_casa
         elif odd_fora <= 1.90: favorito = "FORA"; nome_favorito = t_fora
 
     # -------------------------------------------------------------------------
-    # CENÁRIO 1: O SUPER FAVORITO LEVOU GOL NO 1º TEMPO (Reação Segura)
+    # CENÁRIO 1: ALERTA DE MÚLTIPLA (Regra dos 30 min) - PRIORIDADE ALTA
     # -------------------------------------------------------------------------
+    # Regra: Até 30 min, placar >= 2 gols (soma). Jogo de menor expressão (Odd alta ou sem favorito claro)
+    gols_totais_match = sc + sf
     
-    fav_perdendo = False
-    if favorito == "CASA" and sc < sf: fav_perdendo = True
-    if favorito == "FORA" and sf < sc: fav_perdendo = True
-    
-    if tempo <= 50 and fav_perdendo and eh_gigante:
-        # Pega stats de quem é quem
-        stats_fav_chutes = chutes_c if favorito == "CASA" else chutes_f
-        stats_fav_atq = atq_c if favorito == "CASA" else atq_f
-        
-        stats_zebra_chutes = chutes_f if favorito == "CASA" else chutes_c
-        stats_zebra_atq = atq_f if favorito == "CASA" else atq_c
-        
-        # O Favorito está amassando? (Pelo menos dobro de ataques e min de chutes)
-        pressao_fav = (stats_fav_atq > stats_zebra_atq * 2) and (stats_fav_chutes >= 6)
-        
-        # A Zebra está morta ou viva?
-        zebra_viva = (stats_zebra_chutes >= 4) or (stats_zebra_atq >= 15)
-        
-        if pressao_fav:
-            if not zebra_viva:
-                # CASO A: Favorito amassando zebra morta
-                sinal = f"PRÓXIMO GOL: {nome_favorito}"
-                insight = f"""
-                **Reação do Gigante ({tempo} min):**<br>
-                O {nome_favorito} tomou gol mas domina totalmente o jogo. A Zebra recuou e parou de atacar.
-                **Não aposte em Over HT.** Aposte que o **Favorito marca o próximo gol** (pode ser no 1º ou 2º tempo).
-                """
-            else:
-                # CASO B: Jogo Aberto (Lá e Cá)
-                sinal = "GOL (QUALQUER UM) - JOGO ABERTO"
-                insight = f"""
-                **Cuidado:** O Favorito pressiona, mas a Zebra está perigosa no contra-ataque!
-                Não aposte só no favorito. Como os dois times chegam, a aposta segura é em **Mais um Gol na partida**.
-                """
+    if tempo <= 30 and gols_totais_match >= 2:
+        sinal = "CANDIDATO P/ MÚLTIPLA (2+ Gols)"
+        tipo_sinal = "multipla"
+        insight = f"""
+        **Porteira Aberta!** Já saíram **{gols_totais_match} gols** em apenas {tempo} minutos.
+        Jogo extremamente aberto e intenso.
+        **Estratégia:** Adicione este jogo na sua Múltipla de Over Gols (junte 3 desses para bater a meta).
+        """
 
     # -------------------------------------------------------------------------
-    # CENÁRIO 2: JANELA DE OURO (70-75 min) - Gigante não ganhando
+    # CENÁRIO 2: REAÇÃO DO GIGANTE (Perdendo no 1º tempo)
+    # -------------------------------------------------------------------------
+    elif tempo <= 50 and eh_gigante and not sinal:
+        fav_perdendo = (favorito == "CASA" and sc < sf) or (favorito == "FORA" and sf < sc)
+        if fav_perdendo:
+            # Stats Fav
+            fc = chutes_c if favorito == "CASA" else chutes_f
+            fa = atq_c if favorito == "CASA" else atq_f
+            # Stats Zebra
+            zc = chutes_f if favorito == "CASA" else chutes_c
+            
+            # Pressão e Zebra morta?
+            if fc >= 6 and zc < 4:
+                sinal = f"PRÓXIMO GOL: {nome_favorito}"
+                insight = f"Gigante ({nome_favorito}) perde mas domina. Zebra recuou. Favorito deve marcar o próximo."
+
+    # -------------------------------------------------------------------------
+    # CENÁRIO 3: JANELA DE OURO (70-75 min) - Gigante Empatando/Perdendo
     # -------------------------------------------------------------------------
     elif 70 <= tempo <= 75 and eh_gigante and not sinal:
-        # Verifica se NÃO está ganhando
         nao_ganhando = (favorito == "CASA" and sc <= sf) or (favorito == "FORA" and sf <= sc)
-        
         if nao_ganhando:
-            stats_gigante_chutes = chutes_c if favorito == "CASA" else chutes_f
-            stats_gigante_atq = atq_c if favorito == "CASA" else atq_f
-            
-            if stats_gigante_chutes >= 18 or stats_gigante_atq >= 75:
-                sinal = "GOL (PRESSÃO FINAL)"
-                insight = f"O Gigante ({nome_favorito}) precisa do gol e abriu a caixa de ferramentas ({stats_gigante_chutes} chutes). Janela de entrada válida até 75'."
+            stats_chutes = chutes_c if favorito == "CASA" else chutes_f
+            if stats_chutes >= 18:
+                sinal = "GOL (GIGANTE PRESSIONA)"
+                insight = f"O Gigante precisa do gol urgente. {stats_chutes} chutes acumulados. Janela de entrada até 75'."
 
     # -------------------------------------------------------------------------
-    # CENÁRIO 3: GOL CEDO (5-15 min) - Abertura de Placar
+    # CENÁRIO 4: GOL CEDO (5-15 min) - Abertura
     # -------------------------------------------------------------------------
     elif 5 <= tempo <= 15 and not sinal:
+        # Lógica de quem manda
         if atq_c >= atq_f: 
-            nome_forte = t_casa; gol_forte = gol_c
-            nome_fraco = t_fora; gol_fraco = gol_f
+            forte=t_casa; g_forte=gol_c; fraco=t_fora; g_fraco=gol_f
         else:
-            nome_forte = t_fora; gol_forte = gol_f
-            nome_fraco = t_casa; gol_fraco = gol_c
+            forte=t_fora; g_forte=gol_f; fraco=t_casa; g_fraco=gol_c
         
-        bateu = False
         txt = ""
-        
-        if gol_forte >= 1: bateu = True; txt = f"Dominante ({nome_forte}) chutou no alvo."
-        if gol_fraco >= 2: bateu = True; txt = f"Zebra ({nome_fraco}) chutou 2x no alvo."
+        if g_forte >= 1: txt = f"Dominante ({forte}) chutou no alvo."
+        if g_fraco >= 2: txt = f"Zebra ({fraco}) chutou 2x no alvo."
             
-        if bateu:
+        if txt:
             sinal = "GOL CEDO (HT)"
-            insight = f"Início Intenso ({tempo} min). {txt} Chance de gol alta."
+            insight = f"Início Intenso ({tempo} min). {txt} Chance de gol."
 
-    return sinal, insight, total_chutes, (gol_c + gol_f), (atq_c + atq_f)
+    return sinal, insight, total_chutes, (gol_c + gol_f), (atq_c + atq_f), tipo_sinal
 
 # --- SIMULAÇÃO ---
 def gerar_sinais_teste():
-    # LISTA CORRIGIDA SEM ERRO DE SINTAXE
     return [
-        {
-            "fixture": {"id": 1, "status": {"short": "1H", "elapsed": 30}}, 
-            "league": {"name": "La Liga"}, 
-            "goals": {"home": 0, "away": 1}, 
-            "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Almeria"}}
+        { # CENÁRIO MÚLTIPLA
+            "fixture": {"id": 1, "status": {"short": "1H", "elapsed": 28}}, 
+            "league": {"name": "Eerste Divisie (Holanda 2)"}, 
+            "goals": {"home": 1, "away": 1}, 
+            "teams": {"home": {"name": "Jong Ajax"}, "away": {"name": "Dordrecht"}}
         }, 
-        {
-            "fixture": {"id": 2, "status": {"short": "1H", "elapsed": 30}}, 
+        { # CENÁRIO GIGANTE REAÇÃO
+            "fixture": {"id": 2, "status": {"short": "1H", "elapsed": 35}}, 
             "league": {"name": "Premier League"}, 
             "goals": {"home": 0, "away": 1}, 
-            "teams": {"home": {"name": "Man City"}, "away": {"name": "Spurs"}}
+            "teams": {"home": {"name": "Man City"}, "away": {"name": "Fulham"}}
         }
     ]
 
 def gerar_odds_teste(fid):
-    return 1.20, 15.00 # Ambos Super Favoritos (Odd 1.20)
+    if fid == 1: return 2.50, 2.60 # Jogo Parelho (Sem gigante)
+    if fid == 2: return 1.20, 13.00 # City Gigante
+    return 0, 0
 
 def gerar_stats_teste(fid):
-    # Jogo 1: Real Madrid perdendo, amassando (15 chutes), Almeria morto (1 chute).
-    # SINAL ESPERADO: PRÓXIMO GOL REAL MADRID.
-    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 45}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 1}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 5}]}]
+    # Jogo 1: Holanda 2. 28 min. Placar 1x1. (Regra Múltipla BATIDA)
+    if fid == 1: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 8}, {"type": "Shots on Goal", "value": 3}, {"type": "Dangerous Attacks", "value": 20}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 6}, {"type": "Shots on Goal", "value": 3}, {"type": "Dangerous Attacks", "value": 18}]}]
     
-    # Jogo 2: City perdendo, atacando muito, MAS Spurs também ataca (6 chutes).
-    # SINAL ESPERADO: GOL (QUALQUER UM) - JOGO ABERTO.
-    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 12}, {"type": "Shots on Goal", "value": 5}, {"type": "Dangerous Attacks", "value": 30}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 6}, {"type": "Shots on Goal", "value": 3}, {"type": "Dangerous Attacks", "value": 20}]}]
+    # Jogo 2: City perdendo e amassando.
+    elif fid == 2: return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 10}, {"type": "Shots on Goal", "value": 4}, {"type": "Dangerous Attacks", "value": 40}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 1}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 5}]}]
     return []
 
 # --- INTERFACE ---
-st.title("🎯 Sniper de Gols - V15.1")
+st.title("🎯 Sniper de Gols - V16")
 
 if st.button("📡 RASTREAR", type="primary", use_container_width=True):
     
@@ -265,10 +260,14 @@ if st.button("📡 RASTREAR", type="primary", use_container_width=True):
                     sc = jogo['goals']['home'] or 0
                     sf = jogo['goals']['away'] or 0
                     
-                    sinal, motivo, chutes, no_gol, atq_p = analisar_partida(tempo, s_casa, s_fora, tc, tf, sc, sf, odd_casa, odd_fora)
+                    sinal, motivo, chutes, no_gol, atq_p, tipo = analisar_partida(tempo, s_casa, s_fora, tc, tf, sc, sf, odd_casa, odd_fora)
                     
                     if sinal:
                         achou = True
+                        
+                        # Define cor do box (Verde normal ou Roxo Multipla)
+                        classe_box = "multipla-box" if tipo == "multipla" else "sinal-box"
+                        
                         st.markdown(f"""
 <div class="card">
 <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -286,7 +285,7 @@ if st.button("📡 RASTREAR", type="primary", use_container_width=True):
 </div>
 </div>
 
-<div class="sinal-box">💰 {sinal}</div>
+<div class="{classe_box}">{sinal}</div>
 
 <div class="insight-texto">
     <b>Motivo:</b> {motivo}
