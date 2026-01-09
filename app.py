@@ -70,7 +70,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Mensagens ajustadas.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Correção de Erro Aplicada.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -187,7 +187,7 @@ def processar_jogo(j, stats):
                     "stats": f"Chutes Alvo: {sog_h + sog_a}"
                 }
 
-        # B) REAÇÃO DO GIGANTE / BLITZ (MENSAGENS CORRIGIDAS)
+        # B) REAÇÃO DO GIGANTE / BLITZ (MENSAGEM AJUSTADA)
         if tempo <= 60:
             # HOME PRESSIONANDO
             if (gh <= ga) and (recentes_h >= 2 or sh_h >= 6):
@@ -328,14 +328,13 @@ if ROBO_LIGADO:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
             else: st.info("Monitorando jogos...")
         with t2:
-            st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_f else st.caption("Vazio.")
+            if prox_filtrado:
+                st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Sem mais jogos por hoje.")
         with t3:
-            st.table(df_black) if not df_black.empty else st.caption("Limpo.")
-
-        relogio = st.empty()
-        for i in range(INTERVALO, 0, -1):
-            relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
-            time.sleep(1)
+            if not df_black.empty: st.table(df_black)
+            else: st.caption("Limpo.")
 
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
             c1, c2 = st.columns(2)
@@ -373,6 +372,11 @@ if ROBO_LIGADO:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+
+        relogio = st.empty()
+        for i in range(INTERVALO, 0, -1):
+            relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
+            time.sleep(1)
     
     st.rerun()
 
