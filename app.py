@@ -60,7 +60,7 @@ with st.sidebar:
         ✅ **C - Janela de Ouro** (70-75')
         ✅ **D - Gol Relâmpago** (5-15')
         """)
-        st.info("ℹ️ **Ajuste:** Soneca apenas no Intervalo (HT). Monitora acréscimos do 1º tempo!")
+        st.info("ℹ️ **Ajuste:** Soneca apenas no Intervalo (HT).")
     
     with st.expander("⚙️ Configurações", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
@@ -69,7 +69,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Lógica de Intervalo Ajustada.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Correção Visual Aplicada.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -97,7 +97,7 @@ def buscar_proximos(key):
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
-        # SIMULAÇÃO: Jogo nos acréscimos (45+2) amassando
+        # SIMULAÇÃO
         return [
             {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 47}}, "league": {"id": 1, "name": "Liga Acréscimo", "country": "BR"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Fav (47')"}, "away": {"name": "Zebra"}}},
             {"fixture": {"id": 2, "status": {"short": "HT", "elapsed": 45}}, "league": {"id": 2, "name": "Liga Intervalo", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}}
@@ -110,7 +110,6 @@ def buscar_dados(endpoint, params=None):
 
 def buscar_stats(fid, demo_stage=0):
     if MODO_DEMO:
-        # Simula pressão nos acréscimos
         if fid == 1: 
             return [{"team": {"name": "Home"}, "statistics": [{"type": "Total Shots", "value": 12}, {"type": "Shots on Goal", "value": 6}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Total Shots", "value": 2}, {"type": "Shots on Goal", "value": 0}]}]
         return []
@@ -187,9 +186,9 @@ def processar_jogo(j, stats):
                     "stats": f"Chutes Alvo: {sog_h + sog_a}"
                 }
 
-        # B) REAÇÃO DO GIGANTE / BLITZ (Até 60 min, ignorando intervalo)
+        # B) REAÇÃO DO GIGANTE / BLITZ
         if tempo <= 60:
-            if (gh <= ga) and (recentes_h >= 2 or sh_h >= 6): # Blitz recente OU volume acumulado
+            if (gh <= ga) and (recentes_h >= 2 or sh_h >= 6):
                 oponente_vivo = (recentes_a >= 1 or sh_a >= 4)
                 acao = "⚠️ Jogo Aberto: Entrar em OVER GOLS" if oponente_vivo else "💎 BLITZ HOME: Back Home ou Gol Limite"
                 return {
@@ -238,17 +237,12 @@ if ROBO_LIGADO:
         
         f_id = j['fixture']['id']
         tempo = j['fixture']['status'].get('elapsed', 0)
-        status_short = j['fixture']['status'].get('short', '') # Importante: Status da API (1H, HT, 2H)
+        status_short = j['fixture']['status'].get('short', '')
         home = j['teams']['home']['name']
         away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"
         
-        # --- LÓGICA DE JANELA CORRIGIDA ---
-        # "Soneca" é ativada APENAS se:
-        # 1. Status for 'HT' (Intervalo oficial)
-        # 2. Status for 'BT' (Break Time)
-        # 3. Tempo estiver numa janela "morta" segura (ex: 48-52), mas SEM bloquear 45, 46, 47 (acréscimos)
-        
+        # --- LÓGICA DE JANELA (CORRIGIDA E SEGURA) ---
         eh_intervalo = (status_short in ['HT', 'BT']) or (48 <= tempo <= 52)
         eh_aquecimento = (tempo < 5)
         eh_fim = (tempo > 80)
@@ -259,7 +253,7 @@ if ROBO_LIGADO:
         icone_visual = "👁️"
         
         if eh_aquecimento: icone_visual = "⏳"
-        elif eh_intervalo: icone_visual = "💤" # Dormindo no intervalo
+        elif eh_intervalo: icone_visual = "💤"
         elif eh_fim: icone_visual = "🏁"
         
         if dentro_janela:
@@ -311,12 +305,22 @@ if ROBO_LIGADO:
         t1, t2, t3 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(prox_f)})", f"🚫 Blacklist ({len(df_black)})"])
         
         with t1:
-            if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else: st.info("Monitorando jogos...")
+            if radar:
+                st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
+            else:
+                st.info("Monitorando jogos...")
+            
         with t2:
-            st.dataframe(pd.DataFrame(prox_f).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_f else st.caption("Vazio.")
+            if prox_f:
+                st.dataframe(pd.DataFrame(prox_f).sort_values("Hora"), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Vazio.")
+            
         with t3:
-            st.table(df_black) if not df_black.empty else st.caption("Limpo.")
+            if not df_black.empty:
+                st.table(df_black)
+            else:
+                st.caption("Limpo.")
 
         relogio = st.empty()
         for i in range(INTERVALO, 0, -1):
@@ -328,4 +332,4 @@ if ROBO_LIGADO:
 else:
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
-        st.info("💡 Robô em espera.")
+        st.info("💡 Robô em espera. Configure e ligue na lateral.")
