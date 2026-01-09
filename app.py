@@ -32,18 +32,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. FUNÇÕES DE BANCO DE DADOS ---
+# --- 2. FUNÇÕES DE BANCO DE DADOS E NOTIFICAÇÃO ---
 DB_FILE = 'neves_dados.txt'
+
+def enviar_msg_telegram(token, chat_ids, mensagem):
+    if token and chat_ids:
+        for cid in chat_ids.split(','):
+            try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": cid.strip(), "text": mensagem, "parse_mode": "Markdown"})
+            except: pass
 
 def carregar_db():
     if not os.path.exists(DB_FILE):
         df = pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
         df.to_csv(DB_FILE, index=False)
         return df
-    try:
-        return pd.read_csv(DB_FILE)
-    except:
-        return pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
+    try: return pd.read_csv(DB_FILE)
+    except: return pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
 
 def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
     df = carregar_db()
@@ -60,7 +64,7 @@ def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
         df = pd.concat([df, pd.DataFrame([novo_registro])], ignore_index=True)
         df.to_csv(DB_FILE, index=False)
 
-def atualizar_status_db(lista_jogos_api):
+def atualizar_status_db(lista_jogos_api, tg_token=None, tg_chat_ids=None):
     df = carregar_db()
     if df.empty: return df
     
@@ -73,12 +77,23 @@ def atualizar_status_db(lista_jogos_api):
             gols_agora = (jogo_dados['goals']['home'] or 0) + (jogo_dados['goals']['away'] or 0)
             status_match = jogo_dados['fixture']['status']['short']
             
+            # --- LÓGICA DE GREEN ---
             if gols_agora > row['gols_inicial']:
                 df.at[index, 'status'] = 'Green'
                 modificado = True
+                # Notificar Green
+                if tg_token and tg_chat_ids:
+                    msg = f"✅ **GREEN! PAGOU!** 💰\n\n⚽ **{row['jogo']}**\n\nO sinal de **{row['sinal']}** bateu!\nDinheiro no bolso. A análise foi perfeita. 🚀"
+                    enviar_msg_telegram(tg_token, tg_chat_ids, msg)
+
+            # --- LÓGICA DE RED ---
             elif status_match in ['FT', 'AET', 'PEN']:
                 df.at[index, 'status'] = 'Red'
                 modificado = True
+                # Notificar Red
+                if tg_token and tg_chat_ids:
+                    msg = f"🔻 **RED - SEGUE O PLANO**\n\n⚽ **{row['jogo']}**\n\nO sinal não bateu desta vez.\nFaz parte do jogo. Cabeça fria e foco na próxima oportunidade! 💪"
+                    enviar_msg_telegram(tg_token, tg_chat_ids, msg)
     
     if modificado:
         df.to_csv(DB_FILE, index=False)
@@ -137,11 +152,8 @@ with st.sidebar:
         tg_token = st.text_input("Bot Token:", type="password")
         tg_chat_ids = st.text_input("Chat IDs (separados por vírgula):")
         if st.button("Testar Envio"):
-            if tg_token and tg_chat_ids:
-                for cid in tg_chat_ids.split(','):
-                    try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": cid.strip(), "text": "✅ Teste Neves Analytics!"})
-                    except: pass
-                st.success("Enviado!")
+            enviar_msg_telegram(tg_token, tg_chat_ids, "✅ Teste Neves Analytics!")
+            st.success("Enviado!")
     
     st.markdown("---")
     st.header("🤖 Modo Automático")
@@ -152,9 +164,7 @@ with st.sidebar:
         if tg_token and tg_chat_ids:
             rel = gerar_texto_relatorio()
             if rel:
-                for cid in tg_chat_ids.split(','):
-                    try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": cid.strip(), "text": rel, "parse_mode": "Markdown"})
-                    except: pass
+                enviar_msg_telegram(tg_token, tg_chat_ids, rel)
                 st.success("Relatório enviado!")
             else: st.warning("Sem dados ainda.")
             
@@ -187,7 +197,6 @@ def buscar_odds_cached(api_key, fixture_id):
     if MODO_DEMO: return gerar_odds_teste(fixture_id)
     if fixture_id in st.session_state['odds_cache']:
         return st.session_state['odds_cache'][fixture_id]
-    
     url = "https://v3.football.api-sports.io/odds"
     headers = {"x-apisports-key": api_key}
     try:
@@ -277,7 +286,9 @@ if ROBO_LIGADO:
         st.caption(f"Ciclo: {INTERVALO}s | Banco de Dados: neves_dados.txt")
         
         jogos = buscar_jogos(API_KEY)
-        atualizar_status_db(jogos)
+        
+        # AGORA AQUI: Passamos o Token para o atualizador enviar o Green/Red
+        atualizar_status_db(jogos, tg_token, tg_chat_ids)
         
         # Relatório Automático 22h
         if 'relatorio_enviado_hoje' not in st.session_state: st.session_state['relatorio_enviado_hoje'] = None
@@ -285,9 +296,7 @@ if ROBO_LIGADO:
         if hora >= 22 and st.session_state['relatorio_enviado_hoje'] != datetime.today().strftime('%Y-%m-%d'):
             rel = gerar_texto_relatorio()
             if rel and tg_token and tg_chat_ids:
-                for cid in tg_chat_ids.split(','):
-                    try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": cid.strip(), "text": rel, "parse_mode": "Markdown"})
-                    except: pass
+                enviar_msg_telegram(tg_token, tg_chat_ids, rel)
                 st.session_state['relatorio_enviado_hoje'] = datetime.today().strftime('%Y-%m-%d')
 
         achou = False
@@ -330,9 +339,7 @@ if ROBO_LIGADO:
                             if tg_token and tg_chat_ids and chave not in st.session_state['alertas_enviados']:
                                 fav = tc if odd_casa < odd_fora else tf
                                 msg = f"🚨 **NEVES ANALYTICS**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n✅ {traduzir_instrucao(sinal, fav)}\n\n📊 Chutes: {chutes} | Perigo: {atq_p}"
-                                for cid in tg_chat_ids.split(','):
-                                    try: requests.post(f"https://api.telegram.org/bot{tg_token}/sendMessage", data={"chat_id": cid.strip(), "text": msg, "parse_mode": "Markdown"})
-                                    except: pass
+                                enviar_msg_telegram(tg_token, tg_chat_ids, msg)
                                 st.session_state['alertas_enviados'].add(chave)
                 else: info["Status"] = "💤"
                 radar.append(info)
@@ -341,7 +348,6 @@ if ROBO_LIGADO:
         
         t1, t2, t3 = st.tabs(["📡 Ao Vivo", "📅 Próximos", "📊 Performance"])
         
-        # Correção de Compatibilidade (Tabela fora do st.dataframe)
         with t1: 
             if radar:
                 df_radar = pd.DataFrame(radar)
