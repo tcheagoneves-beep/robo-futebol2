@@ -5,15 +5,14 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURAÇÃO VISUAL ---
-st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄️")
+# --- 1. CONFIGURAÇÃO VISUAL (PADRÃO NEVES) ---
+st.set_page_config(page_title="Neves Analytics", layout="centered", page_icon="❄️")
 
 st.markdown("""
 <style>
     .stApp {background-color: #121212; color: white;}
     .status-online {color: #00FF00; font-weight: bold; animation: pulse 2s infinite; padding: 10px; border: 1px solid #00FF00; text-align: center; border-radius: 15px; margin-bottom: 20px;}
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); } }
-    .update-info { font-size: 14px; color: #FFD700; text-align: center; font-weight: bold;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -41,96 +40,122 @@ def enviar_teste_telegram(token, chat_ids):
     if token and chat_ids:
         for cid in chat_ids.split(','):
             try:
-                requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                              data={"chat_id": cid.strip(), "text": "❄️ Neves Analytics: Teste de Envio OK!"}, timeout=5)
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                requests.post(url, data={"chat_id": cid.strip(), "text": "✅ Neves Analytics: Teste de Conexão OK!"}, timeout=5)
             except: pass
 
-# --- 3. SIDEBAR (RETRAÍDA) ---
+# --- 3. SIDEBAR (DO JEITO QUE VOCÊ PEDIU) ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
-    with st.expander("⚙️ CONFIGURAÇÕES AVANÇADAS", expanded=False):
+    
+    with st.expander("⚙️ Painel de Configuração", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
         tg_token = st.text_input("Telegram Token:", type="password")
         tg_chat_ids = st.text_input("Chat IDs (vincule com vírgula):")
         
-        if st.button("🔔 TESTAR ENVIO TELEGRAM"):
+        # O BOTAO DE VOLTA AQUI
+        if st.button("🔔 Testar Telegram"):
             enviar_teste_telegram(tg_token, tg_chat_ids)
-            st.success("Sinal de teste enviado!")
+            st.toast("Sinal de teste enviado!")
             
-        INTERVALO = st.number_input("Ciclo (segundos):", min_value=30, value=60)
-        MODO_DEMO = st.checkbox("🛠️ Modo Simulação")
+        INTERVALO = st.slider("Ciclo de Atualização (seg):", 30, 300, 60)
+        MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
         
-        if st.button("🗑️ RESETAR TUDO"):
+        if st.button("🗑️ Resetar Tudo"):
             if os.path.exists(DB_FILE): os.remove(DB_FILE)
             if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
             st.rerun()
 
     st.markdown("---")
-    ROBO_LIGADO = st.checkbox("🚀 LIGAR MONITORAMENTO", value=False)
+    ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
-# --- 4. LÓGICA DE API ---
+# --- 4. LOGICA DE API ---
 @st.cache_data(ttl=3600)
 def buscar_proximos(key):
     if not key and not MODO_DEMO: return []
-    url = "https://v3.football.api-sports.io/fixtures"
-    params = {"date": (datetime.utcnow() - timedelta(hours=3)).strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}
     try:
+        url = "https://v3.football.api-sports.io/fixtures"
+        params = {"date": (datetime.utcnow() - timedelta(hours=3)).strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": key}, params=params, timeout=10).json()
-        return res.get('response', [])
+        return [j for j in res.get('response', []) if j['fixture']['status']['short'] == 'NS']
     except: return []
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
-        return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 25}}, "league": {"id": 1, "name": "Liga Teste", "country": "BR"}, "goals": {"home": 1, "away": 0}, "teams": {"home": {"name": "Time Casa"}, "away": {"name": "Time Fora"}}}]
+        return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 20}}, "league": {"id": 1, "name": "Liga Demo", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}}]
     if not API_KEY: return []
     try:
-        res = requests.get(f"https://v3.football.api-sports.io/{endpoint}", headers={"x-apisports-key": API_KEY}, params=params, timeout=10).json()
+        url = f"https://v3.football.api-sports.io/{endpoint}"
+        res = requests.get(url, headers={"x-apisports-key": API_KEY}, params=params, timeout=10).json()
         return res.get('response', [])
     except: return []
 
 # --- 5. EXECUÇÃO ---
-# O segredo para não espelhar é colocar tudo dentro de UM placeholder que se limpa
-tela = st.empty()
+st.title("❄️ Neves Analytics")
 
 if ROBO_LIGADO:
-    while True:
-        with tela.container():
-            st.markdown('<div class="status-online">🟢 ROBÔ OPERANDO AO VIVO</div>', unsafe_allow_html=True)
+    st.markdown('<div class="status-online">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
+    
+    # Placeholder que garante que a tela limpe e não espelhe
+    espaco_principal = st.container()
+    
+    with espaco_principal:
+        # Busca de dados
+        jogos_live = buscar_dados("fixtures", {"live": "all"})
+        radar = []
+        black_df = carregar_blacklist()
+        black_ids = black_df['id'].astype(str).values
+        
+        for j in jogos_live:
+            f_id, l_id = j['fixture']['id'], str(j['league']['id'])
+            sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
+            info = {"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", "Tempo": f"{j['fixture']['status'].get('elapsed', 0)}'", "Status": "👁️"}
             
-            agora = (datetime.utcnow() - timedelta(hours=3)).strftime("%H:%M:%S")
-            st.markdown(f'<p class="update-info">🕒 Última Checagem: {agora}</p>', unsafe_allow_html=True)
+            if l_id in black_ids:
+                info["Status"] = "🚫"
+            else:
+                stats = buscar_dados("statistics", {"fixture": f_id})
+                if not stats and (sc+sf > 0):
+                    salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
+                    info["Status"] = "🚫"
+            radar.append(info)
 
-            # Processamento
-            black_df = carregar_blacklist()
-            black_ids = black_df['id'].astype(str).values
-            jogos_live = buscar_dados("fixtures", {"live": "all"})
-            
-            radar = []
-            for j in jogos_live:
-                l_id = str(j['league']['id'])
-                info = {"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} vs {j['teams']['away']['name']}", "Placar": f"{j['goals']['home']}x{j['goals']['away']}", "Tempo": f"{j['fixture']['status']['elapsed']}'"}
-                info["Status"] = "🚫" if l_id in black_ids else "👁️ Analisando"
-                radar.append(info)
+        prox_lista = buscar_proximos(API_KEY)
+        hist_df = carregar_db()
 
-            prox_raw = buscar_proximos(API_KEY)
-            prox_lista = [{"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"} for p in prox_raw if p['fixture']['status']['short'] == 'NS']
-            
-            hist_df = carregar_db()
+        # ABAS COM CONTADORES
+        t1, t2, t3, t4 = st.tabs([
+            f"📡 Ao Vivo ({len(radar)})", 
+            f"📅 Próximos ({len(prox_lista)})", 
+            f"📊 Histórico ({len(hist_df)})", 
+            f"🚫 Blacklist ({len(black_df)})"
+        ])
+        
+        with t1:
+            if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
+            else: st.info("Buscando jogos...")
+        
+        with t2:
+            if prox_lista:
+                df_p = pd.DataFrame([{"Hora": j['fixture']['date'][11:16], "Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} vs {j['teams']['away']['name']}"} for j in prox_lista])
+                st.dataframe(df_p.sort_values("Hora"), use_container_width=True, hide_index=True)
+            else: st.caption("Nenhum jogo futuro hoje.")
 
-            # Exibição
-            tab1, tab2, tab3, tab4 = st.tabs([f"📡 AO VIVO ({len(radar)})", f"📅 PRÓXIMOS ({len(prox_lista)})", f"📊 HISTÓRICO", f"🚫 BLACKLIST ({len(black_df)})"])
-            
-            with tab1: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            with tab2: st.dataframe(pd.DataFrame(prox_lista).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_lista else st.write("Sem jogos NS.")
-            with tab3: st.dataframe(hist_df.sort_values(by=['hora'], ascending=False), use_container_width=True, hide_index=True) if not hist_df.empty else st.write("Histórico vazio.")
-            with tab4: st.table(black_df[['País', 'Liga']]) if not black_df.empty else st.write("Nenhuma liga bloqueada.")
+        with t3:
+            if not hist_df.empty: st.dataframe(hist_df.sort_values(by=['hora'], ascending=False), use_container_width=True, hide_index=True)
+            else: st.caption("Histórico vazio.")
 
-        time.sleep(INTERVALO)
-        # O rerun() aqui dentro do loop com container limpa a tela de verdade
-        st.rerun()
+        with t4:
+            if not black_df.empty: st.table(black_df[['País', 'Liga']])
+            else: st.caption("Nenhuma liga bloqueada.")
+
+    # Timer e Refresh
+    time.sleep(INTERVALO)
+    st.rerun()
+
 else:
-    with tela.container():
-        st.info("💡 Neves Analytics pronto. Configure a API e ligue o robô na lateral.")
-        st.subheader("📊 Resumo do Banco de Dados")
-        st.write(f"Sinais no Histórico: {len(carregar_db())}")
-        st.write(f"Ligas na Blacklist: {len(carregar_blacklist())}")
+    st.info("💡 Robô em espera. Ligue na barra lateral.")
+    st.subheader("📊 Resumo Atual")
+    col1, col2 = st.columns(2)
+    col1.metric("Sinais Gravados", len(carregar_db()))
+    col2.metric("Ligas Bloqueadas", len(carregar_blacklist()))
