@@ -5,157 +5,148 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURAÇÃO VISUAL (PADRÃO NEVES) ---
+# --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(page_title="Neves Analytics", layout="centered", page_icon="❄️")
 
 st.markdown("""
 <style>
     .stApp {background-color: #121212; color: white;}
-    .status-online {color: #00FF00; font-weight: bold; animation: pulse 2s infinite; padding: 10px; border: 1px solid #00FF00; text-align: center; border-radius: 15px; margin-bottom: 20px;}
+    .status-online {color: #00FF00; font-weight: bold; animation: pulse 2s infinite; padding: 10px; border: 1px solid #00FF00; text-align: center; margin-bottom: 20px; border-radius: 15px;}
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); } }
+    .count-label { font-size: 12px; color: #888; margin-bottom: 2px; }
+    .timer-text { font-size: 11px; color: #555; text-align: right; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. BANCO DE DADOS E ARQUIVOS ---
+# --- 2. AUXILIARES ---
+def agora_brasil():
+    return datetime.utcnow() - timedelta(hours=3)
+
+# --- 3. BANCO DE DADOS ---
 DB_FILE = 'neves_dados.txt'
-BLACK_FILE = 'neves_blacklist.txt'
 
 def carregar_db():
     if not os.path.exists(DB_FILE):
         return pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
-    return pd.read_csv(DB_FILE)
+    try: return pd.read_csv(DB_FILE)
+    except: return pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
 
-def carregar_blacklist():
-    if not os.path.exists(BLACK_FILE):
-        return pd.DataFrame(columns=['id', 'País', 'Liga'])
-    return pd.read_csv(BLACK_FILE)
+def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
+    df = carregar_db()
+    if not ((df['id'].astype(str) == str(fixture_id)) & (df['sinal'] == sinal)).any():
+        data_br = agora_brasil()
+        novo = pd.DataFrame([{'id': fixture_id, 'data': data_br.strftime('%Y-%m-%d'), 'hora': data_br.strftime('%H:%M'), 'jogo': jogo, 'sinal': sinal, 'gols_inicial': gols_inicial, 'status': 'Pendente'}])
+        df = pd.concat([df, novo], ignore_index=True)
+        df.to_csv(DB_FILE, index=False)
 
-def salvar_na_blacklist(id_liga, pais, nome_liga):
-    df = carregar_blacklist()
-    if str(id_liga) not in df['id'].astype(str).values:
-        novo = pd.DataFrame([{'id': str(id_liga), 'País': pais, 'Liga': nome_liga}])
-        pd.concat([df, novo], ignore_index=True).to_csv(BLACK_FILE, index=False)
-
-def enviar_teste_telegram(token, chat_ids):
-    if token and chat_ids:
-        for cid in chat_ids.split(','):
-            try:
-                url = f"https://api.telegram.org/bot{token}/sendMessage"
-                requests.post(url, data={"chat_id": cid.strip(), "text": "✅ Neves Analytics: Teste de Conexão OK!"}, timeout=5)
-            except: pass
-
-# --- 3. SIDEBAR (DO JEITO QUE VOCÊ PEDIU) ---
+# --- 4. SIDEBAR (RETRÁTIL) ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     
+    # O conteúdo agora fica retraído
     with st.expander("⚙️ Painel de Configuração", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
         tg_token = st.text_input("Telegram Token:", type="password")
-        tg_chat_ids = st.text_input("Chat IDs (vincule com vírgula):")
-        
-        # O BOTAO DE VOLTA AQUI
-        if st.button("🔔 Testar Telegram"):
-            enviar_teste_telegram(tg_token, tg_chat_ids)
-            st.toast("Sinal de teste enviado!")
-            
-        INTERVALO = st.slider("Ciclo de Atualização (seg):", 30, 300, 60)
+        tg_chat_ids = st.text_input("Chat IDs:")
+        INTERVALO = st.slider("Ciclo (seg):", 60, 300, 60)
         MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
-        
-        if st.button("🗑️ Resetar Tudo"):
+        if st.button("🗑️ Resetar Banco"):
             if os.path.exists(DB_FILE): os.remove(DB_FILE)
-            if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
             st.rerun()
 
     st.markdown("---")
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
-# --- 4. LOGICA DE API ---
+# --- 5. LÓGICA DE API ---
+if 'ligas_sem_stats' not in st.session_state:
+    st.session_state['ligas_sem_stats'] = {}
+
 @st.cache_data(ttl=3600)
 def buscar_proximos(key):
     if not key and not MODO_DEMO: return []
+    url = "https://v3.football.api-sports.io/fixtures"
+    params = {"date": agora_brasil().strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}
     try:
-        url = "https://v3.football.api-sports.io/fixtures"
-        params = {"date": (datetime.utcnow() - timedelta(hours=3)).strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": key}, params=params, timeout=10).json()
         return [j for j in res.get('response', []) if j['fixture']['status']['short'] == 'NS']
     except: return []
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
-        return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 20}}, "league": {"id": 1, "name": "Liga Demo", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}}]
+        if "statistics" in endpoint: return [{"statistics": [{"type": "Total Shots", "value": 5}]}, {"statistics": [{"type": "Total Shots", "value": 2}]}]
+        return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 10}}, "league": {"id": 1, "name": "Liga Teste", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}}]
     if not API_KEY: return []
+    url = f"https://v3.football.api-sports.io/{endpoint}"
     try:
-        url = f"https://v3.football.api-sports.io/{endpoint}"
         res = requests.get(url, headers={"x-apisports-key": API_KEY}, params=params, timeout=10).json()
         return res.get('response', [])
     except: return []
 
-# --- 5. EXECUÇÃO ---
+# --- 6. EXECUÇÃO ---
 st.title("❄️ Neves Analytics")
 
 if ROBO_LIGADO:
     st.markdown('<div class="status-online">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
     
-    # Placeholder que garante que a tela limpe e não espelhe
-    espaco_principal = st.container()
+    # Placeholder para o Timer e Barra de Progresso
+    timer_placeholder = st.empty()
+    bar_placeholder = st.empty()
     
-    with espaco_principal:
-        # Busca de dados
-        jogos_live = buscar_dados("fixtures", {"live": "all"})
-        radar = []
-        black_df = carregar_blacklist()
-        black_ids = black_df['id'].astype(str).values
+    jogos_live = buscar_dados("fixtures", {"live": "all"})
+    radar = []
+    
+    for j in jogos_live:
+        f_id, l_id = j['fixture']['id'], str(j['league']['id'])
+        tempo = j['fixture']['status'].get('elapsed', 0)
+        sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
+        info = {"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", "Tempo": f"{tempo}'", "Status": "👁️"}
         
-        for j in jogos_live:
-            f_id, l_id = j['fixture']['id'], str(j['league']['id'])
-            sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
-            info = {"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", "Tempo": f"{j['fixture']['status'].get('elapsed', 0)}'", "Status": "👁️"}
-            
-            if l_id in black_ids:
+        if l_id in st.session_state['ligas_sem_stats']:
+            info["Status"] = "🚫"
+        elif (5 <= tempo <= 30) or (sc+sf > 0):
+            stats = buscar_dados("statistics", {"fixture": f_id})
+            if not stats and (sc+sf > 0):
+                st.session_state['ligas_sem_stats'][l_id] = {"País": j['league']['country'], "Liga": j['league']['name']}
                 info["Status"] = "🚫"
-            else:
-                stats = buscar_dados("statistics", {"fixture": f_id})
-                if not stats and (sc+sf > 0):
-                    salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
-                    info["Status"] = "🚫"
-            radar.append(info)
+        radar.append(info)
 
-        prox_lista = buscar_proximos(API_KEY)
-        hist_df = carregar_db()
+    # Dados para as abas
+    prox_lista = buscar_proximos(API_KEY)
+    hist_df = carregar_db()
+    black_count = len(st.session_state['ligas_sem_stats'])
 
-        # ABAS COM CONTADORES
-        t1, t2, t3, t4 = st.tabs([
-            f"📡 Ao Vivo ({len(radar)})", 
-            f"📅 Próximos ({len(prox_lista)})", 
-            f"📊 Histórico ({len(hist_df)})", 
-            f"🚫 Blacklist ({len(black_df)})"
-        ])
-        
-        with t1:
-            if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else: st.info("Buscando jogos...")
-        
-        with t2:
-            if prox_lista:
-                df_p = pd.DataFrame([{"Hora": j['fixture']['date'][11:16], "Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} vs {j['teams']['away']['name']}"} for j in prox_lista])
-                st.dataframe(df_p.sort_values("Hora"), use_container_width=True, hide_index=True)
-            else: st.caption("Nenhum jogo futuro hoje.")
+    # --- ABAS COM CONTADORES ---
+    t1, t2, t3, t4 = st.tabs([
+        f"📡 Ao Vivo ({len(radar)})", 
+        f"📅 Próximos ({len(prox_lista)})", 
+        f"📊 Histórico ({len(hist_df)})", 
+        f"🚫 Blacklist ({black_count})"
+    ])
+    
+    with t1:
+        if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
+        else: st.info("Sem jogos no momento.")
 
-        with t3:
-            if not hist_df.empty: st.dataframe(hist_df.sort_values(by=['hora'], ascending=False), use_container_width=True, hide_index=True)
-            else: st.caption("Histórico vazio.")
+    with t2:
+        if prox_lista:
+            df_p = pd.DataFrame([{"Hora": j['fixture']['date'][11:16], "Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} vs {j['teams']['away']['name']}"} for j in prox_lista])
+            st.dataframe(df_p.sort_values("Hora"), use_container_width=True, hide_index=True)
 
-        with t4:
-            if not black_df.empty: st.table(black_df[['País', 'Liga']])
-            else: st.caption("Nenhuma liga bloqueada.")
+    with t3:
+        if not hist_df.empty: st.dataframe(hist_df.sort_values(by=['data', 'hora'], ascending=False), use_container_width=True, hide_index=True)
+        else: st.caption("Histórico vazio.")
 
-    # Timer e Refresh
-    time.sleep(INTERVALO)
+    with t4:
+        if st.session_state['ligas_sem_stats']: st.table(list(st.session_state['ligas_sem_stats'].values()))
+        else: st.caption("Nenhuma liga bloqueada.")
+
+    # Timer de Contagem Regressiva
+    for i in range(INTERVALO, 0, -1):
+        timer_placeholder.markdown(f'<div class="timer-text">Atualizando em {i}s</div>', unsafe_allow_html=True)
+        bar_placeholder.progress(i / INTERVALO)
+        time.sleep(1)
     st.rerun()
 
 else:
-    st.info("💡 Robô em espera. Ligue na barra lateral.")
-    st.subheader("📊 Resumo Atual")
-    col1, col2 = st.columns(2)
-    col1.metric("Sinais Gravados", len(carregar_db()))
-    col2.metric("Ligas Bloqueadas", len(carregar_blacklist()))
+    st.info("Robô em espera. O histórico será carregado ao ligar.")
+    st.dataframe(carregar_db().sort_values(by=['data', 'hora'], ascending=False).head(5), use_container_width=True, hide_index=True)
