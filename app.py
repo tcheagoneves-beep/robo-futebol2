@@ -50,34 +50,30 @@ def enviar_teste_telegram(token, chat_ids):
 def agora_brasil():
     return datetime.utcnow() - timedelta(hours=3)
 
-# --- 3. SIDEBAR (Lateral Ajustada) ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     
-    # --- LEGENDA CORRIGIDA ---
     with st.expander("ℹ️ Legenda de Status", expanded=True):
         st.info(
             """
             **Guia de Ícones:**
-            
-            ⏳ **Início (0-5')** _Aguardando estabilização._
-            
-            👁️ **Monitorando** _Jogo ativo buscando sinais._
-            
-            💤 **Stand By** _Intervalo ou pausa (40-55')._
-            
-            🏁 **Fim Próximo (>85')** _Risco alto, final de jogo._
-            
-            🚫 **Bloqueado** _Liga sem estatísticas._
+            ⏳ **Início (0-10')** _Aguardando._
+            👁️ **Monitorando** _Jogo Ativo._
+            🔥 **PRESSÃO** _Muitos chutes!_
+            💤 **Stand By** _Intervalo._
+            🚫 **Bloqueado** _Sem dados._
             """
         )
     
-    # --- CONFIGURAÇÕES ---
     with st.expander("⚙️ Configurações", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
         tg_token = st.text_input("Telegram Token:", type="password")
         tg_chat_ids = st.text_input("Chat IDs:")
         
+        # Critério de Pressão (Novo)
+        CRITERIO_CHUTES = st.number_input("Mínimo de Chutes para 🔥:", value=8, min_value=1)
+
         if st.button("🔔 Testar Telegram"):
             enviar_teste_telegram(tg_token, tg_chat_ids)
             st.toast("Enviado!")
@@ -106,18 +102,21 @@ def buscar_proximos(key):
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
-        # Simulação para ver se a legenda bate
+        # Simulação de jogo com pressão
         return [
-            {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 3}}, "league": {"id": 1, "name": "Liga Início", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}},
-            {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 25}}, "league": {"id": 2, "name": "Liga Ativa", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time C"}, "away": {"name": "Time D"}}},
-            {"fixture": {"id": 3, "status": {"short": "HT", "elapsed": 45}}, "league": {"id": 3, "name": "Liga Pausa", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time E"}, "away": {"name": "Time F"}}},
-            {"fixture": {"id": 4, "status": {"short": "2H", "elapsed": 89}}, "league": {"id": 4, "name": "Liga Fim", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time G"}, "away": {"name": "Time H"}}}
+            {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 25}}, "league": {"id": 1, "name": "Liga Quente", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}},
+            {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 30}}, "league": {"id": 2, "name": "Liga Fria", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time C"}, "away": {"name": "Time D"}}},
         ]
     if not API_KEY: return []
     try:
         res = requests.get(f"https://v3.football.api-sports.io/{endpoint}", headers={"x-apisports-key": API_KEY}, params=params, timeout=10).json()
         return res.get('response', [])
     except: return []
+
+def buscar_stats_simulado(fid):
+    # Simula stats: Jogo 1 tem 12 chutes (pressão), Jogo 2 tem 2 chutes
+    if fid == 1: return [{"statistics": [{"type": "Total Shots", "value": 8}]}, {"statistics": [{"type": "Total Shots", "value": 4}]}] 
+    return [{"statistics": [{"type": "Total Shots", "value": 1}]}, {"statistics": [{"type": "Total Shots", "value": 1}]}]
 
 # --- 5. EXECUÇÃO ---
 main_placeholder = st.empty()
@@ -127,14 +126,13 @@ if ROBO_LIGADO:
     ids_bloqueados = df_black['id'].astype(str).values
     hist_df = carregar_db()
 
-    # Processar AO VIVO
     jogos_live = buscar_dados("fixtures", {"live": "all"})
     radar = []
     
     for j in jogos_live:
         l_id = str(j['league']['id'])
         
-        # [FILTRO] Remove Blacklist
+        # 1. Filtro Blacklist (Ignora se estiver bloqueada)
         if l_id in ids_bloqueados:
             continue
             
@@ -143,31 +141,50 @@ if ROBO_LIGADO:
         status_short = j['fixture']['status'].get('short', '')
         sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
         
-        # --- LÓGICA DE ÍCONES ---
-        icone = "👁️" # Padrão
+        icone_status = "👁️"
+        pressao_txt = "-" # Coluna nova para indicar pressão
         
-        if tempo < 5: 
-            icone = "⏳"
+        # 2. Definição de Janelas
+        if tempo < 10: 
+            icone_status = "⏳"
         elif (40 <= tempo <= 55) or (status_short in ['HT', 'BT']):
-            icone = "💤"
+            icone_status = "💤"
         elif tempo > 85: 
-            icone = "🏁"
-        
-        # Validação Stats
-        if sc + sf > 0:
-            stats = buscar_dados("statistics", {"fixture": f_id})
-            if not stats and not MODO_DEMO:
+            icone_status = "🏁"
+        else:
+            # 3. MOMENTO DA VERDADE: Se está monitorando (10-85 min), BUSCA STATS!
+            stats = []
+            if MODO_DEMO:
+                stats = buscar_stats_simulado(f_id)
+            else:
+                stats = buscar_dados("statistics", {"fixture": f_id})
+            
+            if not stats:
+                # Se tentou buscar e veio vazio: BANIR PARA SEMPRE
                 salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
                 continue 
+            else:
+                # Análise de Pressão
+                try:
+                    chutes_home = stats[0]['statistics'][2]['value'] or 0 # Pega Total Shots (ajustar index se precisar)
+                    chutes_away = stats[1]['statistics'][2]['value'] or 0
+                    if (type(chutes_home) == int) and (type(chutes_away) == int):
+                        total_chutes = chutes_home + chutes_away
+                        if total_chutes >= CRITERIO_CHUTES:
+                            icone_status = "🔥"
+                            pressao_txt = f"{total_chutes} Chutes"
+                except:
+                    # Em alguns casos a API muda a ordem, pegamos genericamente
+                    pass
 
         radar.append({
             "Liga": j['league']['name'], 
             "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", 
             "Tempo": f"{tempo}'", 
-            "Status": icone 
+            "Status": icone_status,
+            "Info": pressao_txt
         })
 
-    # Processar PRÓXIMOS
     prox_raw = buscar_proximos(API_KEY)
     prox_filtrado = []
     for p in prox_raw:
@@ -178,7 +195,6 @@ if ROBO_LIGADO:
                 "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
             })
 
-    # EXIBIÇÃO
     with main_placeholder.container():
         st.title("❄️ Neves Analytics")
         st.markdown('<div class="status-online">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
@@ -187,18 +203,17 @@ if ROBO_LIGADO:
         
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else: st.info("Nenhum jogo no radar.")
+            else: st.info("Buscando jogos...")
         with t2:
             if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
             else: st.caption("Agenda vazia.")
         with t3:
             if not hist_df.empty: st.dataframe(hist_df.sort_values(by=['data', 'hora'], ascending=False), use_container_width=True, hide_index=True)
-            else: st.caption("Histórico vazio.")
+            else: st.caption("Vazio.")
         with t4:
             if not df_black.empty: st.table(df_black[['País', 'Liga']])
             else: st.caption("Limpo.")
 
-        # Timer
         timer_box = st.empty()
         for i in range(INTERVALO, 0, -1):
             timer_box.markdown(f'<div class="timer-text">⏳ Atualizando em {i}s</div>', unsafe_allow_html=True)
@@ -209,4 +224,4 @@ if ROBO_LIGADO:
 else:
     with main_placeholder.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Ligue na lateral.")
+        st.info("💡 Robô em espera.")
