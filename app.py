@@ -56,6 +56,7 @@ def agora_brasil():
 with st.sidebar:
     st.title("❄️ Neves Analytics PRO")
     
+    # Checklist simples na lateral
     with st.expander("✅ Status do Sistema", expanded=True):
         st.caption("Todas as estratégias estão armadas:")
         st.markdown("🟣 **A** - Porteira Aberta")
@@ -70,7 +71,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Guia Detalhado Ativo.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Guia Detalhado (Colapsado) Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -343,8 +344,8 @@ if ROBO_LIGADO:
             else:
                 st.caption("Limpo.")
 
-        # --- MANUAL DE INTELIGÊNCIA (AGORA POSICIONADO ANTES DO TIMER) ---
-        with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=True):
+        # --- MANUAL DE INTELIGÊNCIA (DEFAULT: FECHADO) ---
+        with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
             c1, c2 = st.columns(2)
             
             with c1:
