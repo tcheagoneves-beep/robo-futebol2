@@ -56,7 +56,6 @@ def agora_brasil():
 with st.sidebar:
     st.title("❄️ Neves Analytics PRO")
     
-    # Checklist simples na lateral (Resumo)
     with st.expander("✅ Status do Sistema", expanded=True):
         st.caption("Todas as estratégias estão armadas:")
         st.markdown("🟣 **A** - Porteira Aberta")
@@ -344,12 +343,7 @@ if ROBO_LIGADO:
             else:
                 st.caption("Limpo.")
 
-        relogio = st.empty()
-        for i in range(INTERVALO, 0, -1):
-            relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
-            time.sleep(1)
-
-        # --- MANUAL DE INTELIGÊNCIA (DETALHADO E FIXO) ---
+        # --- MANUAL DE INTELIGÊNCIA (AGORA POSICIONADO ANTES DO TIMER) ---
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=True):
             c1, c2 = st.columns(2)
             
@@ -393,6 +387,11 @@ if ROBO_LIGADO:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+
+        relogio = st.empty()
+        for i in range(INTERVALO, 0, -1):
+            relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
+            time.sleep(1)
     
     st.rerun()
 
