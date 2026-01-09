@@ -34,7 +34,7 @@ st.markdown("""
 
 # --- 2. AJUSTE DE FUSO HORÁRIO (BRASIL) ---
 def agora_brasil():
-    # O servidor é UTC. Subtraímos 3 horas para Brasil.
+    # Subtrai 3 horas do horário UTC do servidor
     return datetime.utcnow() - timedelta(hours=3)
 
 # --- 3. FUNÇÕES DE BANCO DE DADOS E NOTIFICAÇÃO ---
@@ -57,12 +57,11 @@ def carregar_db():
 def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
     df = carregar_db()
     if not ((df['id'] == fixture_id) & (df['status'] == 'Pendente')).any():
-        # AQUI O AJUSTE DE HORA
         data_br = agora_brasil()
         novo_registro = {
             'id': fixture_id,
             'data': data_br.strftime('%Y-%m-%d'),
-            'hora': data_br.strftime('%H:%M'), # Hora corrigida
+            'hora': data_br.strftime('%H:%M'), # Hora correta BR
             'jogo': jogo,
             'sinal': sinal,
             'gols_inicial': gols_inicial,
@@ -110,7 +109,6 @@ def gerar_texto_relatorio():
     
     df['data'] = pd.to_datetime(df['data'])
     
-    # DATA BRASIL PARA O RELATÓRIO
     hoje = pd.Timestamp(agora_brasil().date())
     
     df_hoje = df[df['data'] == hoje]
@@ -188,9 +186,10 @@ def buscar_jogos(api_key):
     if MODO_DEMO: return gerar_sinais_teste()
     url = "https://v3.football.api-sports.io/fixtures"
     headers = {"x-apisports-key": api_key}
-    # AQUI: Usa a data do Brasil para buscar os jogos
+    
     data_hoje_br = agora_brasil().strftime('%Y-%m-%d')
-    try: return requests.get(url, headers=headers, params={"date": data_hoje_br}).json().get('response', [])
+    # AQUI ESTÁ A CORREÇÃO: timezone SP para pegar jogos da noite!
+    try: return requests.get(url, headers=headers, params={"date": data_hoje_br, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
 def buscar_stats(api_key, fixture_id):
@@ -297,10 +296,8 @@ if ROBO_LIGADO:
         jogos = buscar_jogos(API_KEY)
         atualizar_status_db(jogos, tg_token, tg_chat_ids)
         
-        # Relatório Automático 22h (Horário Brasil)
+        # Relatório Automático 22h
         if 'relatorio_enviado_hoje' not in st.session_state: st.session_state['relatorio_enviado_hoje'] = None
-        
-        # AQUI O PULO DO GATO: Usa a hora do Brasil para saber se é 22h
         hora_br = int(agora_brasil().strftime('%H'))
         data_br = agora_brasil().strftime('%Y-%m-%d')
         
@@ -319,7 +316,9 @@ if ROBO_LIGADO:
             tempo = jogo['fixture']['status'].get('elapsed', 0)
             
             if status == 'NS':
-                hora_j = datetime.fromtimestamp(jogo['fixture']['timestamp']).strftime('%H:%M')
+                # CORREÇÃO DA HORA DE EXIBIÇÃO (-3h)
+                ts = jogo['fixture']['timestamp']
+                hora_j = (datetime.fromtimestamp(ts) - timedelta(hours=3)).strftime('%H:%M')
                 prox.append({"Hora": hora_j, "Liga": jogo['league']['name'], "Jogo": f"{jogo['teams']['home']['name']} vs {jogo['teams']['away']['name']}"})
             
             elif status in ['1H', '2H'] and tempo:
@@ -371,7 +370,7 @@ if ROBO_LIGADO:
                 df_prox = pd.DataFrame(sorted(prox, key=lambda x: x['Hora']))
                 st.dataframe(df_prox, hide_index=True, use_container_width=True)
             else:
-                st.caption("Sem jogos futuros.")
+                st.caption("Sem jogos futuros na lista de hoje (BR).")
         
         with t3:
             df_hist = carregar_db()
