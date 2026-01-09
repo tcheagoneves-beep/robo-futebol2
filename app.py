@@ -14,7 +14,9 @@ st.markdown("""
     .status-box {padding: 15px; border-radius: 10px; text-align: center; margin-bottom: 20px; font-weight: bold;}
     .status-active {background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00;}
     .timer-text { font-size: 14px; color: #FFD700; text-align: center; font-weight: bold; margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;}
-    .strategy-box { background-color: #1c1c1c; padding: 10px; border-radius: 5px; margin-top: 10px; border-left: 3px solid #00FF00; }
+    .strategy-card { background-color: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #00FF00; }
+    .strategy-title { color: #00FF00; font-weight: bold; font-size: 16px; margin-bottom: 5px; }
+    .strategy-desc { font-size: 13px; color: #cccccc; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -54,8 +56,8 @@ def agora_brasil():
 with st.sidebar:
     st.title("❄️ Neves Analytics PRO")
     
-    # Checklist simples na lateral
-    with st.expander("✅ Status das Estratégias", expanded=True):
+    # Checklist simples na lateral (Resumo)
+    with st.expander("✅ Status do Sistema", expanded=True):
         st.caption("Todas as estratégias estão armadas:")
         st.markdown("🟣 **A** - Porteira Aberta")
         st.markdown("🟢 **B** - Reação / Blitz")
@@ -69,7 +71,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Interface Educativa Ativa.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Guia Detalhado Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -244,6 +246,7 @@ if ROBO_LIGADO:
         away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"
         
+        # Soneca Inteligente
         eh_intervalo = (status_short in ['HT', 'BT']) or (48 <= tempo <= 52)
         eh_aquecimento = (tempo < 5)
         eh_fim = (tempo > 80)
@@ -346,30 +349,50 @@ if ROBO_LIGADO:
             relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
             time.sleep(1)
 
-        # --- NOVA ÁREA: DETALHAMENTO DAS ESTRATÉGIAS (RODAPÉ) ---
-        with st.expander("📘 Guia de Inteligência: Como o Robô decide?", expanded=False):
-            st.markdown("""
-            ### 1. 🟣 A - Porteira Aberta
-            * **Cenário:** Jogo frenético antes dos 30 minutos.
-            * **Gatilho:** Tempo < 30' e Placar com 2 ou mais gols (ex: 2x0, 1x1).
-            * **Ação:** Buscar Múltiplas de Over Gols.
-
-            ### 2. ⚡ D - Gol Relâmpago
-            * **Cenário:** Início elétrico de partida.
-            * **Gatilho:** Entre 5' e 15', com chutes no alvo imediatos.
-            * **Ação:** Over 0.5 HT (Gol no 1º Tempo).
+        # --- MANUAL DE INTELIGÊNCIA (DETALHADO E FIXO) ---
+        with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=True):
+            c1, c2 = st.columns(2)
             
-            ### 3. 🟢 B - Reação do Gigante / Blitz
-            * **Cenário:** Time perdendo ou empatando, mas massacrando.
-            * **Gatilho (< 60'):** * **Volume:** 6+ chutes totais.
-                * **Blitz (Momentum):** 2+ chutes no alvo nos últimos **7 minutos**.
-            * **Ação:** Back ao time que pressiona (se oponente estiver morto) ou Over Gols (se jogo estiver lá e cá).
-
-            ### 4. 💰 C - Janela de Ouro
-            * **Cenário:** Reta final com jogo indefinido e pressão.
-            * **Gatilho:** Entre 70' e 75', jogo empatado ou diferença de 1 gol, com **18+ chutes totais**.
-            * **Ação:** Over Limite (Gol Asiático).
-            """)
+            with c1:
+                st.markdown("""
+                <div class="strategy-card">
+                    <div class="strategy-title">🟣 A - Porteira Aberta</div>
+                    <div class="strategy-desc">
+                        <b>Cenário:</b> Jogo frenético antes dos 30'.<br>
+                        <b>Gatilho Matemático:</b> Tempo <= 30' E Soma de Gols >= 2.<br>
+                        <b>Ação:</b> Múltipla Over Gols.
+                    </div>
+                </div>
+                <div class="strategy-card">
+                    <div class="strategy-title">🟢 B - Reação / Blitz</div>
+                    <div class="strategy-desc">
+                        <b>Cenário:</b> Time perdendo/empatando (< 60').<br>
+                        <b>Gatilho 1 (Volume):</b> 6+ chutes totais.<br>
+                        <b>Gatilho 2 (Blitz):</b> 2+ chutes no alvo nos últimos 7 min.<br>
+                        <b>Ação:</b> Back Favorito ou Over Gols.
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with c2:
+                st.markdown("""
+                <div class="strategy-card">
+                    <div class="strategy-title">💰 C - Janela de Ouro</div>
+                    <div class="strategy-desc">
+                        <b>Cenário:</b> Reta final (70'-75') indefinida.<br>
+                        <b>Gatilho Matemático:</b> 18+ chutes somados E Diferença <= 1 gol.<br>
+                        <b>Ação:</b> Over Limite (Gol Asiático).
+                    </div>
+                </div>
+                <div class="strategy-card">
+                    <div class="strategy-title">⚡ D - Gol Relâmpago</div>
+                    <div class="strategy-desc">
+                        <b>Cenário:</b> Início elétrico (5'-15').<br>
+                        <b>Gatilho Matemático:</b> Pelo menos 1 chute no alvo de qualquer time.<br>
+                        <b>Ação:</b> Over 0.5 HT (Gol no 1º Tempo).
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
     
     st.rerun()
 
