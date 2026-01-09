@@ -37,7 +37,6 @@ def carregar_blacklist():
 
 def salvar_na_blacklist(id_liga, pais, nome_liga):
     df = carregar_blacklist()
-    # Verifica se já existe para não duplicar
     if str(id_liga) not in df['id'].astype(str).values:
         novo = pd.DataFrame([{'id': str(id_liga), 'País': pais, 'Liga': nome_liga}])
         pd.concat([df, novo], ignore_index=True).to_csv(BLACK_FILE, index=False)
@@ -71,7 +70,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Botões de Reset corrigidos.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Erro da Agenda Corrigido.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -80,13 +79,12 @@ with st.sidebar:
         st.markdown("---")
         st.caption("Gestão de Dados:")
         
-        # --- BOTÕES DE RESET SEPARADOS (SEGURANÇA) ---
         col_res1, col_res2 = st.columns(2)
         with col_res1:
             if st.button("♻️ Reset Sessão"):
                 st.session_state['alertas_enviados'] = set() 
                 st.session_state['memoria_pressao'] = {}
-                st.toast("Memória limpa! (Blacklist mantida)")
+                st.toast("Memória limpa!")
                 time.sleep(1)
                 st.rerun()
         
@@ -96,7 +94,7 @@ with st.sidebar:
                     os.remove(BLACK_FILE)
                     st.toast("Blacklist apagada!")
                 else:
-                    st.toast("Já estava vazia.")
+                    st.toast("Já vazia.")
                 time.sleep(1)
                 st.rerun()
 
@@ -252,6 +250,7 @@ if ROBO_LIGADO:
     jogos_live = buscar_dados("fixtures", {"live": "all"})
     radar = []
     
+    # --- PROCESSAMENTO ---
     for j in jogos_live:
         l_id = str(j['league']['id'])
         if l_id in ids_bloqueados: continue
@@ -263,6 +262,7 @@ if ROBO_LIGADO:
         away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"
         
+        # Soneca Inteligente
         eh_intervalo = (status_short in ['HT', 'BT']) or (48 <= tempo <= 52)
         eh_aquecimento = (tempo < 5)
         eh_fim = (tempo > 80)
@@ -313,6 +313,7 @@ if ROBO_LIGADO:
             "Status": f"{icone_visual} {sinal['tag'] if sinal else ''}{info_mom}"
         })
 
+    # --- AGENDA ---
     prox_raw = buscar_proximos(API_KEY)
     prox_filtrado = []
     hora_atual = agora_brasil().strftime('%H:%M')
@@ -334,6 +335,7 @@ if ROBO_LIGADO:
             "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
         })
 
+    # --- EXIBIÇÃO ---
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
@@ -343,8 +345,14 @@ if ROBO_LIGADO:
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
             else: st.info("Monitorando jogos...")
+        
         with t2:
-            st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_filtrado else st.caption("Vazio.")
+            # CORREÇÃO AQUI: Agora usa a variável certa 'prox_filtrado' e em blocos separados
+            if prox_filtrado:
+                st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Sem mais jogos por hoje.")
+        
         with t3:
             if not df_black.empty: st.table(df_black)
             else: st.caption("Limpo.")
