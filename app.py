@@ -174,10 +174,11 @@ with st.sidebar:
             
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
-# --- 5. FUNÇÕES DE API (COM MEMÓRIA DE LIGAS RUINS) ---
+# --- 5. FUNÇÕES DE API (COM MEMÓRIA ESTRUTURADA DE LIGAS RUINS) ---
 
+# Agora guarda um Dicionário: ID -> {Nome, Pais}
 if 'ligas_sem_stats' not in st.session_state:
-    st.session_state['ligas_sem_stats'] = set()
+    st.session_state['ligas_sem_stats'] = {}
 
 if 'cache_proximos' not in st.session_state:
     st.session_state['cache_proximos'] = {'data': [], 'hora_update': datetime.min}
@@ -340,15 +341,16 @@ if ROBO_LIGADO:
                 tempo = jogo['fixture']['status'].get('elapsed', 0)
                 status_short = jogo['fixture']['status']['short']
                 league_id = jogo['league']['id'] 
+                league_name = jogo['league']['name']
+                league_country = jogo['league']['country']
                 
-                # PREPARA INFO E PLACAR PARA ANÁLISE DE LISTA NEGRA
                 sc = jogo['goals']['home'] or 0
                 sf = jogo['goals']['away'] or 0
                 total_gols = sc + sf
                 
-                info = {"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {sc}x{sf} {jogo['teams']['away']['name']}", "Status": "👁️"}
+                info = {"Liga": league_name, "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {sc}x{sf} {jogo['teams']['away']['name']}", "Status": "👁️"}
                 
-                # --- FILTRO LISTA NEGRA (SE JÁ ESTIVER BLOQUEADO) ---
+                # --- FILTRO LISTA NEGRA ---
                 if league_id in st.session_state['ligas_sem_stats']:
                     info['Status'] = "🚫 (Sem Stats)"
                     radar.append(info)
@@ -359,21 +361,21 @@ if ROBO_LIGADO:
                 if zona_quente:
                     stats = buscar_stats(API_KEY, jogo['fixture']['id'])
                     
-                    # --- INTELIGÊNCIA: DEFINIÇÃO DE BLOQUEIO ---
+                    # --- INTELIGÊNCIA DE BLOQUEIO (AGORA SALVA PAÍS E NOME) ---
                     if not stats:
-                        # REGRA 1: Se tem GOL e não tem STATS = Bloqueia Agora (Cobertura ruim)
-                        if total_gols > 0:
-                            st.session_state['ligas_sem_stats'].add(league_id)
-                            info['Status'] = "🚫 (Bloqueado Gols s/ Stats)"
+                        motivo_bloqueio = None
+                        if total_gols > 0: motivo_bloqueio = "Gols s/ Stats"
+                        elif tempo >= 90 or status_short in ['FT', 'AET', 'PEN']: motivo_bloqueio = "Fim s/ Stats"
                         
-                        # REGRA 2: Se o jogo acabou (FT ou 90+) e não teve stats = Bloqueia
-                        elif tempo >= 90 or status_short in ['FT', 'AET', 'PEN']:
-                            st.session_state['ligas_sem_stats'].add(league_id)
-                            info['Status'] = "🚫 (Bloqueado Final)"
-                        
-                        # REGRA 3: Se está 0x0 e rolando = Espera
+                        if motivo_bloqueio:
+                            st.session_state['ligas_sem_stats'][league_id] = {
+                                'Liga': league_name,
+                                'País': league_country,
+                                'Motivo': motivo_bloqueio
+                            }
+                            info['Status'] = f"🚫 ({motivo_bloqueio})"
                         else:
-                            info['Status'] = "⏳ (Aguardando dados)"
+                            info['Status'] = "⏳ (Aguardando)"
                     
                     if stats:
                         odd_casa, odd_fora = buscar_odds_cached(API_KEY, jogo['fixture']['id'])
@@ -381,7 +383,6 @@ if ROBO_LIGADO:
                         s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
                         s_fora = {i['type']: i['value'] for i in stats[1]['statistics']}
                         tc = jogo['teams']['home']['name']; tf = jogo['teams']['away']['name']
-                        # Placar já extraído acima (sc, sf)
                         
                         sinal, motivo, chutes, no_gol, atq_p, tipo = analisar_partida(tempo, s_casa, s_fora, tc, tf, sc, sf, odd_casa, odd_fora)
                         
@@ -404,7 +405,7 @@ if ROBO_LIGADO:
             
             if not achou: st.info(f"Monitorando {len(jogos_live)} jogos ao vivo...")
             
-            t1, t2, t3 = st.tabs(["📡 Ao Vivo", "📅 Próximos (Cache 1h)", "📊 Performance"])
+            t1, t2, t3, t4 = st.tabs(["📡 Ao Vivo", "📅 Próximos (Cache 1h)", "📊 Performance", "🚫 Ligas Bloqueadas"])
             
             with t1: 
                 if radar:
@@ -439,6 +440,14 @@ if ROBO_LIGADO:
                         st.plotly_chart(fig, use_container_width=True)
                     st.dataframe(df_hist, hide_index=True, use_container_width=True)
                 else: st.info("Sem dados.")
+            
+            with t4:
+                if st.session_state['ligas_sem_stats']:
+                    df_black = pd.DataFrame(st.session_state['ligas_sem_stats'].values())
+                    st.warning(f"Total de Ligas na Lista Negra: {len(df_black)}")
+                    st.dataframe(df_black, hide_index=True, use_container_width=True)
+                else:
+                    st.info("Nenhuma liga bloqueada ainda. O robô está aprendendo...")
 
             time.sleep(INTERVALO)
             st.rerun()
