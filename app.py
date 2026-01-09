@@ -18,35 +18,43 @@ st.markdown("""
     .tempo {font-size: 14px; color: #FF4B4B; font-weight: bold; text-align: center;}
     .status-online {color: #00FF00; font-weight: bold; animation: pulse 2s infinite; padding: 10px; border: 1px solid #00FF00; text-align: center; margin-bottom: 20px; border-radius: 15px;}
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); } }
-    .stats-row { display: flex; justify-content: space-around; text-align: center; margin-top: 15px; padding-top: 15px; border-top: 1px solid #333; }
-    .metric-val {font-size: 18px; font-weight: bold;}
-    .metric-label {font-size: 10px; color: #888;}
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. AUXILIARES E TRADUÇÃO ---
+# --- 2. AUXILIARES ---
 def agora_brasil():
     return datetime.utcnow() - timedelta(hours=3)
 
-def traduzir_instrucao(sinal, favorito=""):
-    if "MÚLTIPLA" in sinal: return "Bilhete de 2 ou mais jogos."
-    if "HT" in sinal: return "Mais um gol no 1º tempo."
-    return "Entrada no mercado de gols."
-
-# --- 3. BANCO DE DADOS ---
+# --- 3. BANCO DE DADOS (RECUPERAÇÃO DE HISTÓRICO) ---
 DB_FILE = 'neves_dados.txt'
 
 def carregar_db():
     if not os.path.exists(DB_FILE):
         return pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
-    try: return pd.read_csv(DB_FILE)
-    except: return pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
+    try:
+        df = pd.read_csv(DB_FILE)
+        # Garante que as colunas essenciais existem para não dar erro na exibição
+        for col in ['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status']:
+            if col not in df.columns:
+                df[col] = None
+        return df
+    except:
+        return pd.DataFrame(columns=['id', 'data', 'hora', 'jogo', 'sinal', 'gols_inicial', 'status'])
 
 def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
     df = carregar_db()
-    if not ((df['id'] == fixture_id) & (df['sinal'] == sinal)).any():
+    # Verifica se esse sinal já existe para esse jogo (evita duplicar o mesmo sinal)
+    if not ((df['id'].astype(str) == str(fixture_id)) & (df['sinal'] == sinal)).any():
         data_br = agora_brasil()
-        novo = pd.DataFrame([{'id': fixture_id, 'data': data_br.strftime('%Y-%m-%d'), 'hora': data_br.strftime('%H:%M'), 'jogo': jogo, 'sinal': sinal, 'gols_inicial': gols_inicial, 'status': 'Pendente'}])
+        novo = pd.DataFrame([{
+            'id': fixture_id, 
+            'data': data_br.strftime('%Y-%m-%d'), 
+            'hora': data_br.strftime('%H:%M'), 
+            'jogo': jogo, 
+            'sinal': sinal, 
+            'gols_inicial': gols_inicial, 
+            'status': 'Pendente'
+        }])
         df = pd.concat([df, novo], ignore_index=True)
         df.to_csv(DB_FILE, index=False)
 
@@ -59,29 +67,36 @@ with st.sidebar:
     st.markdown("---")
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
     INTERVALO = st.slider("Ciclo (seg):", 60, 300, 60)
+    
+    if st.button("🗑️ Limpar Banco de Dados"):
+        if os.path.exists(DB_FILE):
+            os.remove(DB_FILE)
+            st.rerun()
+    
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
 # --- 5. LÓGICA DE API ---
-if 'ligas_sem_stats' not in st.session_state or isinstance(st.session_state['ligas_sem_stats'], set):
+if 'ligas_sem_stats' not in st.session_state or not isinstance(st.session_state['ligas_sem_stats'], dict):
     st.session_state['ligas_sem_stats'] = {}
 
 @st.cache_data(ttl=3600)
 def buscar_proximos(key):
-    if not key: return []
+    if not key and not MODO_DEMO: return []
     url = "https://v3.football.api-sports.io/fixtures"
     params = {"date": agora_brasil().strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}
     try:
-        res = requests.get(url, headers={"x-apisports-key": key}, params=params).json()
+        res = requests.get(url, headers={"x-apisports-key": key}, params=params, timeout=10).json()
         return [j for j in res.get('response', []) if j['fixture']['status']['short'] == 'NS']
     except: return []
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
         if "statistics" in endpoint:
-            return [{"statistics": [{"type": "Total Shots", "value": 10}, {"type": "Shots on Goal", "value": 4}, {"type": "Dangerous Attacks", "value": 30}]}, 
-                    {"statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 2}, {"type": "Dangerous Attacks", "value": 15}]}]
-        return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 35}}, "league": {"id": 99, "name": "Liga Demo", "country": "Brasil"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}}]
+            return [{"statistics": [{"type": "Total Shots", "value": 12}, {"type": "Shots on Goal", "value": 5}, {"type": "Dangerous Attacks", "value": 40}]}, 
+                    {"statistics": [{"type": "Total Shots", "value": 6}, {"type": "Shots on Goal", "value": 2}, {"type": "Dangerous Attacks", "value": 20}]}]
+        return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 30}}, "league": {"id": 99, "name": "Liga Demo", "country": "Brasil"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}}]
     
+    if not API_KEY: return []
     url = f"https://v3.football.api-sports.io/{endpoint}"
     try:
         res = requests.get(url, headers={"x-apisports-key": API_KEY}, params=params, timeout=10).json()
@@ -102,9 +117,9 @@ def analisar(tempo, stats_list, sc, sf):
     
     sinal = None; mot = ""
     if tempo <= 30 and (sc + sf) >= 2:
-        sinal = "CANDIDATO P/ MÚLTIPLA"; mot = "Ritmo intenso."
+        sinal = "CANDIDATO P/ MÚLTIPLA"; mot = "Ritmo intenso de gols."
     elif 5 <= tempo <= 25 and (c_tot + f_tot) >= 5:
-        sinal = "GOL HT"; mot = "Pressão inicial."
+        sinal = "GOL HT"; mot = "Pressão inicial alta."
     
     return sinal, mot, (c_tot + f_tot), (c_gol + f_gol)
 
@@ -123,25 +138,25 @@ if ROBO_LIGADO:
         tempo = j['fixture']['status'].get('elapsed', 0)
         sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
         
-        info = {"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", "Tempo": f"{tempo}'", "Status": "👁️"}
+        item = {"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", "Tempo": f"{tempo}'", "Status": "👁️"}
         
         if l_id in st.session_state['ligas_sem_stats']:
-            info["Status"] = "🚫 Bloqueada"
+            item["Status"] = "🚫 Bloqueada"
         else:
             stats = buscar_dados("statistics", {"fixture": f_id})
             if not stats:
                 if (sc + sf) > 0:
                     st.session_state['ligas_sem_stats'][l_id] = {"País": j['league']['country'], "Liga": j['league']['name'], "Motivo": "Gols s/ Stats"}
-                    info["Status"] = "🚫 Bloqueada"
-                else: info["Status"] = "⏳ Aguardando"
+                    item["Status"] = "🚫 Bloqueada"
+                else: item["Status"] = "⏳ Aguardando"
             else:
                 sinal, mot, ch, gol = analisar(tempo, stats, sc, sf)
                 if sinal:
-                    info["Status"] = f"✅ {sinal}"
-                    salvar_sinal_db(f_id, info["Jogo"], sinal, sc+sf)
-        radar.append(info)
+                    item["Status"] = f"✅ {sinal}"
+                    salvar_sinal_db(f_id, item["Jogo"], sinal, sc+sf)
+        radar.append(item)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📡 Ao Vivo", "📅 Próximos", "📊 Histórico", "🚫 Bloqueadas"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📡 Ao Vivo", "📅 Próximos", "📊 Histórico Total", "🚫 Ligas Bloqueadas"])
     
     with tab1:
         if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
@@ -156,14 +171,23 @@ if ROBO_LIGADO:
 
     with tab3:
         df_h = carregar_db()
-        if not df_h.empty: st.dataframe(df_h.sort_values("hora", ascending=False), use_container_width=True, hide_index=True)
-        else: st.caption("Sem sinais ainda.")
+        if not df_h.empty:
+            # Ordena pelo histórico mais recente (data e hora)
+            df_h = df_h.sort_values(by=['data', 'hora'], ascending=False)
+            st.dataframe(df_h, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum sinal no histórico ainda.")
 
     with tab4:
-        if st.session_state['ligas_sem_stats']: st.table(list(st.session_state['ligas_sem_stats'].values()))
+        if st.session_state['ligas_sem_stats']:
+            st.table(list(st.session_state['ligas_sem_stats'].values()))
         else: st.caption("Nenhuma liga na blacklist.")
 
     time.sleep(INTERVALO)
     st.rerun()
 else:
-    st.info("Ligue o robô na barra lateral para começar.")
+    st.info("Ligue o robô na barra lateral. O histórico será carregado automaticamente.")
+    df_h = carregar_db()
+    if not df_h.empty:
+        st.subheader("📊 Últimos Sinais Gravados")
+        st.dataframe(df_h.sort_values(by=['data', 'hora'], ascending=False).head(10), use_container_width=True, hide_index=True)
