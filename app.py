@@ -22,6 +22,15 @@ st.markdown("""
 def agora_brasil():
     return datetime.utcnow() - timedelta(hours=3)
 
+def enviar_teste_telegram(token, chat_ids):
+    if token and chat_ids:
+        for cid in chat_ids.split(','):
+            try:
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                requests.post(url, data={"chat_id": cid.strip(), "text": "❄️ Neves Analytics: Teste de conexão do bot realizado com sucesso!"}, timeout=10)
+            except Exception as e:
+                st.error(f"Erro ao enviar para {cid}: {e}")
+
 # --- 3. BANCO DE DADOS ---
 DB_FILE = 'neves_dados.txt'
 
@@ -43,13 +52,22 @@ def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     
-    # O conteúdo agora fica retraído
     with st.expander("⚙️ Painel de Configuração", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
         tg_token = st.text_input("Telegram Token:", type="password")
         tg_chat_ids = st.text_input("Chat IDs:")
+        
+        # BOTÃO DE TESTE INCLUÍDO AQUI
+        if st.button("🔔 Testar Envio Telegram"):
+            if tg_token and tg_chat_ids:
+                enviar_teste_telegram(tg_token, tg_chat_ids)
+                st.toast("Tentativa de envio realizada!", icon="📩")
+            else:
+                st.warning("Preencha o Token e os Chat IDs primeiro.")
+
         INTERVALO = st.slider("Ciclo (seg):", 60, 300, 60)
         MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
+        
         if st.button("🗑️ Resetar Banco"):
             if os.path.exists(DB_FILE): os.remove(DB_FILE)
             st.rerun()
@@ -88,7 +106,6 @@ st.title("❄️ Neves Analytics")
 if ROBO_LIGADO:
     st.markdown('<div class="status-online">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
     
-    # Placeholder para o Timer e Barra de Progresso
     timer_placeholder = st.empty()
     bar_placeholder = st.empty()
     
@@ -110,12 +127,10 @@ if ROBO_LIGADO:
                 info["Status"] = "🚫"
         radar.append(info)
 
-    # Dados para as abas
     prox_lista = buscar_proximos(API_KEY)
     hist_df = carregar_db()
     black_count = len(st.session_state['ligas_sem_stats'])
 
-    # --- ABAS COM CONTADORES ---
     t1, t2, t3, t4 = st.tabs([
         f"📡 Ao Vivo ({len(radar)})", 
         f"📅 Próximos ({len(prox_lista)})", 
@@ -140,7 +155,6 @@ if ROBO_LIGADO:
         if st.session_state['ligas_sem_stats']: st.table(list(st.session_state['ligas_sem_stats'].values()))
         else: st.caption("Nenhuma liga bloqueada.")
 
-    # Timer de Contagem Regressiva
     for i in range(INTERVALO, 0, -1):
         timer_placeholder.markdown(f'<div class="timer-text">Atualizando em {i}s</div>', unsafe_allow_html=True)
         bar_placeholder.progress(i / INTERVALO)
