@@ -32,7 +32,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. FUNÇÕES DE BANCO DE DADOS E NOTIFICAÇÃO ---
+# --- 2. AJUSTE DE FUSO HORÁRIO (BRASIL) ---
+def agora_brasil():
+    # O servidor é UTC. Subtraímos 3 horas para Brasil.
+    return datetime.utcnow() - timedelta(hours=3)
+
+# --- 3. FUNÇÕES DE BANCO DE DADOS E NOTIFICAÇÃO ---
 DB_FILE = 'neves_dados.txt'
 
 def enviar_msg_telegram(token, chat_ids, mensagem):
@@ -52,10 +57,12 @@ def carregar_db():
 def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
     df = carregar_db()
     if not ((df['id'] == fixture_id) & (df['status'] == 'Pendente')).any():
+        # AQUI O AJUSTE DE HORA
+        data_br = agora_brasil()
         novo_registro = {
             'id': fixture_id,
-            'data': datetime.today().strftime('%Y-%m-%d'),
-            'hora': datetime.now().strftime('%H:%M'),
+            'data': data_br.strftime('%Y-%m-%d'),
+            'hora': data_br.strftime('%H:%M'), # Hora corrigida
             'jogo': jogo,
             'sinal': sinal,
             'gols_inicial': gols_inicial,
@@ -81,7 +88,6 @@ def atualizar_status_db(lista_jogos_api, tg_token=None, tg_chat_ids=None):
             if gols_agora > row['gols_inicial']:
                 df.at[index, 'status'] = 'Green'
                 modificado = True
-                # Notificar Green
                 if tg_token and tg_chat_ids:
                     msg = f"✅ **GREEN! PAGOU!** 💰\n\n⚽ **{row['jogo']}**\n\nO sinal de **{row['sinal']}** bateu!\nDinheiro no bolso. A análise foi perfeita. 🚀"
                     enviar_msg_telegram(tg_token, tg_chat_ids, msg)
@@ -90,7 +96,6 @@ def atualizar_status_db(lista_jogos_api, tg_token=None, tg_chat_ids=None):
             elif status_match in ['FT', 'AET', 'PEN']:
                 df.at[index, 'status'] = 'Red'
                 modificado = True
-                # Notificar Red
                 if tg_token and tg_chat_ids:
                     msg = f"🔻 **RED - SEGUE O PLANO**\n\n⚽ **{row['jogo']}**\n\nO sinal não bateu desta vez.\nFaz parte do jogo. Cabeça fria e foco na próxima oportunidade! 💪"
                     enviar_msg_telegram(tg_token, tg_chat_ids, msg)
@@ -104,7 +109,9 @@ def gerar_texto_relatorio():
     if df.empty: return None
     
     df['data'] = pd.to_datetime(df['data'])
-    hoje = pd.Timestamp.today().normalize()
+    
+    # DATA BRASIL PARA O RELATÓRIO
+    hoje = pd.Timestamp(agora_brasil().date())
     
     df_hoje = df[df['data'] == hoje]
     start_week = hoje - timedelta(days=hoje.weekday())
@@ -139,7 +146,7 @@ def gerar_texto_relatorio():
 """
     return msg
 
-# --- 3. SIDEBAR E CONFIGURAÇÕES ---
+# --- 4. SIDEBAR E CONFIGURAÇÕES ---
 with st.sidebar:
     st.header("⚙️ Configurações")
     if 'api_key' not in st.session_state: st.session_state['api_key'] = ""
@@ -170,7 +177,7 @@ with st.sidebar:
             
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
-# --- 4. FUNÇÕES DE API ---
+# --- 5. FUNÇÕES DE API ---
 def gerar_sinais_teste(): 
     return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 35}}, "league": {"name": "Simulacao"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Real"}, "away": {"name": "Almeria"}}}]
 def gerar_odds_teste(fid): return (1.20, 15.00)
@@ -181,7 +188,9 @@ def buscar_jogos(api_key):
     if MODO_DEMO: return gerar_sinais_teste()
     url = "https://v3.football.api-sports.io/fixtures"
     headers = {"x-apisports-key": api_key}
-    try: return requests.get(url, headers=headers, params={"date": datetime.today().strftime('%Y-%m-%d')}).json().get('response', [])
+    # AQUI: Usa a data do Brasil para buscar os jogos
+    data_hoje_br = agora_brasil().strftime('%Y-%m-%d')
+    try: return requests.get(url, headers=headers, params={"date": data_hoje_br}).json().get('response', [])
     except: return []
 
 def buscar_stats(api_key, fixture_id):
@@ -212,7 +221,7 @@ def buscar_odds_cached(api_key, fixture_id):
     except: pass
     return 0, 0
 
-# --- 5. CÉREBRO ---
+# --- 6. CÉREBRO ---
 def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
     def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
     gol_c = v(s_casa, 'Shots on Goal'); gol_f = v(s_fora, 'Shots on Goal')
@@ -275,7 +284,7 @@ def traduzir_instrucao(sinal, time_fav=""):
     elif "GIGANTE" in sinal: return "Entrar em **Mais 1 Gol**."
     else: return "Entrar em **Mais Gols**."
 
-# --- 6. EXECUÇÃO PRINCIPAL ---
+# --- 7. EXECUÇÃO PRINCIPAL ---
 st.title("❄️ Neves Analytics")
 
 if ROBO_LIGADO:
@@ -283,21 +292,23 @@ if ROBO_LIGADO:
         st.error("⚠️ Coloque a API Key na barra lateral!")
     else:
         st.markdown('<div class="status-online">🟢 SISTEMA ONLINE</div>', unsafe_allow_html=True)
-        st.caption(f"Ciclo: {INTERVALO}s | Banco de Dados: neves_dados.txt")
+        st.caption(f"Ciclo: {INTERVALO}s | Banco: neves_dados.txt (Fuso BR)")
         
         jogos = buscar_jogos(API_KEY)
-        
-        # AGORA AQUI: Passamos o Token para o atualizador enviar o Green/Red
         atualizar_status_db(jogos, tg_token, tg_chat_ids)
         
-        # Relatório Automático 22h
+        # Relatório Automático 22h (Horário Brasil)
         if 'relatorio_enviado_hoje' not in st.session_state: st.session_state['relatorio_enviado_hoje'] = None
-        hora = int(datetime.now().strftime('%H'))
-        if hora >= 22 and st.session_state['relatorio_enviado_hoje'] != datetime.today().strftime('%Y-%m-%d'):
+        
+        # AQUI O PULO DO GATO: Usa a hora do Brasil para saber se é 22h
+        hora_br = int(agora_brasil().strftime('%H'))
+        data_br = agora_brasil().strftime('%Y-%m-%d')
+        
+        if hora_br >= 22 and st.session_state['relatorio_enviado_hoje'] != data_br:
             rel = gerar_texto_relatorio()
             if rel and tg_token and tg_chat_ids:
                 enviar_msg_telegram(tg_token, tg_chat_ids, rel)
-                st.session_state['relatorio_enviado_hoje'] = datetime.today().strftime('%Y-%m-%d')
+                st.session_state['relatorio_enviado_hoje'] = data_br
 
         achou = False
         radar = []
