@@ -16,7 +16,7 @@ st.markdown("""
     .timer-text { font-size: 14px; color: #FFD700; text-align: center; font-weight: bold; margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;}
     .strategy-card { background-color: #1e1e1e; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #00FF00; }
     .strategy-title { color: #00FF00; font-weight: bold; font-size: 16px; margin-bottom: 5px; }
-    .strategy-desc { font-size: 13px; color: #cccccc; }
+    .strategy-desc { font-size: 13px; color: #cccccc; line-height: 1.6; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -70,7 +70,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Erro da Agenda Corrigido.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Sistema Completo Online.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -250,7 +250,6 @@ if ROBO_LIGADO:
     jogos_live = buscar_dados("fixtures", {"live": "all"})
     radar = []
     
-    # --- PROCESSAMENTO ---
     for j in jogos_live:
         l_id = str(j['league']['id'])
         if l_id in ids_bloqueados: continue
@@ -343,53 +342,65 @@ if ROBO_LIGADO:
         t1, t2, t3 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(prox_filtrado)})", f"🚫 Blacklist ({len(df_black)})"])
         
         with t1:
-            if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else: st.info("Monitorando jogos...")
-        
+            if radar:
+                st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
+            else:
+                st.info("Monitorando jogos...")
+            
         with t2:
-            # CORREÇÃO AQUI: Agora usa a variável certa 'prox_filtrado' e em blocos separados
+            # Correção aqui: Usa 'prox_filtrado' e está em bloco separado
             if prox_filtrado:
                 st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
             else:
                 st.caption("Sem mais jogos por hoje.")
-        
+            
         with t3:
-            if not df_black.empty: st.table(df_black)
-            else: st.caption("Limpo.")
+            if not df_black.empty:
+                st.table(df_black)
+            else:
+                st.caption("Limpo.")
 
+        # --- MANUAL (Restaurado e Detalhado) ---
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
             c1, c2 = st.columns(2)
+            
             with c1:
                 st.markdown("""
                 <div class="strategy-card">
                     <div class="strategy-title">🟣 A - Porteira Aberta</div>
                     <div class="strategy-desc">
-                        <b>Cenário:</b> Jogo frenético < 30'.<br>
+                        <b>Cenário:</b> Jogo frenético antes dos 30'.<br>
+                        <b>Gatilho Matemático:</b> Tempo <= 30' E Soma de Gols >= 2.<br>
                         <b>Ação:</b> Múltipla Over Gols.
                     </div>
                 </div>
                 <div class="strategy-card">
                     <div class="strategy-title">🟢 B - Reação / Blitz</div>
                     <div class="strategy-desc">
-                        <b>Cenário:</b> Fav perdendo e amassando.<br>
-                        <b>Ação:</b> Apostar no Gol ou Mais 1 Gol.
+                        <b>Cenário:</b> Time perdendo/empatando (< 60').<br>
+                        <b>Gatilho 1 (Volume):</b> 6+ chutes totais.<br>
+                        <b>Gatilho 2 (Blitz):</b> 2+ chutes no alvo nos últimos 7 min.<br>
+                        <b>Ação:</b> Back Favorito ou Over Gols.
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+            
             with c2:
                 st.markdown("""
                 <div class="strategy-card">
                     <div class="strategy-title">💰 C - Janela de Ouro</div>
                     <div class="strategy-desc">
-                        <b>Cenário:</b> Reta final (70-75') com pressão.<br>
+                        <b>Cenário:</b> Reta final (70'-75') indefinida.<br>
+                        <b>Gatilho Matemático:</b> 18+ chutes somados E Diferença <= 1 gol.<br>
                         <b>Ação:</b> Over Limite (Gol Asiático).
                     </div>
                 </div>
                 <div class="strategy-card">
                     <div class="strategy-title">⚡ D - Gol Relâmpago</div>
                     <div class="strategy-desc">
-                        <b>Cenário:</b> Início elétrico (5-15').<br>
-                        <b>Ação:</b> Over 0.5 HT.
+                        <b>Cenário:</b> Início elétrico (5'-15').<br>
+                        <b>Gatilho Matemático:</b> Pelo menos 1 chute no alvo de qualquer time.<br>
+                        <b>Ação:</b> Over 0.5 HT (Gol no 1º Tempo).
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
