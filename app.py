@@ -13,10 +13,11 @@ st.markdown("""
     .stApp {background-color: #121212; color: white;}
     .status-online {color: #00FF00; font-weight: bold; animation: pulse 2s infinite; padding: 10px; border: 1px solid #00FF00; text-align: center; border-radius: 15px; margin-bottom: 20px;}
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); } }
+    .update-info { font-size: 12px; color: #888; text-align: center; margin-bottom: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. GESTÃO DE ARQUIVOS (HISTÓRICO E BLACKLIST) ---
+# --- 2. GESTÃO DE ARQUIVOS ---
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 
@@ -54,16 +55,16 @@ def enviar_teste_telegram(token, chat_ids):
 # --- 4. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
-    with st.expander("⚙️ Painel de Configuração", expanded=False):
+    with st.expander("⚙️ Configurações", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
         tg_token = st.text_input("Telegram Token:", type="password")
         tg_chat_ids = st.text_input("Chat IDs:")
         if st.button("🔔 Testar Telegram"):
             enviar_teste_telegram(tg_token, tg_chat_ids)
             st.toast("Teste enviado!")
-        INTERVALO = st.slider("Ciclo (seg):", 60, 300, 60)
+        INTERVALO = st.number_input("Ciclo (segundos):", min_value=30, max_value=600, value=60)
         MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
-        if st.button("🗑️ Resetar Tudo (DB + Blacklist)"):
+        if st.button("🗑️ Resetar Tudo"):
             if os.path.exists(DB_FILE): os.remove(DB_FILE)
             if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
             st.rerun()
@@ -93,20 +94,20 @@ def buscar_dados(endpoint, params=None):
         return res.get('response', [])
     except: return []
 
-# --- 6. EXECUÇÃO PRINCIPAL ---
+# --- 6. EXECUÇÃO ---
 st.title("❄️ Neves Analytics")
 
 if ROBO_LIGADO:
     st.markdown('<div class="status-online">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
     
-    timer_col, prog_col = st.columns([1, 5])
-    t_text = timer_col.empty()
-    p_bar = prog_col.progress(0)
+    # Info de tempo simples e estável
+    agora = agora_brasil()
+    proxima = agora + timedelta(seconds=INTERVALO)
+    st.markdown(f'<div class="update-info">Última: {agora.strftime("%H:%M:%S")} | Próxima: {proxima.strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
 
-    # Carregar dados salvos
+    # Dados
     black_df = carregar_blacklist()
     black_ids = black_df['id'].astype(str).values
-    
     jogos_live = buscar_dados("fixtures", {"live": "all"})
     radar = []
     
@@ -118,7 +119,6 @@ if ROBO_LIGADO:
         if l_id in black_ids:
             info["Status"] = "🚫"
         else:
-            # Se saiu gol e não temos stats, bloqueia a liga para sempre
             stats = buscar_dados("statistics", {"fixture": f_id})
             if not stats and (sc+sf > 0):
                 salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
@@ -128,10 +128,10 @@ if ROBO_LIGADO:
     prox_lista = buscar_proximos(API_KEY)
     hist_df = carregar_db()
 
-    # Abas com contadores reais
+    # ABAS
     t1, t2, t3, t4 = st.tabs([f"📡 Ao Vivo ({len(radar)})", f"📅 Próximos ({len(prox_lista)})", f"📊 Histórico ({len(hist_df)})", f"🚫 Blacklist ({len(black_df)})"])
     
-    with t1: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True) if radar else st.info("Buscando...")
+    with t1: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True) if radar else st.info("Sem jogos.")
     with t2:
         if prox_lista:
             df_p = pd.DataFrame([{"Hora": j['fixture']['date'][11:16], "Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} vs {j['teams']['away']['name']}"} for j in prox_lista])
@@ -139,12 +139,11 @@ if ROBO_LIGADO:
     with t3: st.dataframe(hist_df.sort_values(by=['hora'], ascending=False), use_container_width=True, hide_index=True) if not hist_df.empty else st.caption("Vazio.")
     with t4: st.table(black_df[['País', 'Liga']]) if not black_df.empty else st.caption("Limpo.")
 
-    for i in range(INTERVALO, 0, -1):
-        t_text.markdown(f"**{i}s**")
-        p_bar.progress(i / INTERVALO)
-        time.sleep(1)
+    # Pausa e Recarrega
+    time.sleep(INTERVALO)
     st.rerun()
+
 else:
-    st.info("💡 Robô em espera.")
-    st.subheader("🚫 Ligas Bloqueadas (Permanente)")
+    st.info("💡 Robô desligado. Configure na barra lateral.")
+    st.subheader("🚫 Blacklist Atual")
     st.table(carregar_blacklist()[['País', 'Liga']])
