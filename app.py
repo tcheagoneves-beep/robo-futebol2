@@ -17,12 +17,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. GESTÃO DE DADOS ---
+# --- 2. GESTÃO DE DADOS E MEMÓRIA ---
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 
+# Memória de Alertas
 if 'alertas_enviados' not in st.session_state:
     st.session_state['alertas_enviados'] = set()
+
+# MEMÓRIA DE PRESSÃO (O SEGREDO DA LEITURA DE FLUXO)
+# Estrutura: { 'fixture_id': { 'home_sog_history': [timestamp1, timestamp2], 'away_sog_history': [], 'last_check': timestamp } }
+if 'memoria_pressao' not in st.session_state:
+    st.session_state['memoria_pressao'] = {}
 
 def carregar_blacklist():
     if not os.path.exists(BLACK_FILE): return pd.DataFrame(columns=['id', 'País', 'Liga'])
@@ -50,28 +56,27 @@ def agora_brasil():
 with st.sidebar:
     st.title("❄️ Neves Analytics PRO")
     
-    with st.expander("🧠 Cérebro (Estratégias)", expanded=True):
-        st.markdown("""
-        🟣 **A - Porteira Aberta (<30')**
-        _2+ gols cedo: Múltipla Over._
-        
-        ⚡ **D - Gol Relâmpago (5-15')**
-        _Início frenético: Over HT._
-        
-        🟢 **B - Reação Gigante (<50')**
-        _Fav. perdendo + Pressão: Back ou Over._
-        
-        💰 **C - Janela de Ouro (70-75')**
-        _Fav. não ganha + 18 chutes: Over Limite._
-        """)
+    with st.expander("🧠 Inteligência de Fluxo", expanded=True):
+        st.info(
+            """
+            **Detector de Blitz (Novo):**
+            O robô agora ignora chutes antigos.
+            Ele só alerta se identificar **2+ Chutes no Alvo**
+            numa janela recente de **7 minutos**.
+            
+            _Isso evita falsos positivos de times que chutaram
+            no 1º tempo e pararam._
+            """
+        )
     
     with st.expander("⚙️ Configurações", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
         tg_token = st.text_input("Telegram Token:", type="password")
         tg_chat_ids = st.text_input("Chat IDs:")
         
+        st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Sistema Online.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Detector de Blitz Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -80,12 +85,13 @@ with st.sidebar:
         if st.button("🗑️ Resetar Tudo"):
             if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
             st.session_state['alertas_enviados'] = set() 
+            st.session_state['memoria_pressao'] = {} # Reseta a memória de fluxo
             st.rerun()
 
     st.markdown("---")
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
-# --- 4. API & DATA MINING ---
+# --- 4. API ---
 @st.cache_data(ttl=3600)
 def buscar_proximos(key):
     if not key and not MODO_DEMO: return []
@@ -98,18 +104,12 @@ def buscar_proximos(key):
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
-        # SIMULAÇÃO DAS 4 ESTRATÉGIAS PARA TESTE
+        # SIMULAÇÃO: Cenário onde o time começa a chutar AGORA
         return [
-            # A: Porteira Aberta (25min, 1x1)
-            {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 25}}, "league": {"id": 1, "name": "Liga A", "country": "BR"}, "goals": {"home": 1, "away": 1}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}},
-            # B: Reação Gigante (40min, Fav perdendo 0x1, amassando)
-            {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 40}}, "league": {"id": 2, "name": "Liga B", "country": "UK"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Man City (Fav)"}, "away": {"name": "Zebra FC"}}},
-            # C: Janela Ouro (72min, 0x0, Pressão total)
-            {"fixture": {"id": 3, "status": {"short": "2H", "elapsed": 72}}, "league": {"id": 3, "name": "Liga C", "country": "ES"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Real Madrid"}, "away": {"name": "Getafe"}}},
-            # D: Gol Relâmpago (10min, 0x0, Chute no alvo)
-            {"fixture": {"id": 4, "status": {"short": "1H", "elapsed": 10}}, "league": {"id": 4, "name": "Liga D", "country": "DE"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Bayern"}, "away": {"name": "Dortmund"}}},
-            # Jogo Normal (Sem sinal)
-            {"fixture": {"id": 5, "status": {"short": "1H", "elapsed": 30}}, "league": {"id": 5, "name": "Liga Nada", "country": "IT"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time X"}, "away": {"name": "Time Y"}}}
+            {"fixture": {"id": 999, "status": {"short": "2H", "elapsed": 65}}, 
+             "league": {"id": 1, "name": "Liga Blitz", "country": "BR"}, 
+             "goals": {"home": 0, "away": 1}, 
+             "teams": {"home": {"name": "Time Reação"}, "away": {"name": "Time Fav"}}}
         ]
     if not API_KEY: return []
     try:
@@ -117,17 +117,62 @@ def buscar_dados(endpoint, params=None):
         return res.get('response', [])
     except: return []
 
-def buscar_stats(fid, demo_type=None):
+def buscar_stats(fid, demo_stage=0):
     if MODO_DEMO:
-        if fid == 1: return [] 
-        if fid == 2: return [{"team": {"name": "Home"}, "statistics": [{"type": "Total Shots", "value": 8}, {"type": "Dangerous Attacks", "value": 40}, {"type": "Shots on Goal", "value": 4}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Total Shots", "value": 1}, {"type": "Dangerous Attacks", "value": 5}, {"type": "Shots on Goal", "value": 0}]}]
-        if fid == 3: return [{"team": {"name": "Home"}, "statistics": [{"type": "Total Shots", "value": 15}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Total Shots", "value": 5}]}]
-        if fid == 4: return [{"team": {"name": "Home"}, "statistics": [{"type": "Shots on Goal", "value": 1}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Shots on Goal", "value": 1}]}]
-        return []
+        # Simula aumento de chutes conforme o tempo passa (para testar a memória)
+        # Se você rodar várias vezes, simula a atualização
+        base = 2
+        now = int(time.time())
+        if now % 120 > 60: base = 4 # Aumenta 2 chutes de repente
+        
+        return [
+            {"team": {"name": "Home"}, "statistics": [{"type": "Total Shots", "value": 10}, {"type": "Shots on Goal", "value": base}, {"type": "Dangerous Attacks", "value": 45}]},
+            {"team": {"name": "Away"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 1}, {"type": "Dangerous Attacks", "value": 15}]}
+        ]
     return buscar_dados("statistics", {"fixture": fid})
 
-# --- 5. O CÉREBRO (Processador de Estratégias) ---
+# --- 5. GESTOR DE MOMENTUM (A NOVA INTELIGÊNCIA) ---
+def atualizar_momentum(fid, sog_h_atual, sog_a_atual):
+    agora = datetime.now()
+    janela_tempo = timedelta(minutes=7) # Janela de 7 minutos exigida
+    
+    # Inicializa se não existir
+    if fid not in st.session_state['memoria_pressao']:
+        st.session_state['memoria_pressao'][fid] = {
+            'sog_h_total': sog_h_atual,
+            'sog_a_total': sog_a_atual,
+            'sog_h_timestamps': [],
+            'sog_a_timestamps': []
+        }
+        return 0, 0 # Primeiro ciclo não tem histórico de "novos" chutes
+
+    memoria = st.session_state['memoria_pressao'][fid]
+    
+    # 1. Detectar NOVOS chutes (Delta)
+    delta_h = max(0, sog_h_atual - memoria['sog_h_total'])
+    delta_a = max(0, sog_a_atual - memoria['sog_a_total'])
+    
+    # 2. Registrar o momento dos novos chutes
+    for _ in range(delta_h): memoria['sog_h_timestamps'].append(agora)
+    for _ in range(delta_a): memoria['sog_a_timestamps'].append(agora)
+    
+    # 3. Atualizar totais conhecidos
+    memoria['sog_h_total'] = sog_h_atual
+    memoria['sog_a_total'] = sog_a_atual
+    
+    # 4. LIMPEZA: Remover chutes velhos (> 7 min)
+    memoria['sog_h_timestamps'] = [t for t in memoria['sog_h_timestamps'] if agora - t <= janela_tempo]
+    memoria['sog_a_timestamps'] = [t for t in memoria['sog_a_timestamps'] if agora - t <= janela_tempo]
+    
+    # 5. Salvar de volta
+    st.session_state['memoria_pressao'][fid] = memoria
+    
+    # Retorna quantos chutes ocorreram NOS ÚLTIMOS 7 MIN
+    return len(memoria['sog_h_timestamps']), len(memoria['sog_a_timestamps'])
+
+# --- 6. PROCESSADOR ---
 def processar_jogo(j, stats):
+    f_id = j['fixture']['id']
     tempo = j['fixture']['status'].get('elapsed', 0)
     home = j['teams']['home']['name']
     away = j['teams']['away']['name']
@@ -143,15 +188,16 @@ def processar_jogo(j, stats):
                 return data['value'] if data and data['value'] else 0
             except: return 0
 
+        # Stats Totais
         sh_h = get_val(0, "Total Shots")
         sog_h = get_val(0, "Shots on Goal")
-        da_h = get_val(0, "Dangerous Attacks")
-        
         sh_a = get_val(1, "Total Shots")
         sog_a = get_val(1, "Shots on Goal")
-        da_a = get_val(1, "Dangerous Attacks")
-        
         total_chutes = sh_h + sh_a
+        
+        # --- CÁLCULO DE MOMENTUM (BLITZ) ---
+        # Quantos chutes no alvo aconteceram nos últimos 7 minutos?
+        recentes_h, recentes_a = atualizar_momentum(f_id, sog_h, sog_a)
         
         # A) PORTEIRA ABERTA (< 30 min, 2+ Gols)
         if tempo <= 30 and total_gols >= 2:
@@ -172,29 +218,31 @@ def processar_jogo(j, stats):
                     "stats": f"Chutes Alvo: {sog_h + sog_a}"
                 }
 
-        # B) REAÇÃO DO GIGANTE (Até 50 min)
-        if tempo <= 50:
-            fav_perdendo_h = (gh < ga) and (sh_h >= 6) and (da_h >= 30)
-            fav_perdendo_a = (ga < gh) and (sh_a >= 6) and (da_a >= 30)
-            
-            if fav_perdendo_h:
-                zebra_viva = (sh_a >= 4)
-                acao = "Entrar em OVER GOLS (Jogo Aberto)" if zebra_viva else "Apostar PRÓXIMO GOL DO FAVORITO"
+        # B) REAÇÃO DO GIGANTE (Até 65 min) - AGORA COM FILTRO DE 7 MINUTOS
+        if tempo <= 65:
+            # HOME PRESSIONANDO
+            # Critério: 2 chutes no alvo nos últimos 7 min (BLITZ) OU Pressão absurda acumulada
+            blitz_h = (recentes_h >= 2) 
+            if (gh <= ga) and blitz_h:
+                oponente_vivo = (recentes_a >= 1) # Oponente respondeu nos últimos 7 min?
+                acao = "⚠️ Jogo Aberto: Entrar em OVER GOLS" if oponente_vivo else "💎 BLITZ HOME: Back Home ou Gol Limite"
                 return {
-                    "tag": "🟢 Reação do Gigante",
+                    "tag": "🟢 Reação/Blitz",
                     "ordem": acao,
-                    "motivo": f"{home} perde mas amassa. Zebra {'VIVA' if zebra_viva else 'MORTA'}.",
-                    "stats": f"Chutes: {sh_h} vs {sh_a}"
+                    "motivo": f"{home} deu {recentes_h} chutes no alvo nos últimos 7 min!",
+                    "stats": f"Blitz Recente: {recentes_h} chutes (7')"
                 }
             
-            elif fav_perdendo_a:
-                zebra_viva = (sh_h >= 4)
-                acao = "Entrar em OVER GOLS (Jogo Aberto)" if zebra_viva else "Apostar PRÓXIMO GOL DO FAVORITO"
+            # AWAY PRESSIONANDO
+            blitz_a = (recentes_a >= 2)
+            if (ga <= gh) and blitz_a:
+                oponente_vivo = (recentes_h >= 1)
+                acao = "⚠️ Jogo Aberto: Entrar em OVER GOLS" if oponente_vivo else "💎 BLITZ AWAY: Back Away ou Gol Limite"
                 return {
-                    "tag": "🟢 Reação do Gigante",
+                    "tag": "🟢 Reação/Blitz",
                     "ordem": acao,
-                    "motivo": f"{away} perde mas amassa. Zebra {'VIVA' if zebra_viva else 'MORTA'}.",
-                    "stats": f"Chutes: {sh_h} vs {sh_a}"
+                    "motivo": f"{away} deu {recentes_a} chutes no alvo nos últimos 7 min!",
+                    "stats": f"Blitz Recente: {recentes_a} chutes (7')"
                 }
 
         # C) JANELA DE OURO (70 a 75 min)
@@ -230,7 +278,7 @@ if ROBO_LIGADO:
         away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"
         
-        dentro_janela = (5 <= tempo <= 50) or (70 <= tempo <= 75)
+        dentro_janela = (5 <= tempo <= 65) or (70 <= tempo <= 75)
         
         sinal = None
         icone_visual = "👁️"
@@ -250,24 +298,33 @@ if ROBO_LIGADO:
                 icone_visual = "✅"
                 if f_id not in st.session_state['alertas_enviados']:
                     msg = (
-                        f"🚨 *NEVES ANALYTICS PRO* 🚨\n\n"
+                        f"🔥 *ALERTA DE BLITZ (7')* 🔥\n\n"
                         f"⚽ *{home}* {placar} *{away}*\n"
                         f"🏆 {j['league']['name']}\n"
                         f"⏰ {tempo}'\n\n"
                         f"🧩 *Estratégia:* {sinal['tag']}\n"
-                        f"⚠️ *ORDEM:* {sinal['ordem']}\n\n"
-                        f"💡 *Motivo:* {sinal['motivo']}\n"
-                        f"📊 *Dados:* {sinal['stats']}"
+                        f"⚠️ *ORDEM:*\n"
+                        f"✅ *{sinal['ordem']}*\n\n"
+                        f"📊 *Inteligência:*\n"
+                        f"{sinal['motivo']}"
                     )
                     enviar_telegram_real(tg_token, tg_chat_ids, msg)
                     st.session_state['alertas_enviados'].add(f_id)
                     st.toast(f"Sinal Enviado: {sinal['tag']}")
 
+        # Mostra Momentum Visual se houver
+        mem = st.session_state['memoria_pressao'].get(f_id, {})
+        rec_h = len(mem.get('sog_h_timestamps', [])) if mem else 0
+        rec_a = len(mem.get('sog_a_timestamps', [])) if mem else 0
+        
+        info_mom = ""
+        if rec_h >= 1 or rec_a >= 1: info_mom = f" | ⚡ {rec_h}x{rec_a} (Recentes)"
+
         radar.append({
             "Liga": j['league']['name'],
             "Jogo": f"{home} {placar} {away}",
             "Tempo": f"{tempo}'",
-            "Status": f"{icone_visual} {sinal['tag'] if sinal else ''}"
+            "Status": f"{icone_visual} {sinal['tag'] if sinal else ''} {info_mom}"
         })
 
     prox = buscar_proximos(API_KEY)
@@ -284,19 +341,13 @@ if ROBO_LIGADO:
             if radar:
                 st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
             else:
-                st.info("Nenhum jogo encaixa nas estratégias agora.")
+                st.info("Aguardando novas oportunidades...")
             
         with t2:
-            if prox_f:
-                st.dataframe(pd.DataFrame(prox_f).sort_values("Hora"), use_container_width=True, hide_index=True)
-            else:
-                st.caption("Vazio.")
+            st.dataframe(pd.DataFrame(prox_f).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_f else st.caption("Vazio.")
             
         with t3:
-            if not df_black.empty:
-                st.table(df_black)
-            else:
-                st.caption("Limpo.")
+            st.table(df_black) if not df_black.empty else st.caption("Limpo.")
 
         relogio = st.empty()
         for i in range(INTERVALO, 0, -1):
