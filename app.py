@@ -341,9 +341,14 @@ if ROBO_LIGADO:
                 status_short = jogo['fixture']['status']['short']
                 league_id = jogo['league']['id'] 
                 
-                info = {"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']}x{jogo['goals']['away']} {jogo['teams']['away']['name']}", "Status": "👁️"}
+                # PREPARA INFO E PLACAR PARA ANÁLISE DE LISTA NEGRA
+                sc = jogo['goals']['home'] or 0
+                sf = jogo['goals']['away'] or 0
+                total_gols = sc + sf
                 
-                # --- FILTRO LISTA NEGRA ---
+                info = {"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {sc}x{sf} {jogo['teams']['away']['name']}", "Status": "👁️"}
+                
+                # --- FILTRO LISTA NEGRA (SE JÁ ESTIVER BLOQUEADO) ---
                 if league_id in st.session_state['ligas_sem_stats']:
                     info['Status'] = "🚫 (Sem Stats)"
                     radar.append(info)
@@ -354,15 +359,20 @@ if ROBO_LIGADO:
                 if zona_quente:
                     stats = buscar_stats(API_KEY, jogo['fixture']['id'])
                     
-                    # --- INTELIGÊNCIA: Só bloqueia se o jogo ACABOU (ou quase) sem stats ---
+                    # --- INTELIGÊNCIA: DEFINIÇÃO DE BLOQUEIO ---
                     if not stats:
-                        # Se jogo acabou (FT) ou está nos acrescimos finais (90+) e nao veio nada...
-                        # Ai sim é certeza que a liga não presta.
-                        if tempo >= 90 or status_short in ['FT', 'AET', 'PEN']:
+                        # REGRA 1: Se tem GOL e não tem STATS = Bloqueia Agora (Cobertura ruim)
+                        if total_gols > 0:
+                            st.session_state['ligas_sem_stats'].add(league_id)
+                            info['Status'] = "🚫 (Bloqueado Gols s/ Stats)"
+                        
+                        # REGRA 2: Se o jogo acabou (FT ou 90+) e não teve stats = Bloqueia
+                        elif tempo >= 90 or status_short in ['FT', 'AET', 'PEN']:
                             st.session_state['ligas_sem_stats'].add(league_id)
                             info['Status'] = "🚫 (Bloqueado Final)"
+                        
+                        # REGRA 3: Se está 0x0 e rolando = Espera
                         else:
-                            # Se ainda ta rolando (mesmo que seja 40min ou 80min), espera.
                             info['Status'] = "⏳ (Aguardando dados)"
                     
                     if stats:
@@ -371,7 +381,7 @@ if ROBO_LIGADO:
                         s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
                         s_fora = {i['type']: i['value'] for i in stats[1]['statistics']}
                         tc = jogo['teams']['home']['name']; tf = jogo['teams']['away']['name']
-                        sc = jogo['goals']['home'] or 0; sf = jogo['goals']['away'] or 0
+                        # Placar já extraído acima (sc, sf)
                         
                         sinal, motivo, chutes, no_gol, atq_p, tipo = analisar_partida(tempo, s_casa, s_fora, tc, tf, sc, sf, odd_casa, odd_fora)
                         
