@@ -159,8 +159,9 @@ with st.sidebar:
     st.markdown("---")
     st.header("🤖 Modo Automático")
     ROBO_LIGADO = st.checkbox("LIGAR ROBÔ", value=False)
-    # AJUSTE ECONÔMICO: Slider começa em 150s para proteger a conta
-    INTERVALO = st.slider("Ciclo (segundos):", 60, 300, 150)
+    
+    # --- VOLTAMOS PARA 60 SEGUNDOS (MODO SNIPER) ---
+    INTERVALO = st.slider("Ciclo (segundos):", 60, 300, 60)
     
     if st.button("🗑️ Limpar Histórico"):
         if os.path.exists(DB_FILE):
@@ -183,7 +184,6 @@ if 'cache_proximos' not in st.session_state:
     st.session_state['cache_proximos'] = {'data': [], 'hora_update': datetime.min}
 
 def buscar_jogos_live(api_key):
-    # Essa função busca APENAS jogos ao vivo (live=all). Muito mais leve.
     if MODO_DEMO: return gerar_sinais_teste()
     url = "https://v3.football.api-sports.io/fixtures"
     headers = {"x-apisports-key": api_key}
@@ -191,7 +191,6 @@ def buscar_jogos_live(api_key):
     except: return []
 
 def buscar_jogos_proximos(api_key):
-    # Cache 1h para Próximos
     agora = datetime.now()
     if (agora - st.session_state['cache_proximos']['hora_update']).total_seconds() < 3600:
         return st.session_state['cache_proximos']['data']
@@ -296,14 +295,6 @@ def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, od
             insight = f"Início Intenso ({tempo} min). {txt}"
     return sinal, insight, total_chutes, (gol_c + gol_f), (atq_c + atq_f), tipo_sinal
 
-def traduzir_instrucao(sinal, time_fav=""):
-    if "PRÓXIMO GOL" in sinal: return f"Apostar no **Próximo Gol** a favor do **{time_fav}**."
-    elif "MÚLTIPLA" in sinal: return "Adicionar na **Múltipla de Mais Gols**."
-    elif "JOGO ABERTO" in sinal: return "Entrar em **Over 2.5** ou **Over HT**."
-    elif "GOL CEDO" in sinal: return "Entrar em **Over 0.5 HT**."
-    elif "GIGANTE" in sinal: return "Entrar em **Mais 1 Gol**."
-    else: return "Entrar em **Mais Gols**."
-
 # --- 7. EXECUÇÃO PRINCIPAL ---
 st.title("❄️ Neves Analytics")
 
@@ -315,31 +306,24 @@ if ROBO_LIGADO:
         agora = agora_brasil()
         hora = agora.hour
         minuto = agora.minute
-        # Converte tudo para minutos do dia para facilitar a comparação
         minutos_do_dia = hora * 60 + minuto
         
-        # Inicio: 23:50 (1430 min) | Fim: 09:00 (540 min)
-        # Se for >= 23:50 OU < 09:00, dorme.
+        # 09:00 = 540 min | 23:50 = 1430 min
         if minutos_do_dia >= 1430 or minutos_do_dia < 540:
             st.markdown('<div class="status-sleep">💤 MODO DORMIR (09:00 às 23:50)</div>', unsafe_allow_html=True)
             st.info(f"O robô está descansando para economizar API. Retorno automático às 09:00. Hora atual: {agora.strftime('%H:%M')}")
-            
-            # Recarrega a cada 60s só para checar o relógio (sem gastar API)
             time.sleep(60)
             st.rerun()
             
         else:
-            # --- ROBÔ ATIVO (HORÁRIO DE OPERAÇÃO) ---
+            # --- ROBÔ ATIVO ---
             st.markdown('<div class="status-online">🟢 SISTEMA ONLINE</div>', unsafe_allow_html=True)
             st.caption(f"Ciclo: {INTERVALO}s | Banco: neves_dados.txt (Fuso BR)")
             
-            # 1. Busca Jogos AO VIVO (Leve)
             jogos_live = buscar_jogos_live(API_KEY)
-            
-            # 2. Atualiza Status DB
             atualizar_status_db(jogos_live, tg_token, tg_chat_ids)
             
-            # 3. Relatório Automático 22h
+            # Relatório 22h
             if 'relatorio_enviado_hoje' not in st.session_state: st.session_state['relatorio_enviado_hoje'] = None
             hora_br = int(agora.strftime('%H'))
             data_br = agora.strftime('%Y-%m-%d')
@@ -353,7 +337,6 @@ if ROBO_LIGADO:
             achou = False
             radar = []
             
-            # 4. Análise Apenas dos jogos AO VIVO
             for jogo in jogos_live:
                 tempo = jogo['fixture']['status'].get('elapsed', 0)
                 
@@ -402,9 +385,7 @@ if ROBO_LIGADO:
                     st.caption("Sem jogos ao vivo no momento.")
                     
             with t2:
-                # Chama a função que usa CACHE (não gasta API a cada ciclo)
                 prox_jogos = buscar_jogos_proximos(API_KEY)
-                
                 prox_formatado = []
                 for j in prox_jogos:
                     ts = j['fixture']['timestamp']
@@ -423,7 +404,6 @@ if ROBO_LIGADO:
                 if not df_hist.empty:
                     g = len(df_hist[df_hist['status']=='Green']); r = len(df_hist[df_hist['status']=='Red'])
                     st.metric("Total Greens", g); st.metric("Total Reds", r)
-                    # Gráfico
                     if g > 0 or r > 0:
                         fig = px.pie(names=['Green', 'Red', 'Pendente'], values=[g, r, len(df_hist[df_hist['status']=='Pendente'])], color_discrete_sequence=['#00C853', '#D50000', '#FFD600'])
                         st.plotly_chart(fig, use_container_width=True)
