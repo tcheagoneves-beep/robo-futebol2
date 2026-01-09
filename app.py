@@ -61,7 +61,7 @@ def salvar_sinal_db(fixture_id, jogo, sinal, gols_inicial):
         novo_registro = {
             'id': fixture_id,
             'data': data_br.strftime('%Y-%m-%d'),
-            'hora': data_br.strftime('%H:%M'), # Hora correta BR
+            'hora': data_br.strftime('%H:%M'), # Hora corrigida
             'jogo': jogo,
             'sinal': sinal,
             'gols_inicial': gols_inicial,
@@ -165,6 +165,12 @@ with st.sidebar:
     ROBO_LIGADO = st.checkbox("LIGAR ROBÔ", value=False)
     INTERVALO = st.slider("Ciclo (segundos):", 60, 300, 60)
     
+    # --- BOTÃO PARA LIMPAR DADOS ANTIGOS ---
+    if st.button("🗑️ Limpar Histórico"):
+        if os.path.exists(DB_FILE):
+            os.remove(DB_FILE)
+            st.rerun()
+    
     if st.button("📉 Enviar Relatório Agora"):
         if tg_token and tg_chat_ids:
             rel = gerar_texto_relatorio()
@@ -186,10 +192,8 @@ def buscar_jogos(api_key):
     if MODO_DEMO: return gerar_sinais_teste()
     url = "https://v3.football.api-sports.io/fixtures"
     headers = {"x-apisports-key": api_key}
-    
-    data_hoje_br = agora_brasil().strftime('%Y-%m-%d')
-    # AQUI ESTÁ A CORREÇÃO: timezone SP para pegar jogos da noite!
-    try: return requests.get(url, headers=headers, params={"date": data_hoje_br, "timezone": "America/Sao_Paulo"}).json().get('response', [])
+    # REMOVIDO FILTRO DE TIMEZONE PARA PEGAR TODOS OS JOGOS GLOBAIS
+    try: return requests.get(url, headers=headers, params={"date": datetime.today().strftime('%Y-%m-%d')}).json().get('response', [])
     except: return []
 
 def buscar_stats(api_key, fixture_id):
@@ -291,7 +295,7 @@ if ROBO_LIGADO:
         st.error("⚠️ Coloque a API Key na barra lateral!")
     else:
         st.markdown('<div class="status-online">🟢 SISTEMA ONLINE</div>', unsafe_allow_html=True)
-        st.caption(f"Ciclo: {INTERVALO}s | Banco: neves_dados.txt (Fuso BR)")
+        st.caption(f"Ciclo: {INTERVALO}s | Banco: neves_dados.txt")
         
         jogos = buscar_jogos(API_KEY)
         atualizar_status_db(jogos, tg_token, tg_chat_ids)
@@ -315,10 +319,13 @@ if ROBO_LIGADO:
             status = jogo['fixture']['status']['short']
             tempo = jogo['fixture']['status'].get('elapsed', 0)
             
+            # --- CORREÇÃO VISUAL DE FUSO E LISTA ---
             if status == 'NS':
-                # CORREÇÃO DA HORA DE EXIBIÇÃO (-3h)
                 ts = jogo['fixture']['timestamp']
-                hora_j = (datetime.fromtimestamp(ts) - timedelta(hours=3)).strftime('%H:%M')
+                dt_obj = datetime.fromtimestamp(ts) - timedelta(hours=3)
+                hora_j = dt_obj.strftime('%H:%M')
+                
+                # Só mostra se ainda não aconteceu (no horário BR)
                 prox.append({"Hora": hora_j, "Liga": jogo['league']['name'], "Jogo": f"{jogo['teams']['home']['name']} vs {jogo['teams']['away']['name']}"})
             
             elif status in ['1H', '2H'] and tempo:
@@ -370,7 +377,7 @@ if ROBO_LIGADO:
                 df_prox = pd.DataFrame(sorted(prox, key=lambda x: x['Hora']))
                 st.dataframe(df_prox, hide_index=True, use_container_width=True)
             else:
-                st.caption("Sem jogos futuros na lista de hoje (BR).")
+                st.caption("Sem jogos futuros na lista de hoje.")
         
         with t3:
             df_hist = carregar_db()
