@@ -50,21 +50,27 @@ def enviar_teste_telegram(token, chat_ids):
 def agora_brasil():
     return datetime.utcnow() - timedelta(hours=3)
 
-# --- 3. SIDEBAR (Lateral com Legenda Atualizada) ---
+# --- 3. SIDEBAR (Lateral Ajustada) ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     
-    # --- LEGENDA COM O NOVO ÍCONE ---
+    # --- LEGENDA CORRIGIDA ---
     with st.expander("ℹ️ Legenda de Status", expanded=True):
-        st.markdown("""
-        **O que cada ícone significa:**
-        
-        ⏳ : **Início** (0-5 min) - Aguardando.
-        👁️ : **Monitorando** (Jogo Ativo) - Buscando sinais.
-        💤 : **Stand By** (Intervalo/40-55') - Robô em pausa.
-        🏁 : **Fim Próximo** (>85 min) - Risco alto.
-        🚫 : **Bloqueado** - Sem estatísticas.
-        """)
+        st.info(
+            """
+            **Guia de Ícones:**
+            
+            ⏳ **Início (0-5')** _Aguardando estabilização._
+            
+            👁️ **Monitorando** _Jogo ativo buscando sinais._
+            
+            💤 **Stand By** _Intervalo ou pausa (40-55')._
+            
+            🏁 **Fim Próximo (>85')** _Risco alto, final de jogo._
+            
+            🚫 **Bloqueado** _Liga sem estatísticas._
+            """
+        )
     
     # --- CONFIGURAÇÕES ---
     with st.expander("⚙️ Configurações", expanded=False):
@@ -100,11 +106,12 @@ def buscar_proximos(key):
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
-        # Simulação para testar o ícone de soneca (💤)
+        # Simulação para ver se a legenda bate
         return [
-            {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 10}}, "league": {"id": 1, "name": "Liga Ativa", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}},
-            {"fixture": {"id": 2, "status": {"short": "HT", "elapsed": 45}}, "league": {"id": 2, "name": "Liga Intervalo", "country": "BR"}, "goals": {"home": 1, "away": 1}, "teams": {"home": {"name": "Time C"}, "away": {"name": "Time D"}}},
-            {"fixture": {"id": 3, "status": {"short": "2H", "elapsed": 88}}, "league": {"id": 3, "name": "Liga Final", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time E"}, "away": {"name": "Time F"}}}
+            {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 3}}, "league": {"id": 1, "name": "Liga Início", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}},
+            {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 25}}, "league": {"id": 2, "name": "Liga Ativa", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time C"}, "away": {"name": "Time D"}}},
+            {"fixture": {"id": 3, "status": {"short": "HT", "elapsed": 45}}, "league": {"id": 3, "name": "Liga Pausa", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time E"}, "away": {"name": "Time F"}}},
+            {"fixture": {"id": 4, "status": {"short": "2H", "elapsed": 89}}, "league": {"id": 4, "name": "Liga Fim", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time G"}, "away": {"name": "Time H"}}}
         ]
     if not API_KEY: return []
     try:
@@ -136,20 +143,17 @@ if ROBO_LIGADO:
         status_short = j['fixture']['status'].get('short', '')
         sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
         
-        # --- LÓGICA DE STATUS COM SONECA (💤) ---
-        icone = "👁️" # Padrão: Monitorando
+        # --- LÓGICA DE ÍCONES ---
+        icone = "👁️" # Padrão
         
-        # 1. Início de jogo
         if tempo < 5: 
             icone = "⏳"
-        # 2. Janela de Stand By (Final 1º tempo, Intervalo, Início 2º tempo)
         elif (40 <= tempo <= 55) or (status_short in ['HT', 'BT']):
             icone = "💤"
-        # 3. Fim de jogo
         elif tempo > 85: 
             icone = "🏁"
         
-        # Validação de Stats (Blacklist Check)
+        # Validação Stats
         if sc + sf > 0:
             stats = buscar_dados("statistics", {"fixture": f_id})
             if not stats and not MODO_DEMO:
