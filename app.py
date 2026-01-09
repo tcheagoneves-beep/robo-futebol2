@@ -70,7 +70,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Mensagens simplificadas.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Mensagens ajustadas.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -99,7 +99,6 @@ def buscar_proximos(key):
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
-        # SIMULAÇÃO
         return [
             {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 47}}, "league": {"id": 1, "name": "Liga Acréscimo", "country": "BR"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Fav (47')"}, "away": {"name": "Zebra"}}},
             {"fixture": {"id": 2, "status": {"short": "HT", "elapsed": 45}}, "league": {"id": 2, "name": "Liga Intervalo", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}}
@@ -188,14 +187,14 @@ def processar_jogo(j, stats):
                     "stats": f"Chutes Alvo: {sog_h + sog_a}"
                 }
 
-        # B) REAÇÃO DO GIGANTE / BLITZ (CORRIGIDO: TEXTOS CLAROS)
+        # B) REAÇÃO DO GIGANTE / BLITZ (MENSAGENS CORRIGIDAS)
         if tempo <= 60:
             # HOME PRESSIONANDO
             if (gh <= ga) and (recentes_h >= 2 or sh_h >= 6):
                 oponente_vivo = (recentes_a >= 1 or sh_a >= 4)
-                # SE OPONENTE VIVO = JOGO ABERTO (GOLS)
-                # SE OPONENTE MORTO = PRESSÃO PURA (PRÓXIMO GOL DO FAVORITO)
-                acao = "⚠️ Jogo Aberto: Entrar em OVER GOLS" if oponente_vivo else "✅ Apostar no PRÓXIMO GOL do Mandante"
+                # SE JOGO ABERTO (Ambos atacam) -> Mais 1 Gol
+                # SE SÓ UM ATACA (Zebra morta) -> Gol do Mandante
+                acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Mandante"
                 return {
                     "tag": "🟢 Reação/Blitz",
                     "ordem": acao,
@@ -206,7 +205,7 @@ def processar_jogo(j, stats):
             # AWAY PRESSIONANDO
             if (ga <= gh) and (recentes_a >= 2 or sh_a >= 6):
                 oponente_vivo = (recentes_h >= 1 or sh_h >= 4)
-                acao = "⚠️ Jogo Aberto: Entrar em OVER GOLS" if oponente_vivo else "✅ Apostar no PRÓXIMO GOL do Visitante"
+                acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Visitante"
                 return {
                     "tag": "🟢 Reação/Blitz",
                     "ordem": acao,
@@ -333,6 +332,11 @@ if ROBO_LIGADO:
         with t3:
             st.table(df_black) if not df_black.empty else st.caption("Limpo.")
 
+        relogio = st.empty()
+        for i in range(INTERVALO, 0, -1):
+            relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
+            time.sleep(1)
+
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
             c1, c2 = st.columns(2)
             with c1:
@@ -348,7 +352,7 @@ if ROBO_LIGADO:
                     <div class="strategy-title">🟢 B - Reação / Blitz</div>
                     <div class="strategy-desc">
                         <b>Cenário:</b> Fav perdendo e amassando.<br>
-                        <b>Ação:</b> Apostar no Próximo Gol.
+                        <b>Ação:</b> Apostar no Gol ou Mais 1 Gol.
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -369,11 +373,6 @@ if ROBO_LIGADO:
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-
-        relogio = st.empty()
-        for i in range(INTERVALO, 0, -1):
-            relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
-            time.sleep(1)
     
     st.rerun()
 
