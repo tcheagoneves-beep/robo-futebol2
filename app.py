@@ -47,6 +47,7 @@ def enviar_telegram_real(token, chat_ids, mensagem):
             except: pass
 
 def agora_brasil():
+    # Ajuste de Fuso Horário (-3h)
     return datetime.utcnow() - timedelta(hours=3)
 
 # --- 3. SIDEBAR ---
@@ -60,7 +61,7 @@ with st.sidebar:
         ✅ **C - Janela de Ouro** (70-75')
         ✅ **D - Gol Relâmpago** (5-15')
         """)
-        st.info("ℹ️ **Ajuste:** Soneca apenas no Intervalo (HT).")
+        st.info("ℹ️ **Agenda:** Filtrando apenas jogos futuros de HOJE.")
     
     with st.expander("⚙️ Configurações", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
@@ -69,7 +70,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Correção Visual Aplicada.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Agenda ajustada.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -90,7 +91,10 @@ def buscar_proximos(key):
     if not key and not MODO_DEMO: return []
     try:
         url = "https://v3.football.api-sports.io/fixtures"
-        params = {"date": agora_brasil().strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}
+        # Garante que pede a data de HOJE no fuso Brasil
+        data_hoje = agora_brasil().strftime('%Y-%m-%d')
+        params = {"date": data_hoje, "timezone": "America/Sao_Paulo"}
+        
         res = requests.get(url, headers={"x-apisports-key": key}, params=params, timeout=10).json()
         return res.get('response', [])
     except: return []
@@ -231,6 +235,7 @@ if ROBO_LIGADO:
     jogos_live = buscar_dados("fixtures", {"live": "all"})
     radar = []
     
+    # --- PROCESSAMENTO AO VIVO ---
     for j in jogos_live:
         l_id = str(j['league']['id'])
         if l_id in ids_bloqueados: continue
@@ -242,11 +247,9 @@ if ROBO_LIGADO:
         away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"
         
-        # --- LÓGICA DE JANELA (CORRIGIDA E SEGURA) ---
         eh_intervalo = (status_short in ['HT', 'BT']) or (48 <= tempo <= 52)
         eh_aquecimento = (tempo < 5)
         eh_fim = (tempo > 80)
-        
         dentro_janela = not (eh_intervalo or eh_aquecimento or eh_fim)
         
         sinal = None
@@ -294,15 +297,37 @@ if ROBO_LIGADO:
             "Status": f"{icone_visual} {sinal['tag'] if sinal else ''}{info_mom}"
         })
 
-    prox = buscar_proximos(API_KEY)
-    prox_f = [{"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"} 
-              for p in prox if str(p['league']['id']) not in ids_bloqueados and p['fixture']['status']['short'] == 'NS']
+    # --- PROCESSAMENTO DA AGENDA (FILTRADA) ---
+    prox_raw = buscar_proximos(API_KEY)
+    prox_filtrado = []
+    
+    hora_atual = agora_brasil().strftime('%H:%M')
+    
+    for p in prox_raw:
+        lid = str(p['league']['id'])
+        status = p['fixture']['status']['short']
+        data_jogo_raw = p['fixture']['date'] # Ex: 2026-01-09T20:00:00-03:00
+        
+        # Filtros Básicos
+        if lid in ids_bloqueados: continue
+        if status != 'NS': continue
+        
+        # Filtro de Hora (Só mostra jogos FUTUROS do dia de hoje)
+        hora_jogo = data_jogo_raw[11:16]
+        if hora_jogo <= hora_atual: continue # Se já passou do horário, não mostra na agenda
+        
+        prox_filtrado.append({
+            "Hora": hora_jogo, 
+            "Liga": p['league']['name'], 
+            "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
+        })
 
+    # --- EXIBIÇÃO ---
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        t1, t2, t3 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(prox_f)})", f"🚫 Blacklist ({len(df_black)})"])
+        t1, t2, t3 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(prox_filtrado)})", f"🚫 Blacklist ({len(df_black)})"])
         
         with t1:
             if radar:
@@ -311,10 +336,10 @@ if ROBO_LIGADO:
                 st.info("Monitorando jogos...")
             
         with t2:
-            if prox_f:
-                st.dataframe(pd.DataFrame(prox_f).sort_values("Hora"), use_container_width=True, hide_index=True)
+            if prox_filtrado:
+                st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
             else:
-                st.caption("Vazio.")
+                st.caption("Sem mais jogos por hoje.")
             
         with t3:
             if not df_black.empty:
