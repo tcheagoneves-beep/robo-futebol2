@@ -80,11 +80,6 @@ def atualizar_status_db(lista_jogos_api, tg_token=None, tg_chat_ids=None):
         # Tenta achar o jogo na lista AO VIVO
         jogo_dados = next((j for j in lista_jogos_api if j['fixture']['id'] == row['id']), None)
         
-        # Se não achar na lista ao vivo (pode ter acabado), teríamos que buscar individualmente.
-        # Mas para economizar API, vamos atualizar apenas enquanto ele estiver no radar ao vivo ou
-        # quando o robô rodar a rotina de limpeza (futuro).
-        # Por enquanto, atualiza se estiver na lista 'live'.
-        
         if jogo_dados:
             gols_agora = (jogo_dados['goals']['home'] or 0) + (jogo_dados['goals']['away'] or 0)
             status_match = jogo_dados['fixture']['status']['short']
@@ -219,4 +214,203 @@ def buscar_jogos_proximos(api_key):
 
 # FUNÇÕES TESTE E STATS
 def gerar_sinais_teste(): 
-    return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed
+    return [{"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 35}}, "league": {"name": "Simulacao"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Real"}, "away": {"name": "Almeria"}}}]
+def gerar_odds_teste(fid): return (1.20, 15.00)
+def gerar_stats_teste(fid): 
+    return [{"team": {"name": "C"}, "statistics": [{"type": "Total Shots", "value": 15}, {"type": "Shots on Goal", "value": 6}, {"type": "Dangerous Attacks", "value": 50}]}, {"team": {"name": "F"}, "statistics": [{"type": "Total Shots", "value": 5}, {"type": "Shots on Goal", "value": 3}, {"type": "Dangerous Attacks", "value": 20}]}]
+
+def buscar_stats(api_key, fixture_id):
+    if MODO_DEMO: return gerar_stats_teste(fixture_id)
+    url = "https://v3.football.api-sports.io/fixtures/statistics"
+    headers = {"x-apisports-key": api_key}
+    try: return requests.get(url, headers=headers, params={"fixture": fixture_id}).json().get('response', [])
+    except: return []
+
+if 'odds_cache' not in st.session_state: st.session_state['odds_cache'] = {}
+def buscar_odds_cached(api_key, fixture_id):
+    if MODO_DEMO: return gerar_odds_teste(fixture_id)
+    if fixture_id in st.session_state['odds_cache']:
+        return st.session_state['odds_cache'][fixture_id]
+    url = "https://v3.football.api-sports.io/odds"
+    headers = {"x-apisports-key": api_key}
+    try:
+        data = requests.get(url, headers=headers, params={"fixture": fixture_id, "bookmaker": "1"}).json()
+        if data.get('response'):
+            bets = data['response'][0]['bookmakers'][0]['bets']
+            winner_bet = next((b for b in bets if b['id'] == 1), None)
+            if winner_bet:
+                odd_casa = float(next((v['odd'] for v in winner_bet['values'] if v['value'] == 'Home'), 0))
+                odd_fora = float(next((v['odd'] for v in winner_bet['values'] if v['value'] == 'Away'), 0))
+                st.session_state['odds_cache'][fixture_id] = (odd_casa, odd_fora)
+                return odd_casa, odd_fora
+    except: pass
+    return 0, 0
+
+# --- 6. CÉREBRO ---
+def analisar_partida(tempo, s_casa, s_fora, t_casa, t_fora, sc, sf, odd_casa, odd_fora):
+    def v(d, k): val = d.get(k, 0); return int(str(val).replace('%','')) if val else 0
+    gol_c = v(s_casa, 'Shots on Goal'); gol_f = v(s_fora, 'Shots on Goal')
+    chutes_c = v(s_casa, 'Total Shots'); chutes_f = v(s_fora, 'Total Shots')
+    atq_c = v(s_casa, 'Dangerous Attacks'); atq_f = v(s_fora, 'Dangerous Attacks')
+    total_chutes = chutes_c + chutes_f
+    sinal = None; insight = ""; tipo_sinal = "normal"
+    
+    favorito = None; nome_favorito = ""; eh_gigante = False
+    if odd_casa > 0 and odd_fora > 0:
+        if odd_casa <= 1.55: favorito = "CASA"; nome_favorito = t_casa; eh_gigante = True
+        elif odd_fora <= 1.55: favorito = "FORA"; nome_favorito = t_fora; eh_gigante = True
+        elif odd_casa <= 1.90: favorito = "CASA"; nome_favorito = t_casa
+        elif odd_fora <= 1.90: favorito = "FORA"; nome_favorito = t_fora
+
+    if tempo <= 30 and (sc + sf) >= 2:
+        sinal = "CANDIDATO P/ MÚLTIPLA (2+ Gols)"
+        tipo_sinal = "multipla"
+        insight = f"Porteira Aberta! {sc+sf} gols em {tempo} min."
+    elif tempo <= 50 and eh_gigante and not sinal:
+        fav_perdendo = (favorito == "CASA" and sc < sf) or (favorito == "FORA" and sf < sc)
+        if fav_perdendo:
+            fc = chutes_c if favorito == "CASA" else chutes_f
+            fa = atq_c if favorito == "CASA" else atq_f
+            zc = chutes_f if favorito == "CASA" else chutes_c
+            za = atq_f if favorito == "CASA" else atq_c
+            if fc >= 6 and fa > 30:
+                zebra_viva = (zc >= 4) or (za >= 15)
+                if not zebra_viva:
+                    sinal = f"PRÓXIMO GOL: {nome_favorito}"
+                    insight = f"Gigante ({nome_favorito}) perde mas domina. Zebra inofensiva."
+                    tipo_sinal = "normal"
+                else:
+                    sinal = "JOGO ABERTO (OVER GOLS)"
+                    insight = f"Favorito desesperado, mas Zebra perigosa! Over Gols."
+                    tipo_sinal = "over"
+    elif 70 <= tempo <= 75 and eh_gigante and not sinal:
+        nao_ganhando = (favorito == "CASA" and sc <= sf) or (favorito == "FORA" and sf <= sc)
+        if nao_ganhando:
+            stats_chutes = chutes_c if favorito == "CASA" else chutes_f
+            if stats_chutes >= 18:
+                sinal = "GOL (GIGANTE PRESSIONA)"
+                insight = f"Gigante precisa do gol urgente."
+    elif 5 <= tempo <= 15 and not sinal:
+        if atq_c >= atq_f: forte=t_casa; g_forte=gol_c; fraco=t_fora; g_fraco=gol_f
+        else: forte=t_fora; g_forte=gol_f; fraco=t_casa; g_fraco=gol_c
+        txt = ""
+        if g_forte >= 1: txt = f"Dominante ({forte}) chutou no alvo."
+        if g_fraco >= 2: txt = f"Zebra ({fraco}) chutou 2x no alvo."
+        if txt:
+            sinal = "GOL CEDO (HT)"
+            insight = f"Início Intenso ({tempo} min). {txt}"
+    return sinal, insight, total_chutes, (gol_c + gol_f), (atq_c + atq_f), tipo_sinal
+
+# --- 7. EXECUÇÃO PRINCIPAL ---
+st.title("❄️ Neves Analytics")
+
+if ROBO_LIGADO:
+    if not API_KEY and not MODO_DEMO:
+        st.error("⚠️ Coloque a API Key na barra lateral!")
+    else:
+        st.markdown('<div class="status-online">🟢 SISTEMA ONLINE</div>', unsafe_allow_html=True)
+        st.caption(f"Ciclo: {INTERVALO}s | Banco: neves_dados.txt (Fuso BR)")
+        
+        # 1. Busca Jogos AO VIVO (Leve)
+        jogos_live = buscar_jogos_live(API_KEY)
+        
+        # 2. Atualiza Status DB
+        atualizar_status_db(jogos_live, tg_token, tg_chat_ids)
+        
+        # 3. Relatório Automático 22h
+        if 'relatorio_enviado_hoje' not in st.session_state: st.session_state['relatorio_enviado_hoje'] = None
+        hora_br = int(agora_brasil().strftime('%H'))
+        data_br = agora_brasil().strftime('%Y-%m-%d')
+        
+        if hora_br >= 22 and st.session_state['relatorio_enviado_hoje'] != data_br:
+            rel = gerar_texto_relatorio()
+            if rel and tg_token and tg_chat_ids:
+                enviar_msg_telegram(tg_token, tg_chat_ids, rel)
+                st.session_state['relatorio_enviado_hoje'] = data_br
+
+        achou = False
+        radar = []
+        
+        # 4. Análise Apenas dos jogos AO VIVO
+        for jogo in jogos_live:
+            tempo = jogo['fixture']['status'].get('elapsed', 0)
+            
+            info = {"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']}x{jogo['goals']['away']} {jogo['teams']['away']['name']}", "Status": "👁️"}
+            
+            zona_quente = (tempo <= 50) or (70 <= tempo <= 75)
+            
+            if zona_quente:
+                stats = buscar_stats(API_KEY, jogo['fixture']['id'])
+                if stats:
+                    odd_casa, odd_fora = buscar_odds_cached(API_KEY, jogo['fixture']['id'])
+                    
+                    s_casa = {i['type']: i['value'] for i in stats[0]['statistics']}
+                    s_fora = {i['type']: i['value'] for i in stats[1]['statistics']}
+                    tc = jogo['teams']['home']['name']; tf = jogo['teams']['away']['name']
+                    sc = jogo['goals']['home'] or 0; sf = jogo['goals']['away'] or 0
+                    
+                    sinal, motivo, chutes, no_gol, atq_p, tipo = analisar_partida(tempo, s_casa, s_fora, tc, tf, sc, sf, odd_casa, odd_fora)
+                    
+                    if sinal:
+                        achou = True
+                        cls = "multipla-box" if tipo=="multipla" else "alerta-over-box" if tipo=="over" else "sinal-box"
+                        st.markdown(f"""<div class="card"><div style="display:flex; justify-content:space-between;"><div style="width:40%"><div class="titulo-time">{tc}</div><span class="odd-label">{odd_casa:.2f}</span></div><div style="width:20%;text-align:center"><div class="placar">{sc}-{sf}</div><div class="tempo">{tempo}'</div></div><div style="width:40%;text-align:right"><div class="titulo-time">{tf}</div><span class="odd-label">{odd_fora:.2f}</span></div></div><div class="{cls}">{sinal}</div><div class="insight-texto">{motivo}</div><div class="stats-row"><div><div class="metric-label">CHUTES</div><div class="metric-val">{chutes}</div></div><div><div class="metric-label">PERIGO</div><div class="metric-val" style="color:#FFD700;">{atq_p}</div></div></div></div>""", unsafe_allow_html=True)
+                        
+                        salvar_sinal_db(jogo['fixture']['id'], f"{tc} x {tf}", sinal, sc+sf)
+                        
+                        if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+                        chave = f"{jogo['fixture']['id']}_{sinal}"
+                        if tg_token and tg_chat_ids and chave not in st.session_state['alertas_enviados']:
+                            fav = tc if odd_casa < odd_fora else tf
+                            msg = f"🚨 **NEVES ANALYTICS**\n\n⚽ {tc} {sc}x{sf} {tf}\n⏰ {tempo}'\n💰 **{sinal}**\n\n✅ {traduzir_instrucao(sinal, fav)}\n\n📊 Chutes: {chutes} | Perigo: {atq_p}"
+                            enviar_msg_telegram(tg_token, tg_chat_ids, msg)
+                            st.session_state['alertas_enviados'].add(chave)
+            else: info["Status"] = "💤"
+            radar.append(info)
+        
+        if not achou: st.info(f"Monitorando {len(jogos_live)} jogos ao vivo...")
+        
+        t1, t2, t3 = st.tabs(["📡 Ao Vivo", "📅 Próximos (Cache 1h)", "📊 Performance"])
+        
+        with t1: 
+            if radar:
+                df_radar = pd.DataFrame(radar)
+                st.dataframe(df_radar, hide_index=True, use_container_width=True)
+            else:
+                st.caption("Sem jogos ao vivo no momento.")
+                
+        with t2:
+            # Chama a função que usa CACHE (não gasta API a cada ciclo)
+            prox_jogos = buscar_jogos_proximos(API_KEY)
+            
+            prox_formatado = []
+            for j in prox_jogos:
+                 ts = j['fixture']['timestamp']
+                 dt_obj = datetime.fromtimestamp(ts) - timedelta(hours=3)
+                 hora_j = dt_obj.strftime('%H:%M')
+                 prox_formatado.append({"Hora": hora_j, "Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} vs {j['teams']['away']['name']}"})
+            
+            if prox_formatado:
+                df_prox = pd.DataFrame(sorted(prox_formatado, key=lambda x: x['Hora']))
+                st.dataframe(df_prox, hide_index=True, use_container_width=True)
+            else:
+                st.caption("Sem jogos futuros na lista de hoje (BR).")
+        
+        with t3:
+            df_hist = carregar_db()
+            if not df_hist.empty:
+                g = len(df_hist[df_hist['status']=='Green']); r = len(df_hist[df_hist['status']=='Red'])
+                st.metric("Total Greens", g); st.metric("Total Reds", r)
+                # Gráfico
+                if g > 0 or r > 0:
+                    fig = px.pie(names=['Green', 'Red', 'Pendente'], values=[g, r, len(df_hist[df_hist['status']=='Pendente'])], color_discrete_sequence=['#00C853', '#D50000', '#FFD600'])
+                    st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(df_hist, hide_index=True, use_container_width=True)
+            else: st.info("Sem dados.")
+
+        time.sleep(INTERVALO)
+        st.rerun()
+
+else:
+    st.markdown('<div style="color: #FF4B4B; text-align: center; margin-bottom: 20px;">🔴 SISTEMA PAUSADO</div>', unsafe_allow_html=True)
+    if st.button("Rastrear Manual"): st.rerun()
