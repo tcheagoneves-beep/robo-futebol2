@@ -84,16 +84,19 @@ with st.sidebar:
         META_CHUTES = st.number_input("Gatilho de Chutes (Soma):", value=10, min_value=1)
 
         if st.button("🔔 Testar Telegram"):
+            # Exemplo exato de como vai chegar
             msg_teste = (
-                "🚨 *NEVES ANALYTICS*\n\n"
-                "⚽ *Teste x Teste*\n"
-                "⏰ 10'\n"
-                "💰 *TESTE DE CONFIGURAÇÃO*\n\n"
-                "✅ *Entrar em Mais 1 Gol*\n\n"
-                "📊 Chutes: 99 | Perigo: Alto"
+                "🔥 *ALERTA DE PRESSÃO* 🔥\n\n"
+                "⚽ *Time A* x *Time B*\n"
+                "🏆 Liga Teste\n"
+                "⏰ 32'\n\n"
+                "⚠️ *ORDEM:*\n"
+                "✅ *ENTRAR EM MAIS 1 GOL*\n\n"
+                "📊 *Estatísticas:*\n"
+                "Chutes Totais: 15 (Meta: 10)"
             )
             enviar_telegram_real(tg_token, tg_chat_ids, msg_teste)
-            st.toast("Teste enviado!")
+            st.toast("Teste enviado! Verifique o Telegram.")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
         MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
@@ -200,14 +203,16 @@ if ROBO_LIGADO:
                         # Verifica se já enviou alerta deste jogo
                         if f_id not in st.session_state['alertas_enviados']:
                             
-                            # MENSAGEM ESTILO NEVES (Call to Action)
+                            # MENSAGEM HÍBRIDA (VISUAL + ORDEM)
                             msg_telegram = (
-                                f"🚨 *NEVES ANALYTICS*\n\n"
-                                f"⚽ *{home_name} {sc}x{sf} {away_name}*\n"
-                                f"⏰ {tempo}'\n"
-                                f"💰 *GOL (PRESSÃO DETECTADA)*\n\n"
-                                f"✅ *Entrar em Mais 1 Gol*\n\n"
-                                f"📊 Chutes: {total_chutes} | Meta: {META_CHUTES}"
+                                f"🔥 *ALERTA DE PRESSÃO* 🔥\n\n"
+                                f"⚽ *{home_name}* x *{away_name}*\n"
+                                f"🏆 {j['league']['name']}\n"
+                                f"⏰ {tempo}'\n\n"
+                                f"⚠️ *ORDEM:*\n"
+                                f"✅ *ENTRAR EM MAIS 1 GOL*\n\n"
+                                f"📊 *Estatísticas:*\n"
+                                f"Chutes Totais: {total_chutes} (Meta: {META_CHUTES})"
                             )
                             
                             enviar_telegram_real(tg_token, tg_chat_ids, msg_telegram)
