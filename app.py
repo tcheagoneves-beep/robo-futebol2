@@ -78,14 +78,12 @@ def atualizar_status_db(lista_jogos_api, tg_token=None, tg_chat_ids=None):
     pendentes = df[df['status'] == 'Pendente']
     
     for index, row in pendentes.iterrows():
-        # Tenta achar o jogo na lista AO VIVO
         jogo_dados = next((j for j in lista_jogos_api if j['fixture']['id'] == row['id']), None)
         
         if jogo_dados:
             gols_agora = (jogo_dados['goals']['home'] or 0) + (jogo_dados['goals']['away'] or 0)
             status_match = jogo_dados['fixture']['status']['short']
             
-            # --- LÓGICA DE GREEN ---
             if gols_agora > row['gols_inicial']:
                 df.at[index, 'status'] = 'Green'
                 modificado = True
@@ -93,7 +91,6 @@ def atualizar_status_db(lista_jogos_api, tg_token=None, tg_chat_ids=None):
                     msg = f"✅ **GREEN! PAGOU!** 💰\n\n⚽ **{row['jogo']}**\n\nO sinal de **{row['sinal']}** bateu!\nDinheiro no bolso. A análise foi perfeita. 🚀"
                     enviar_msg_telegram(tg_token, tg_chat_ids, msg)
 
-            # --- LÓGICA DE RED ---
             elif status_match in ['FT', 'AET', 'PEN']:
                 df.at[index, 'status'] = 'Red'
                 modificado = True
@@ -160,7 +157,6 @@ with st.sidebar:
     st.header("🤖 Modo Automático")
     ROBO_LIGADO = st.checkbox("LIGAR ROBÔ", value=False)
     
-    # --- VOLTAMOS PARA 60 SEGUNDOS (MODO SNIPER) ---
     INTERVALO = st.slider("Ciclo (segundos):", 60, 300, 60)
     
     if st.button("🗑️ Limpar Histórico"):
@@ -178,7 +174,10 @@ with st.sidebar:
             
     MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
 
-# --- 5. FUNÇÕES DE API (ECONOMIA DE DADOS) ---
+# --- 5. FUNÇÕES DE API (COM MEMÓRIA DE LIGAS RUINS) ---
+
+if 'ligas_sem_stats' not in st.session_state:
+    st.session_state['ligas_sem_stats'] = set()
 
 if 'cache_proximos' not in st.session_state:
     st.session_state['cache_proximos'] = {'data': [], 'hora_update': datetime.min}
@@ -339,13 +338,33 @@ if ROBO_LIGADO:
             
             for jogo in jogos_live:
                 tempo = jogo['fixture']['status'].get('elapsed', 0)
+                status_short = jogo['fixture']['status']['short']
+                league_id = jogo['league']['id'] 
                 
                 info = {"Liga": jogo['league']['name'], "Tempo": f"{tempo}'", "Jogo": f"{jogo['teams']['home']['name']} {jogo['goals']['home']}x{jogo['goals']['away']} {jogo['teams']['away']['name']}", "Status": "👁️"}
                 
+                # --- FILTRO LISTA NEGRA ---
+                if league_id in st.session_state['ligas_sem_stats']:
+                    info['Status'] = "🚫 (Sem Stats)"
+                    radar.append(info)
+                    continue
+
                 zona_quente = (tempo <= 50) or (70 <= tempo <= 75)
                 
                 if zona_quente:
                     stats = buscar_stats(API_KEY, jogo['fixture']['id'])
+                    
+                    # --- INTELIGÊNCIA: Só bloqueia se o jogo ACABOU (ou quase) sem stats ---
+                    if not stats:
+                        # Se jogo acabou (FT) ou está nos acrescimos finais (90+) e nao veio nada...
+                        # Ai sim é certeza que a liga não presta.
+                        if tempo >= 90 or status_short in ['FT', 'AET', 'PEN']:
+                            st.session_state['ligas_sem_stats'].add(league_id)
+                            info['Status'] = "🚫 (Bloqueado Final)"
+                        else:
+                            # Se ainda ta rolando (mesmo que seja 40min ou 80min), espera.
+                            info['Status'] = "⏳ (Aguardando dados)"
+                    
                     if stats:
                         odd_casa, odd_fora = buscar_odds_cached(API_KEY, jogo['fixture']['id'])
                         
@@ -381,6 +400,7 @@ if ROBO_LIGADO:
                 if radar:
                     df_radar = pd.DataFrame(radar)
                     st.dataframe(df_radar, hide_index=True, use_container_width=True)
+                    st.caption(f"Ligas ignoradas por falta de dados: {len(st.session_state['ligas_sem_stats'])}")
                 else:
                     st.caption("Sem jogos ao vivo no momento.")
                     
