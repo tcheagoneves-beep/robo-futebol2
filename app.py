@@ -151,13 +151,14 @@ if ROBO_LIGADO:
 
     # 4. EXIBIÇÃO SEGURA (Dentro do container limpo)
     with main_placeholder.container():
+        st.title("❄️ Neves Analytics") # Título voltou
         st.markdown('<div class="status-online">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
         t1, t2, t3, t4 = st.tabs([f"📡 Ao Vivo ({len(radar)})", f"📅 Próximos ({len(prox_filtrado)})", "📊 Histórico", f"🚫 Blacklist ({len(df_black)})"])
         
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else: st.info("Nenhum jogo válido ao vivo.")
+            else: st.info("Nenhum jogo monitorado no momento.")
             
         with t2:
             if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
@@ -169,7 +170,7 @@ if ROBO_LIGADO:
             
         with t4:
             if not df_black.empty: st.table(df_black[['País', 'Liga']])
-            else: st.caption("Nenhuma liga bloqueada.")
+            else: st.caption("Limpo.")
 
         # TIMER DEDICADO (Sem espelhamento)
         timer_box = st.empty()
