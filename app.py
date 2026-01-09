@@ -13,11 +13,11 @@ st.markdown("""
     .stApp {background-color: #121212; color: white;}
     .status-online {color: #00FF00; font-weight: bold; animation: pulse 2s infinite; padding: 10px; border: 1px solid #00FF00; text-align: center; margin-bottom: 20px; border-radius: 15px;}
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(0, 255, 0, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 255, 0, 0); } }
-    .timer-text { font-size: 14px; color: #FFD700; text-align: center; font-weight: bold; margin-top: 10px; }
+    .timer-box { font-size: 16px; color: #FFD700; text-align: center; font-weight: bold; margin-top: 15px; padding: 10px; border-top: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. ARQUIVOS E FUNÇÕES ---
+# --- 2. AUXILIARES E ARQUIVOS ---
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 
@@ -47,7 +47,7 @@ def enviar_teste_telegram(token, chat_ids):
         for cid in chat_ids.split(','):
             try:
                 requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                              data={"chat_id": cid.strip(), "text": "✅ Neves Analytics: Teste de Conexão OK!"}, timeout=5)
+                              data={"chat_id": cid.strip(), "text": "✅ Neves Analytics: Conexão OK!"}, timeout=5)
             except: pass
 
 # --- 3. SIDEBAR ---
@@ -60,9 +60,9 @@ with st.sidebar:
         
         if st.button("🔔 Testar Envio Telegram"):
             enviar_teste_telegram(tg_token, tg_chat_ids)
-            st.toast("Enviado!")
+            st.toast("Teste enviado!")
 
-        INTERVALO = st.slider("Ciclo (seg):", 60, 300, 60)
+        INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
         MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
         
         if st.button("🗑️ Resetar Tudo"):
@@ -94,81 +94,105 @@ def buscar_dados(endpoint, params=None):
         return res.get('response', [])
     except: return []
 
-# --- 5. EXECUÇÃO "LIMPA" ---
-# Criamos um container VAZIO. Tudo será desenhado aqui dentro.
-# Quando o loop reiniciar, ele limpa este container. Isso acaba com o espelhamento.
+# --- 5. EXECUÇÃO "ANTI-ESPELHAMENTO" ---
+# Criamos um container que será LIMPO a cada iteração
 main_placeholder = st.empty()
 
 if ROBO_LIGADO:
-    # Dentro deste "with", tudo é substituído a cada ciclo
+    # 1. Carregar Dados Iniciais
+    df_black = carregar_blacklist()
+    ids_bloqueados = df_black['id'].astype(str).values
+    hist_df = carregar_db()
+
+    # 2. Buscar e Processar AO VIVO
+    jogos_live = buscar_dados("fixtures", {"live": "all"})
+    radar = []
+    
+    for j in jogos_live:
+        l_id = str(j['league']['id'])
+        
+        # [FILTRO] Se está na Blacklist, IGNORA completamente (não mostra na tabela)
+        if l_id in ids_bloqueados:
+            continue
+            
+        f_id = j['fixture']['id']
+        tempo = j['fixture']['status'].get('elapsed', 0)
+        sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
+        
+        # Definição do STATUS (Recuperado conforme solicitado)
+        status_texto = "⏳ Aguardando"
+        
+        if tempo < 5:
+            status_texto = "⏳ Aguardando"
+        elif 5 <= tempo <= 85:
+            status_texto = "👁️ Monitorando"
+        else:
+            status_texto = "🏁 Fim Próximo"
+            
+        # Validação de Stats (Se sair gol e não tiver stats, bloqueia)
+        if sc + sf > 0:
+            stats = buscar_dados("statistics", {"fixture": f_id})
+            if not stats:
+                salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
+                continue # Remove da lista imediatamente
+
+        radar.append({
+            "Liga": j['league']['name'], 
+            "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", 
+            "Tempo": f"{tempo}'", 
+            "Status": status_texto
+        })
+
+    # 3. Buscar e Processar PRÓXIMOS
+    prox_raw = buscar_proximos(API_KEY)
+    prox_filtrado = []
+    for p in prox_raw:
+        l_id_prox = str(p['league']['id'])
+        # [FILTRO] Só adiciona se NÃO estiver na blacklist
+        if l_id_prox not in ids_bloqueados and p['fixture']['status']['short'] == 'NS':
+            prox_filtrado.append({
+                "Hora": p['fixture']['date'][11:16], 
+                "Liga": p['league']['name'], 
+                "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
+            })
+
+    # 4. LOOP DE EXIBIÇÃO E TIMER (O segredo para não espelhar)
+    # Desenhamos tudo uma vez, e depois atualizamos APENAS o timer
+    
     with main_placeholder.container():
-        st.title("❄️ Neves Analytics") # O Título voltou!
         st.markdown('<div class="status-online">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # 1. Carregar Blacklist
-        df_black = carregar_blacklist()
-        ids_bloqueados = df_black['id'].astype(str).values
-
-        # 2. Processar AO VIVO (COM FILTRO RIGOROSO)
-        jogos_live = buscar_dados("fixtures", {"live": "all"})
-        radar = []
-        for j in jogos_live:
-            l_id = str(j['league']['id'])
-            
-            # FILTRO: Se está na blacklist, PULA O JOGO (continue)
-            if l_id in ids_bloqueados:
-                continue 
-
-            f_id = j['fixture']['id']
-            sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
-            
-            # Se saiu gol, verifica stats
-            if sc + sf > 0:
-                stats = buscar_dados("statistics", {"fixture": f_id})
-                if not stats:
-                    # Sem stats? Bloqueia e PULA (não mostra na tabela)
-                    salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
-                    continue 
-            
-            radar.append({"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", "Tempo": f"{j['fixture']['status'].get('elapsed', 0)}'"})
-
-        # 3. Processar PRÓXIMOS (COM FILTRO RIGOROSO)
-        prox_raw = buscar_proximos(API_KEY)
-        prox_filtrado = []
-        for p in prox_raw:
-            l_id_prox = str(p['league']['id'])
-            # Se está na blacklist, nem entra na lista
-            if l_id_prox not in ids_bloqueados and p['fixture']['status']['short'] == 'NS':
-                prox_filtrado.append({"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
-
-        hist_df = carregar_db()
-
-        # 4. EXIBIÇÃO
         t1, t2, t3, t4 = st.tabs([f"📡 Ao Vivo ({len(radar)})", f"📅 Próximos ({len(prox_filtrado)})", "📊 Histórico", f"🚫 Blacklist ({len(df_black)})"])
         
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else: st.info("Nenhum jogo válido no momento.")
+            else: st.info("Nenhum jogo 'limpo' ao vivo.")
+            
         with t2:
             if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
             else: st.caption("Nenhum jogo futuro em ligas permitidas.")
+            
         with t3:
             if not hist_df.empty: st.dataframe(hist_df.sort_values(by=['data', 'hora'], ascending=False), use_container_width=True, hide_index=True)
-            else: st.caption("Vazio.")
+            else: st.caption("Histórico vazio.")
+            
         with t4:
             if not df_black.empty: st.table(df_black[['País', 'Liga']])
             else: st.caption("Limpo.")
 
-        # Timer Simples (Sem barra de progresso para não bugar o layout)
-        st.markdown(f'<div class="timer-text">⏳ Próxima atualização em {INTERVALO} segundos...</div>', unsafe_allow_html=True)
-
-    # Espera e recarrega a página inteira
-    time.sleep(INTERVALO)
+        # O TIMER VEM AGORA (Dentro do container, mas atualizado via placeholder dedicado)
+        timer_text = st.empty()
+        
+        # Contagem Regressiva
+        for i in range(INTERVALO, 0, -1):
+            timer_text.markdown(f'<div class="timer-box">Próxima atualização em: {i}s</div>', unsafe_allow_html=True)
+            time.sleep(1)
+            
+    # Ao final da contagem, recarrega a página LIMPA
     st.rerun()
 
 else:
-    # Tela de espera (quando desligado)
     with main_placeholder.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Ligue na lateral.")
-        st.write(f"📊 Ligas Bloqueadas: {len(carregar_blacklist())}")
+        st.info("💡 Robô em espera. Configure e ligue na lateral.")
+        st.write(f"🚫 Ligas Bloqueadas (Permanente): {len(carregar_blacklist())}")
