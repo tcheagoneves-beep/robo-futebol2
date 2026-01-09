@@ -94,71 +94,68 @@ def buscar_dados(endpoint, params=None):
         return res.get('response', [])
     except: return []
 
-# --- 5. EXECUÇÃO DA INTERFACE ---
+# --- 5. EXECUÇÃO PRINCIPAL ---
 st.title("❄️ Neves Analytics")
 
 if ROBO_LIGADO:
     st.markdown('<div class="status-online">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
     
-    # Criamos os espaços (placeholders) ANTES do loop
+    # Placeholders para o timer
     timer_space = st.empty()
     bar_space = st.empty()
+
+    # 1. Carregar Blacklist e Dados
+    df_black = carregar_blacklist()
+    ids_bloqueados = df_black['id'].astype(str).values
+    hist_df = carregar_db()
     
-    # Criamos as ABAS fixas
-    t1, t2, t3, t4 = st.tabs(["📡 Ao Vivo", "📅 Próximos", "📊 Histórico", "🚫 Blacklist"])
+    # 2. AO VIVO (Filtrando os bloqueados)
+    jogos_live = buscar_dados("fixtures", {"live": "all"})
+    radar = []
+    for j in jogos_live:
+        l_id = str(j['league']['id'])
+        if l_id not in ids_bloqueados:
+            f_id = j['fixture']['id']
+            sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
+            # Regra da Blacklist: Se tem gol e não tem stats, bloqueia
+            if sc + sf > 0:
+                stats = buscar_dados("statistics", {"fixture": f_id})
+                if not stats:
+                    salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
+                    continue 
+            radar.append({"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", "Tempo": f"{j['fixture']['status'].get('elapsed', 0)}'"})
 
-    # Loop Infinito de Atualização
-    while True:
-        # 1. Carregar Blacklist e Dados
-        df_black = carregar_blacklist()
-        ids_bloqueados = df_black['id'].astype(str).values
-        hist_df = carregar_db()
-        
-        # 2. AO VIVO (Filtrando os bloqueados)
-        jogos_live = buscar_dados("fixtures", {"live": "all"})
-        radar = []
-        for j in jogos_live:
-            l_id = str(j['league']['id'])
-            if l_id not in ids_bloqueados:
-                f_id = j['fixture']['id']
-                sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
-                if sc + sf > 0:
-                    stats = buscar_dados("statistics", {"fixture": f_id})
-                    if not stats:
-                        salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
-                        continue 
-                radar.append({"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", "Tempo": f"{j['fixture']['status'].get('elapsed', 0)}'"})
+    # 3. PRÓXIMOS (Filtrando os bloqueados)
+    prox_raw = buscar_proximos(API_KEY)
+    prox_filtrado = [{"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"} 
+                     for p in prox_raw if str(p['league']['id']) not in ids_bloqueados and p['fixture']['status']['short'] == 'NS']
 
-        # 3. PRÓXIMOS (Filtrando os bloqueados)
-        prox_raw = buscar_proximos(API_KEY)
-        prox_filtrado = [{"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"} 
-                         for p in prox_raw if str(p['league']['id']) not in ids_bloqueados and p['fixture']['status']['short'] == 'NS']
+    # 4. EXIBIÇÃO EM ABAS
+    t1, t2, t3, t4 = st.tabs([f"📡 Ao Vivo ({len(radar)})", f"📅 Próximos ({len(prox_filtrado)})", "📊 Histórico", f"🚫 Blacklist ({len(df_black)})"])
+    
+    with t1:
+        if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
+        else: st.info("Sem jogos válidos ao vivo.")
+    
+    with t2:
+        if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
+        else: st.caption("Sem jogos futuros em ligas permitidas.")
 
-        # 4. PREENCHER AS ABAS (Usando .empty() dentro de cada aba para atualizar)
-        with t1:
-            t1.empty()
-            st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True) if radar else st.info("Sem jogos válidos ao vivo.")
-        
-        with t2:
-            t2.empty()
-            st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_filtrado else st.caption("Sem jogos futuros em ligas permitidas.")
+    with t3:
+        if not hist_df.empty: st.dataframe(hist_df.sort_values(by=['data', 'hora'], ascending=False), use_container_width=True, hide_index=True)
+        else: st.caption("Vazio.")
 
-        with t3:
-            t3.empty()
-            st.dataframe(hist_df.sort_values(by=['data', 'hora'], ascending=False), use_container_width=True, hide_index=True) if not hist_df.empty else st.caption("Vazio.")
+    with t4:
+        if not df_black.empty: st.table(df_black[['País', 'Liga']])
+        else: st.caption("Nenhuma liga bloqueada.")
 
-        with t4:
-            t4.empty()
-            st.table(df_black[['País', 'Liga']]) if not df_black.empty else st.caption("Nenhuma liga bloqueada.")
-
-        # 5. Timer de espera
-        for i in range(INTERVALO, 0, -1):
-            timer_space.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
-            bar_space.progress(i / INTERVALO)
-            time.sleep(1)
-            
-        # O rerun() aqui reinicia o script de forma limpa
-        st.rerun()
+    # 5. Timer de espera antes do Rerun
+    for i in range(INTERVALO, 0, -1):
+        timer_space.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
+        bar_space.progress(i / INTERVALO)
+        time.sleep(1)
+    
+    st.rerun()
 
 else:
     st.info("💡 Robô em espera. Configure e ligue na lateral.")
