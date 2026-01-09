@@ -17,9 +17,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. GESTÃO DE ARQUIVOS ---
+# --- 2. GESTÃO DE ARQUIVOS E MEMÓRIA ---
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
+
+# Memória para não repetir alertas do mesmo jogo
+if 'alertas_enviados' not in st.session_state:
+    st.session_state['alertas_enviados'] = set()
 
 def carregar_db():
     if not os.path.exists(DB_FILE):
@@ -39,12 +43,14 @@ def salvar_na_blacklist(id_liga, pais, nome_liga):
         novo = pd.DataFrame([{'id': str(id_liga), 'País': pais, 'Liga': nome_liga}])
         pd.concat([df, novo], ignore_index=True).to_csv(BLACK_FILE, index=False)
 
-def enviar_teste_telegram(token, chat_ids):
+# Função de Envio Real
+def enviar_telegram_real(token, chat_ids, mensagem):
     if token and chat_ids:
         for cid in chat_ids.split(','):
             try:
-                requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                              data={"chat_id": cid.strip(), "text": "✅ Neves Analytics: Conexão OK!"}, timeout=5)
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                payload = {"chat_id": cid.strip(), "text": mensagem, "parse_mode": "Markdown"}
+                requests.post(url, data=payload, timeout=5)
             except: pass
 
 def agora_brasil():
@@ -54,18 +60,18 @@ def agora_brasil():
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     
-    with st.expander("ℹ️ Legenda da Estratégia", expanded=True):
+    with st.expander("ℹ️ Legenda", expanded=True):
         st.markdown(
             """
-            **Fases do Jogo:**
-            ⏳ **Aquecimento (0-5')**: Coletando dados.
-            👁️ **Monitorando (5-40' / 55-80')**: Buscando pressão!
-            💤 **Stand By (40-55')**: Intervalo (Pausa).
-            🏁 **Fim (>80')**: Risco alto.
-            
+            **Fases:**
+            ⏳ **0-5'**: Aquecimento
+            👁️ **5-80'**: Ativo
+            💤 **40-55'**: Pausa
+            🏁 **>80'**: Fim
+
             **Sinais:**
-            🔥 **PRESSÃO**: Chutes acima da meta.
-            🚫 **Bloqueado**: Liga sem dados.
+            🔥 **PRESSÃO**: Ataque!
+            🚫 **Bloqueado**: Sem dados
             """
         )
     
@@ -75,12 +81,19 @@ with st.sidebar:
         tg_chat_ids = st.text_input("Chat IDs:")
         
         st.markdown("---")
-        st.markdown("**Regra de Pressão:**")
-        META_CHUTES = st.number_input("Mínimo de Chutes (Total):", value=10, min_value=1, help="Soma de chutes dos dois times para considerar jogo quente.")
+        META_CHUTES = st.number_input("Gatilho de Chutes (Soma):", value=10, min_value=1)
 
         if st.button("🔔 Testar Telegram"):
-            enviar_teste_telegram(tg_token, tg_chat_ids)
-            st.toast("Enviado!")
+            msg_teste = (
+                "🚨 *NEVES ANALYTICS*\n\n"
+                "⚽ *Teste x Teste*\n"
+                "⏰ 10'\n"
+                "💰 *TESTE DE CONFIGURAÇÃO*\n\n"
+                "✅ *Entrar em Mais 1 Gol*\n\n"
+                "📊 Chutes: 99 | Perigo: Alto"
+            )
+            enviar_telegram_real(tg_token, tg_chat_ids, msg_teste)
+            st.toast("Teste enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
         MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
@@ -88,6 +101,7 @@ with st.sidebar:
         if st.button("🗑️ Resetar Tudo"):
             if os.path.exists(DB_FILE): os.remove(DB_FILE)
             if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
+            st.session_state['alertas_enviados'] = set() 
             st.rerun()
 
     st.markdown("---")
@@ -106,11 +120,10 @@ def buscar_proximos(key):
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
-        # Simula um jogo quente (6') e um em aquecimento (3')
+        # Simula jogo com pressão para testar o envio
         return [
-            {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 6}}, "league": {"id": 1, "name": "Liga Fire", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}},
-            {"fixture": {"id": 2, "status": {"short": "1H", "elapsed": 3}}, "league": {"id": 2, "name": "Liga Ice", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time C"}, "away": {"name": "Time D"}}},
-            {"fixture": {"id": 3, "status": {"short": "HT", "elapsed": 45}}, "league": {"id": 3, "name": "Liga StandBy", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time E"}, "away": {"name": "Time F"}}}
+            {"fixture": {"id": 101, "status": {"short": "1H", "elapsed": 25}}, "league": {"id": 1, "name": "Liga Teste", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}},
+            {"fixture": {"id": 102, "status": {"short": "1H", "elapsed": 10}}, "league": {"id": 2, "name": "Liga Fria", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time C"}, "away": {"name": "Time D"}}}
         ]
     if not API_KEY: return []
     try:
@@ -119,10 +132,9 @@ def buscar_dados(endpoint, params=None):
     except: return []
 
 def buscar_stats_reais(fid):
-    # Função dedicada para buscar stats com segurança
     if MODO_DEMO:
-        if fid == 1: return [{"statistics": [{"type": "Total Shots", "value": 8}]}, {"statistics": [{"type": "Total Shots", "value": 5}]}] # 13 chutes
-        return [{"statistics": [{"type": "Total Shots", "value": 1}]}, {"statistics": [{"type": "Total Shots", "value": 1}]}] # 2 chutes
+        if fid == 101: return [{"statistics": [{"type": "Total Shots", "value": 8}]}, {"statistics": [{"type": "Total Shots", "value": 5}]}] # 13 chutes (Dispara Telegram)
+        return [{"statistics": [{"type": "Total Shots", "value": 1}]}, {"statistics": [{"type": "Total Shots", "value": 1}]}]
     
     return buscar_dados("statistics", {"fixture": fid})
 
@@ -141,61 +153,74 @@ if ROBO_LIGADO:
     for j in jogos_live:
         l_id = str(j['league']['id'])
         
-        # 1. FILTRO: Se está na blacklist, ignora
+        # Filtro Blacklist
         if l_id in ids_bloqueados:
             continue
             
         f_id = j['fixture']['id']
         tempo = j['fixture']['status'].get('elapsed', 0)
         status_short = j['fixture']['status'].get('short', '')
+        
+        # Placar
+        home_name = j['teams']['home']['name']
+        away_name = j['teams']['away']['name']
         sc, sf = j['goals']['home'] or 0, j['goals']['away'] or 0
         
         icone = "👁️" 
         info_extra = ""
         
-        # 2. DEFINIÇÃO DE JANELAS (ESTRATÉGIA ATUALIZADA)
-        
-        # A) Aquecimento (0-5)
+        # DEFINIÇÃO DE JANELAS
         if tempo < 5:
             icone = "⏳"
-            
-        # B) Stand By (40-55 e Intervalo)
         elif (40 <= tempo <= 55) or (status_short in ['HT', 'BT']):
             icone = "💤"
-            
-        # C) Fim de Jogo (>80)
         elif tempo > 80:
             icone = "🏁"
-            
-        # D) MONITORAMENTO ATIVO (5-40 e 55-80) -> BUSCA STATS!
         else:
+            # JANELA ATIVA: Busca Stats
             stats = buscar_stats_reais(f_id)
             
             if not stats:
-                # Se não tem stats na janela ativa, bane a liga
                 salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
-                continue # Remove da tela
+                continue 
             else:
-                # CÁLCULO DE PRESSÃO
                 try:
                     s1 = next((item for item in stats[0]['statistics'] if item["type"] == "Total Shots"), None)
                     s2 = next((item for item in stats[1]['statistics'] if item["type"] == "Total Shots"), None)
                     
                     v1 = s1['value'] if s1 and s1['value'] else 0
                     v2 = s2['value'] if s2 and s2['value'] else 0
-                    total = v1 + v2
+                    total_chutes = v1 + v2
                     
-                    if total >= META_CHUTES:
+                    # --- GATILHO DE PRESSÃO & TELEGRAM ---
+                    if total_chutes >= META_CHUTES:
                         icone = "🔥"
-                        info_extra = f" ({total} Chutes)"
+                        info_extra = f" ({total_chutes})"
+                        
+                        # Verifica se já enviou alerta deste jogo
+                        if f_id not in st.session_state['alertas_enviados']:
+                            
+                            # MENSAGEM ESTILO NEVES (Call to Action)
+                            msg_telegram = (
+                                f"🚨 *NEVES ANALYTICS*\n\n"
+                                f"⚽ *{home_name} {sc}x{sf} {away_name}*\n"
+                                f"⏰ {tempo}'\n"
+                                f"💰 *GOL (PRESSÃO DETECTADA)*\n\n"
+                                f"✅ *Entrar em Mais 1 Gol*\n\n"
+                                f"📊 Chutes: {total_chutes} | Meta: {META_CHUTES}"
+                            )
+                            
+                            enviar_telegram_real(tg_token, tg_chat_ids, msg_telegram)
+                            st.session_state['alertas_enviados'].add(f_id) # Marca como enviado
+                            st.toast(f"Alerta enviado: {home_name} x {away_name}")
                     else:
-                        info_extra = f" ({total} Chutes)"
+                        info_extra = f" ({total_chutes})"
                 except:
                     pass
 
         radar.append({
             "Liga": j['league']['name'], 
-            "Jogo": f"{j['teams']['home']['name']} {sc}x{sf} {j['teams']['away']['name']}", 
+            "Jogo": f"{home_name} {sc}x{sf} {away_name}", 
             "Tempo": f"{tempo}'", 
             "Status": icone + info_extra
         })
