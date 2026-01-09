@@ -70,33 +70,17 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Erro da Agenda Corrigido.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Mensagens simplificadas.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
         MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
         
-        st.markdown("---")
-        st.caption("Gestão de Dados:")
-        
-        col_res1, col_res2 = st.columns(2)
-        with col_res1:
-            if st.button("♻️ Reset Sessão"):
-                st.session_state['alertas_enviados'] = set() 
-                st.session_state['memoria_pressao'] = {}
-                st.toast("Memória limpa!")
-                time.sleep(1)
-                st.rerun()
-        
-        with col_res2:
-            if st.button("🗑️ Del. Blacklist"):
-                if os.path.exists(BLACK_FILE): 
-                    os.remove(BLACK_FILE)
-                    st.toast("Blacklist apagada!")
-                else:
-                    st.toast("Já vazia.")
-                time.sleep(1)
-                st.rerun()
+        if st.button("🗑️ Resetar Tudo"):
+            if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
+            st.session_state['alertas_enviados'] = set() 
+            st.session_state['memoria_pressao'] = {}
+            st.rerun()
 
     st.markdown("---")
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
@@ -115,6 +99,7 @@ def buscar_proximos(key):
 
 def buscar_dados(endpoint, params=None):
     if MODO_DEMO:
+        # SIMULAÇÃO
         return [
             {"fixture": {"id": 1, "status": {"short": "1H", "elapsed": 47}}, "league": {"id": 1, "name": "Liga Acréscimo", "country": "BR"}, "goals": {"home": 0, "away": 1}, "teams": {"home": {"name": "Fav (47')"}, "away": {"name": "Zebra"}}},
             {"fixture": {"id": 2, "status": {"short": "HT", "elapsed": 45}}, "league": {"id": 2, "name": "Liga Intervalo", "country": "BR"}, "goals": {"home": 0, "away": 0}, "teams": {"home": {"name": "Time A"}, "away": {"name": "Time B"}}}
@@ -203,12 +188,14 @@ def processar_jogo(j, stats):
                     "stats": f"Chutes Alvo: {sog_h + sog_a}"
                 }
 
-        # B) REAÇÃO DO GIGANTE / BLITZ
+        # B) REAÇÃO DO GIGANTE / BLITZ (CORRIGIDO: TEXTOS CLAROS)
         if tempo <= 60:
             # HOME PRESSIONANDO
             if (gh <= ga) and (recentes_h >= 2 or sh_h >= 6):
                 oponente_vivo = (recentes_a >= 1 or sh_a >= 4)
-                acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Mandante"
+                # SE OPONENTE VIVO = JOGO ABERTO (GOLS)
+                # SE OPONENTE MORTO = PRESSÃO PURA (PRÓXIMO GOL DO FAVORITO)
+                acao = "⚠️ Jogo Aberto: Entrar em OVER GOLS" if oponente_vivo else "✅ Apostar no PRÓXIMO GOL do Mandante"
                 return {
                     "tag": "🟢 Reação/Blitz",
                     "ordem": acao,
@@ -219,7 +206,7 @@ def processar_jogo(j, stats):
             # AWAY PRESSIONANDO
             if (ga <= gh) and (recentes_a >= 2 or sh_a >= 6):
                 oponente_vivo = (recentes_h >= 1 or sh_h >= 4)
-                acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Visitante"
+                acao = "⚠️ Jogo Aberto: Entrar em OVER GOLS" if oponente_vivo else "✅ Apostar no PRÓXIMO GOL do Visitante"
                 return {
                     "tag": "🟢 Reação/Blitz",
                     "ordem": acao,
@@ -250,7 +237,6 @@ if ROBO_LIGADO:
     jogos_live = buscar_dados("fixtures", {"live": "all"})
     radar = []
     
-    # --- PROCESSAMENTO ---
     for j in jogos_live:
         l_id = str(j['league']['id'])
         if l_id in ids_bloqueados: continue
@@ -262,7 +248,6 @@ if ROBO_LIGADO:
         away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"
         
-        # Soneca Inteligente
         eh_intervalo = (status_short in ['HT', 'BT']) or (48 <= tempo <= 52)
         eh_aquecimento = (tempo < 5)
         eh_fim = (tempo > 80)
@@ -313,7 +298,6 @@ if ROBO_LIGADO:
             "Status": f"{icone_visual} {sinal['tag'] if sinal else ''}{info_mom}"
         })
 
-    # --- AGENDA ---
     prox_raw = buscar_proximos(API_KEY)
     prox_filtrado = []
     hora_atual = agora_brasil().strftime('%H:%M')
@@ -335,7 +319,6 @@ if ROBO_LIGADO:
             "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
         })
 
-    # --- EXIBIÇÃO ---
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
@@ -345,17 +328,10 @@ if ROBO_LIGADO:
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
             else: st.info("Monitorando jogos...")
-        
         with t2:
-            # CORREÇÃO AQUI: Agora usa a variável certa 'prox_filtrado' e em blocos separados
-            if prox_filtrado:
-                st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
-            else:
-                st.caption("Sem mais jogos por hoje.")
-        
+            st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_f else st.caption("Vazio.")
         with t3:
-            if not df_black.empty: st.table(df_black)
-            else: st.caption("Limpo.")
+            st.table(df_black) if not df_black.empty else st.caption("Limpo.")
 
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
             c1, c2 = st.columns(2)
@@ -372,7 +348,7 @@ if ROBO_LIGADO:
                     <div class="strategy-title">🟢 B - Reação / Blitz</div>
                     <div class="strategy-desc">
                         <b>Cenário:</b> Fav perdendo e amassando.<br>
-                        <b>Ação:</b> Apostar no Gol ou Mais 1 Gol.
+                        <b>Ação:</b> Apostar no Próximo Gol.
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
