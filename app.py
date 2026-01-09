@@ -14,7 +14,6 @@ st.markdown("""
     .status-box {padding: 15px; border-radius: 10px; text-align: center; margin-bottom: 20px; font-weight: bold;}
     .status-active {background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00;}
     .timer-text { font-size: 14px; color: #FFD700; text-align: center; font-weight: bold; margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;}
-    .strategy-tag { font-size: 11px; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -76,7 +75,7 @@ with st.sidebar:
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
-        MODO_DEMO = st.checkbox("🛠️ Modo Simulação (Teste das 4 Estratégias)", value=False)
+        MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
         
         if st.button("🗑️ Resetar Tudo"):
             if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
@@ -120,21 +119,15 @@ def buscar_dados(endpoint, params=None):
 
 def buscar_stats(fid, demo_type=None):
     if MODO_DEMO:
-        # Stats Simulados para cada cenário
-        if fid == 1: return [] # Não precisa de stats para Porteira Aberta (só gols)
-        if fid == 2: # Reação Gigante: Home amassando (8 chutes, 40 AP), Away morto (1 chute)
-            return [{"team": {"name": "Home"}, "statistics": [{"type": "Total Shots", "value": 8}, {"type": "Dangerous Attacks", "value": 40}, {"type": "Shots on Goal", "value": 4}]},
-                    {"team": {"name": "Away"}, "statistics": [{"type": "Total Shots", "value": 1}, {"type": "Dangerous Attacks", "value": 5}, {"type": "Shots on Goal", "value": 0}]}]
-        if fid == 3: # Janela Ouro: 20 chutes totais
-            return [{"team": {"name": "Home"}, "statistics": [{"type": "Total Shots", "value": 15}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Total Shots", "value": 5}]}]
-        if fid == 4: # Relâmpago: 1 chute no alvo
-            return [{"team": {"name": "Home"}, "statistics": [{"type": "Shots on Goal", "value": 1}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Shots on Goal", "value": 1}]}]
+        if fid == 1: return [] 
+        if fid == 2: return [{"team": {"name": "Home"}, "statistics": [{"type": "Total Shots", "value": 8}, {"type": "Dangerous Attacks", "value": 40}, {"type": "Shots on Goal", "value": 4}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Total Shots", "value": 1}, {"type": "Dangerous Attacks", "value": 5}, {"type": "Shots on Goal", "value": 0}]}]
+        if fid == 3: return [{"team": {"name": "Home"}, "statistics": [{"type": "Total Shots", "value": 15}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Total Shots", "value": 5}]}]
+        if fid == 4: return [{"team": {"name": "Home"}, "statistics": [{"type": "Shots on Goal", "value": 1}]}, {"team": {"name": "Away"}, "statistics": [{"type": "Shots on Goal", "value": 1}]}]
         return []
     return buscar_dados("statistics", {"fixture": fid})
 
 # --- 5. O CÉREBRO (Processador de Estratégias) ---
 def processar_jogo(j, stats):
-    f_id = j['fixture']['id']
     tempo = j['fixture']['status'].get('elapsed', 0)
     home = j['teams']['home']['name']
     away = j['teams']['away']['name']
@@ -142,33 +135,25 @@ def processar_jogo(j, stats):
     ga = j['goals']['away'] or 0
     total_gols = gh + ga
     
-    # Extrair Stats (com segurança)
     try:
-        if not stats: return None
-        
-        # Helper para pegar valor
         def get_val(team_idx, type_name):
+            if not stats or len(stats) <= team_idx: return 0
             try:
                 data = next((item for item in stats[team_idx]['statistics'] if item["type"] == type_name), None)
                 return data['value'] if data and data['value'] else 0
             except: return 0
 
-        # Dados do Mandante (Fav assumido na lógica ou maior volume)
         sh_h = get_val(0, "Total Shots")
         sog_h = get_val(0, "Shots on Goal")
         da_h = get_val(0, "Dangerous Attacks")
         
-        # Dados do Visitante
         sh_a = get_val(1, "Total Shots")
         sog_a = get_val(1, "Shots on Goal")
         da_a = get_val(1, "Dangerous Attacks")
         
         total_chutes = sh_h + sh_a
         
-        # --- LÓGICA DAS 4 ESTRATÉGIAS ---
-
-        # A) 🟣 PORTEIRA ABERTA (< 30 min, 2+ Gols)
-        # Não precisa de stats profundos, apenas placar.
+        # A) PORTEIRA ABERTA (< 30 min, 2+ Gols)
         if tempo <= 30 and total_gols >= 2:
             return {
                 "tag": "🟣 Porteira Aberta",
@@ -177,10 +162,9 @@ def processar_jogo(j, stats):
                 "stats": f"{gh}x{ga}"
             }
 
-        # D) ⚡ GOL RELÂMPAGO (5 a 15 min)
+        # D) GOL RELÂMPAGO (5 a 15 min)
         if 5 <= tempo <= 15:
-            # Gatilho: Dominante chutou no alvo OU Zebra atrevida (2 no alvo)
-            if (sog_h >= 1 or sog_a >= 1): # Simplificado para qualquer chute no alvo cedo
+            if (sog_h >= 1 or sog_a >= 1):
                 return {
                     "tag": "⚡ Gol Relâmpago",
                     "ordem": "Apostar em Over 0.5 HT (1º Tempo)",
@@ -188,20 +172,18 @@ def processar_jogo(j, stats):
                     "stats": f"Chutes Alvo: {sog_h + sog_a}"
                 }
 
-        # B) 🟢 REAÇÃO DO GIGANTE (Até 50 min)
-        # Assumindo que quem tem pressão absurda é o favorito
+        # B) REAÇÃO DO GIGANTE (Até 50 min)
         if tempo <= 50:
-            # Cenário: Um time perdendo, mas amassando
             fav_perdendo_h = (gh < ga) and (sh_h >= 6) and (da_h >= 30)
             fav_perdendo_a = (ga < gh) and (sh_a >= 6) and (da_a >= 30)
             
             if fav_perdendo_h:
-                zebra_viva = (sh_a >= 4) # Zebra chutou 4 ou mais?
+                zebra_viva = (sh_a >= 4)
                 acao = "Entrar em OVER GOLS (Jogo Aberto)" if zebra_viva else "Apostar PRÓXIMO GOL DO FAVORITO"
                 return {
                     "tag": "🟢 Reação do Gigante",
                     "ordem": acao,
-                    "motivo": f"{home} perde mas amassa ({sh_h} chutes). Zebra {'VIVA' if zebra_viva else 'MORTA'}.",
+                    "motivo": f"{home} perde mas amassa. Zebra {'VIVA' if zebra_viva else 'MORTA'}.",
                     "stats": f"Chutes: {sh_h} vs {sh_a}"
                 }
             
@@ -211,14 +193,13 @@ def processar_jogo(j, stats):
                 return {
                     "tag": "🟢 Reação do Gigante",
                     "ordem": acao,
-                    "motivo": f"{away} perde mas amassa ({sh_a} chutes). Zebra {'VIVA' if zebra_viva else 'MORTA'}.",
+                    "motivo": f"{away} perde mas amassa. Zebra {'VIVA' if zebra_viva else 'MORTA'}.",
                     "stats": f"Chutes: {sh_h} vs {sh_a}"
                 }
 
-        # C) 💰 JANELA DE OURO (70 a 75 min)
+        # C) JANELA DE OURO (70 a 75 min)
         if 70 <= tempo <= 75:
-            # Se jogo empatado ou alguém perdendo (não ganhando fácil) e muito volume
-            if total_chutes >= 18 and abs(gh - ga) <= 1: # Diferença máx de 1 gol ou empate
+            if total_chutes >= 18 and abs(gh - ga) <= 1:
                 return {
                     "tag": "💰 Janela de Ouro",
                     "ordem": "Entrar em Mais 1.0 Gol (Asiático)",
@@ -236,7 +217,6 @@ if ROBO_LIGADO:
     df_black = carregar_blacklist()
     ids_bloqueados = df_black['id'].astype(str).values
     
-    # Busca Jogos
     jogos_live = buscar_dados("fixtures", {"live": "all"})
     radar = []
     
@@ -250,33 +230,24 @@ if ROBO_LIGADO:
         away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"
         
-        # Filtros de Tempo para economizar API (Só chama stats nas janelas úteis)
-        # Janelas: 5-15 (D), <30 (A), <50 (B), 70-75 (C)
-        # Se estiver fora de todas essas janelas e não for intervalo, ignora stats
         dentro_janela = (5 <= tempo <= 50) or (70 <= tempo <= 75)
         
         sinal = None
         icone_visual = "👁️"
         
-        # Lógica visual simples
         if tempo < 5: icone_visual = "⏳"
         elif tempo > 80: icone_visual = "🏁"
         
         if dentro_janela:
-            # Busca Stats
             stats = buscar_stats(f_id)
             if not stats and not MODO_DEMO:
-                # Blacklist se API falhar
                 salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
                 continue
             
-            # PROCESSA ESTRATÉGIAS
             sinal = processar_jogo(j, stats)
             
             if sinal:
-                icone_visual = "✅" # Sinal encontrado!
-                
-                # ENVIO TELEGRAM (Se novo)
+                icone_visual = "✅"
                 if f_id not in st.session_state['alertas_enviados']:
                     msg = (
                         f"🚨 *NEVES ANALYTICS PRO* 🚨\n\n"
@@ -299,12 +270,10 @@ if ROBO_LIGADO:
             "Status": f"{icone_visual} {sinal['tag'] if sinal else ''}"
         })
 
-    # Próximos
     prox = buscar_proximos(API_KEY)
     prox_f = [{"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"} 
               for p in prox if str(p['league']['id']) not in ids_bloqueados and p['fixture']['status']['short'] == 'NS']
 
-    # EXIBIÇÃO
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
@@ -312,16 +281,23 @@ if ROBO_LIGADO:
         t1, t2, t3 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(prox_f)})", f"🚫 Blacklist ({len(df_black)})"])
         
         with t1:
-            if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else: st.info("Nenhum jogo encaixa nas estratégias agora.")
+            if radar:
+                st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum jogo encaixa nas estratégias agora.")
             
         with t2:
-            st.dataframe(pd.DataFrame(prox_f).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_f else st.caption("Vazio.")
+            if prox_f:
+                st.dataframe(pd.DataFrame(prox_f).sort_values("Hora"), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Vazio.")
             
         with t3:
-            st.table(df_black) if not df_black.empty else st.caption("Limpo.")
+            if not df_black.empty:
+                st.table(df_black)
+            else:
+                st.caption("Limpo.")
 
-        # Timer
         relogio = st.empty()
         for i in range(INTERVALO, 0, -1):
             relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
