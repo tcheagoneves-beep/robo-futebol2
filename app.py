@@ -37,6 +37,7 @@ def carregar_blacklist():
 
 def salvar_na_blacklist(id_liga, pais, nome_liga):
     df = carregar_blacklist()
+    # Verifica se já existe para não duplicar
     if str(id_liga) not in df['id'].astype(str).values:
         novo = pd.DataFrame([{'id': str(id_liga), 'País': pais, 'Liga': nome_liga}])
         pd.concat([df, novo], ignore_index=True).to_csv(BLACK_FILE, index=False)
@@ -70,17 +71,34 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Correção de Erro Aplicada.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Botões de Reset corrigidos.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
         MODO_DEMO = st.checkbox("🛠️ Modo Simulação", value=False)
         
-        if st.button("🗑️ Resetar Tudo"):
-            if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
-            st.session_state['alertas_enviados'] = set() 
-            st.session_state['memoria_pressao'] = {}
-            st.rerun()
+        st.markdown("---")
+        st.caption("Gestão de Dados:")
+        
+        # --- BOTÕES DE RESET SEPARADOS (SEGURANÇA) ---
+        col_res1, col_res2 = st.columns(2)
+        with col_res1:
+            if st.button("♻️ Reset Sessão"):
+                st.session_state['alertas_enviados'] = set() 
+                st.session_state['memoria_pressao'] = {}
+                st.toast("Memória limpa! (Blacklist mantida)")
+                time.sleep(1)
+                st.rerun()
+        
+        with col_res2:
+            if st.button("🗑️ Del. Blacklist"):
+                if os.path.exists(BLACK_FILE): 
+                    os.remove(BLACK_FILE)
+                    st.toast("Blacklist apagada!")
+                else:
+                    st.toast("Já estava vazia.")
+                time.sleep(1)
+                st.rerun()
 
     st.markdown("---")
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
@@ -187,13 +205,11 @@ def processar_jogo(j, stats):
                     "stats": f"Chutes Alvo: {sog_h + sog_a}"
                 }
 
-        # B) REAÇÃO DO GIGANTE / BLITZ (MENSAGEM AJUSTADA)
+        # B) REAÇÃO DO GIGANTE / BLITZ
         if tempo <= 60:
             # HOME PRESSIONANDO
             if (gh <= ga) and (recentes_h >= 2 or sh_h >= 6):
                 oponente_vivo = (recentes_a >= 1 or sh_a >= 4)
-                # SE JOGO ABERTO (Ambos atacam) -> Mais 1 Gol
-                # SE SÓ UM ATACA (Zebra morta) -> Gol do Mandante
                 acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Mandante"
                 return {
                     "tag": "🟢 Reação/Blitz",
@@ -328,10 +344,7 @@ if ROBO_LIGADO:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
             else: st.info("Monitorando jogos...")
         with t2:
-            if prox_filtrado:
-                st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
-            else:
-                st.caption("Sem mais jogos por hoje.")
+            st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True) if prox_filtrado else st.caption("Vazio.")
         with t3:
             if not df_black.empty: st.table(df_black)
             else: st.caption("Limpo.")
