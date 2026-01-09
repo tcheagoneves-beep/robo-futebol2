@@ -14,6 +14,7 @@ st.markdown("""
     .status-box {padding: 15px; border-radius: 10px; text-align: center; margin-bottom: 20px; font-weight: bold;}
     .status-active {background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00;}
     .timer-text { font-size: 14px; color: #FFD700; text-align: center; font-weight: bold; margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;}
+    .strategy-box { background-color: #1c1c1c; padding: 10px; border-radius: 5px; margin-top: 10px; border-left: 3px solid #00FF00; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -47,21 +48,19 @@ def enviar_telegram_real(token, chat_ids, mensagem):
             except: pass
 
 def agora_brasil():
-    # Ajuste de Fuso Horário (-3h)
     return datetime.utcnow() - timedelta(hours=3)
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves Analytics PRO")
     
-    with st.expander("🧠 Cérebro Ativo", expanded=True):
-        st.markdown("""
-        ✅ **A - Porteira Aberta** (<30')
-        ✅ **B - Reação / Blitz** (<60')
-        ✅ **C - Janela de Ouro** (70-75')
-        ✅ **D - Gol Relâmpago** (5-15')
-        """)
-        st.info("ℹ️ **Agenda:** Filtrando apenas jogos futuros de HOJE.")
+    # Checklist simples na lateral
+    with st.expander("✅ Status das Estratégias", expanded=True):
+        st.caption("Todas as estratégias estão armadas:")
+        st.markdown("🟣 **A** - Porteira Aberta")
+        st.markdown("🟢 **B** - Reação / Blitz")
+        st.markdown("💰 **C** - Janela de Ouro")
+        st.markdown("⚡ **D** - Gol Relâmpago")
     
     with st.expander("⚙️ Configurações", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
@@ -70,7 +69,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Agenda ajustada.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Interface Educativa Ativa.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -91,10 +90,8 @@ def buscar_proximos(key):
     if not key and not MODO_DEMO: return []
     try:
         url = "https://v3.football.api-sports.io/fixtures"
-        # Garante que pede a data de HOJE no fuso Brasil
         data_hoje = agora_brasil().strftime('%Y-%m-%d')
         params = {"date": data_hoje, "timezone": "America/Sao_Paulo"}
-        
         res = requests.get(url, headers={"x-apisports-key": key}, params=params, timeout=10).json()
         return res.get('response', [])
     except: return []
@@ -235,7 +232,7 @@ if ROBO_LIGADO:
     jogos_live = buscar_dados("fixtures", {"live": "all"})
     radar = []
     
-    # --- PROCESSAMENTO AO VIVO ---
+    # --- PROCESSAMENTO ---
     for j in jogos_live:
         l_id = str(j['league']['id'])
         if l_id in ids_bloqueados: continue
@@ -297,24 +294,21 @@ if ROBO_LIGADO:
             "Status": f"{icone_visual} {sinal['tag'] if sinal else ''}{info_mom}"
         })
 
-    # --- PROCESSAMENTO DA AGENDA (FILTRADA) ---
+    # --- AGENDA ---
     prox_raw = buscar_proximos(API_KEY)
     prox_filtrado = []
-    
     hora_atual = agora_brasil().strftime('%H:%M')
     
     for p in prox_raw:
         lid = str(p['league']['id'])
         status = p['fixture']['status']['short']
-        data_jogo_raw = p['fixture']['date'] # Ex: 2026-01-09T20:00:00-03:00
+        data_jogo_raw = p['fixture']['date']
         
-        # Filtros Básicos
         if lid in ids_bloqueados: continue
         if status != 'NS': continue
         
-        # Filtro de Hora (Só mostra jogos FUTUROS do dia de hoje)
         hora_jogo = data_jogo_raw[11:16]
-        if hora_jogo <= hora_atual: continue # Se já passou do horário, não mostra na agenda
+        if hora_jogo <= hora_atual: continue 
         
         prox_filtrado.append({
             "Hora": hora_jogo, 
@@ -351,6 +345,31 @@ if ROBO_LIGADO:
         for i in range(INTERVALO, 0, -1):
             relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
             time.sleep(1)
+
+        # --- NOVA ÁREA: DETALHAMENTO DAS ESTRATÉGIAS (RODAPÉ) ---
+        with st.expander("📘 Guia de Inteligência: Como o Robô decide?", expanded=False):
+            st.markdown("""
+            ### 1. 🟣 A - Porteira Aberta
+            * **Cenário:** Jogo frenético antes dos 30 minutos.
+            * **Gatilho:** Tempo < 30' e Placar com 2 ou mais gols (ex: 2x0, 1x1).
+            * **Ação:** Buscar Múltiplas de Over Gols.
+
+            ### 2. ⚡ D - Gol Relâmpago
+            * **Cenário:** Início elétrico de partida.
+            * **Gatilho:** Entre 5' e 15', com chutes no alvo imediatos.
+            * **Ação:** Over 0.5 HT (Gol no 1º Tempo).
+            
+            ### 3. 🟢 B - Reação do Gigante / Blitz
+            * **Cenário:** Time perdendo ou empatando, mas massacrando.
+            * **Gatilho (< 60'):** * **Volume:** 6+ chutes totais.
+                * **Blitz (Momentum):** 2+ chutes no alvo nos últimos **7 minutos**.
+            * **Ação:** Back ao time que pressiona (se oponente estiver morto) ou Over Gols (se jogo estiver lá e cá).
+
+            ### 4. 💰 C - Janela de Ouro
+            * **Cenário:** Reta final com jogo indefinido e pressão.
+            * **Gatilho:** Entre 70' e 75', jogo empatado ou diferença de 1 gol, com **18+ chutes totais**.
+            * **Ação:** Over Limite (Gol Asiático).
+            """)
     
     st.rerun()
 
