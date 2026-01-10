@@ -5,7 +5,7 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# --- 0. CONFIGURAÇÃO VISUAL ---
+# --- 0. CONFIGURAÇÃO E CSS (VISUAL CORRIGIDO) ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 st.cache_data.clear()
 
@@ -13,32 +13,54 @@ st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
     
-    /* Cards de Métricas */
-    .metric-box {
-        background-color: #1A1C24; border: 1px solid #333; 
-        border-radius: 8px; padding: 15px; text-align: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2); margin-bottom: 5px;
+    /* LIMITADOR DE LARGURA (Elegante: nem muito largo, nem muito estreito) */
+    .main .block-container {
+        max-width: 95%;
+        padding-top: 1rem;
+        padding-bottom: 5rem;
     }
-    .metric-title {font-size: 11px; color: #aaaaaa; text-transform: uppercase; letter-spacing: 1px;}
-    .metric-value {font-size: 22px; font-weight: bold; color: #00FF00;}
+
+    /* PLACAR DE MÉTRICAS (TOPO) */
+    .metric-box {
+        background-color: #1A1C24; 
+        border: 1px solid #333; 
+        border-radius: 8px; 
+        padding: 15px; 
+        text-align: center;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    .metric-title {font-size: 13px; color: #aaaaaa; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;}
+    .metric-value {font-size: 26px; font-weight: bold; color: #00FF00;}
+    .metric-sub {font-size: 12px; color: #888;}
     
-    /* Timer Fixo */
+    /* STATUS ATIVO */
+    .status-active {
+        background-color: #1F4025; color: #00FF00; 
+        border: 1px solid #00FF00; padding: 10px; 
+        text-align: center; border-radius: 6px; font-weight: bold;
+        margin-bottom: 20px;
+    }
+    
+    /* BOTÕES SIDEBAR (Correção de quebra de texto) */
+    .stButton button {
+        width: 100%;
+        font-size: 14px !important;
+        font-weight: bold !important;
+        padding: 0.5rem !important;
+    }
+    
+    /* TIMER FIXO */
     .footer-timer {
         position: fixed; left: 0; bottom: 0; width: 100%;
         background-color: #0E1117; color: #FFD700;
-        text-align: center; padding: 8px; font-size: 14px;
+        text-align: center; padding: 10px; font-size: 16px;
         font-weight: bold; border-top: 1px solid #333;
         z-index: 9999;
+        box-shadow: 0 -5px 10px rgba(0,0,0,0.5);
     }
     
-    /* Tabelas */
-    .stDataFrame { font-size: 12px; }
-    
-    /* Status */
-    .status-active {
-        background-color: #1F4025; color: #00FF00; padding: 8px; 
-        text-align: center; border-radius: 6px; font-weight: bold; margin-bottom: 10px;
-    }
+    /* TABELAS */
+    .stDataFrame { font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,7 +88,6 @@ def carregar_tudo():
     st.session_state['df_black'] = load_safe(FILES['black'], ['id', 'País', 'Liga'])
     st.session_state['df_vip'] = load_safe(FILES['vip'], ['id', 'País', 'Liga', 'Data_Erro', 'Strikes'])
     
-    # Carrega histórico completo para estatísticas
     df = load_safe(FILES['hist'], ['Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado'])
     st.session_state['historico_sinais'] = df.to_dict('records')
 
@@ -128,14 +149,11 @@ def check_green_red(jogos, token, chats):
                 try: ph, pa = map(int, s['Placar_Sinal'].split('x'))
                 except: continue
                 
-                # Green: Saiu Gol
                 if (gh+ga) > (ph+pa):
                     s['Resultado'] = '✅ GREEN'
                     msg = f"✅ *GREEN!* \n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📈 {gh}x{ga} (Era {s['Placar_Sinal']})\n🎯 {s['Estrategia']}"
                     enviar_telegram(token, chats, msg)
                     atualizou = True
-                
-                # Red: Acabou
                 elif jogo['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
                     s['Resultado'] = '❌ RED'
                     msg = f"❌ *RED* \n⚽ {s['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {s['Estrategia']}"
@@ -175,7 +193,7 @@ carregar_tudo()
 
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
-    if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []} # Cura erro
+    if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []}
     now = datetime.now()
     if sog_h > mem['sog_h']: mem['h_t'].extend([now]*(sog_h-mem['sog_h']))
     if sog_a > mem['sog_a']: mem['a_t'].extend([now]*(sog_a-mem['sog_a']))
@@ -233,7 +251,7 @@ def gerenciar_strikes(id_liga, pais, nome_liga):
         salvar_strike(id_liga, pais, nome_liga, novo_strike)
         st.toast(f"⚠️ {nome_liga} Strike 1/2")
 
-# --- 7. SIDEBAR ---
+# --- 7. SIDEBAR (BOTÕES LADO A LADO) ---
 with st.sidebar:
     st.title("❄️ Neves PRO")
     
@@ -243,18 +261,19 @@ with st.sidebar:
         TG_CHAT = st.text_input("Chat IDs:")
         INTERVALO = st.slider("Ciclo (s):", 30, 300, 60)
         
-        c1, c2 = st.columns(2)
-        if c1.button("🔄 Reenviar\nSinais"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if c2.button("🗑️ Limpar\nBlacklist"):
+        # Botões lado a lado com textos curtos para não quebrar
+        col_b1, col_b2 = st.columns(2)
+        if col_b1.button("🔄 Reenviar"): reenviar_sinais(TG_TOKEN, TG_CHAT)
+        if col_b2.button("🗑️ Limpar"):
             if os.path.exists(FILES['black']): os.remove(FILES['black'])
             st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
             st.rerun()
 
     with st.expander("📘 Manual", expanded=False):
-        st.write("🟣 **Porteira:** 2 gols < 30min")
-        st.write("🟢 **Blitz:** Pressão forte")
-        st.write("💰 **Janela:** 70-75min intenso")
-        st.write("⚡ **Relâmpago:** 5-15' elétrico")
+        st.markdown("**🟣 Porteira:** 2 gols < 30min")
+        st.markdown("**🟢 Blitz:** Pressão forte")
+        st.markdown("**💰 Janela:** 70-75min intenso")
+        st.markdown("**⚡ Relâmpago:** 5-15' elétrico")
 
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
@@ -309,7 +328,7 @@ if ROBO_LIGADO:
 
         radar.append({"Liga": j['league']['name'], "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
-    # Agenda
+    # Agenda e Relatório
     agenda = []
     try:
         prox = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"date": datetime.now().strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}).json().get('response', [])
@@ -327,75 +346,64 @@ if ROBO_LIGADO:
     with main.container():
         st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # PREPARAÇÃO DE DADOS PARA ESTATÍSTICAS
+        # PREPARAÇÃO DE DADOS PARA MÉTRICAS
         df_full = pd.DataFrame(st.session_state['historico_sinais'])
         if not df_full.empty:
             hoje = datetime.now().strftime('%Y-%m-%d')
-            # Filtro Hoje
             df_hoje = df_full[df_full['Data'] == hoje]
-            # Filtro 7 Dias (Simples)
-            df_full['Data_Dt'] = pd.to_datetime(df_full['Data'], errors='coerce')
-            data_7dias = pd.to_datetime(hoje) - timedelta(days=7)
-            df_7dias = df_full[df_full['Data_Dt'] >= data_7dias]
-            # Filtro Mês
-            df_mes = df_full[df_full['Data_Dt'].dt.month == datetime.now().month]
+            t_hj, g_hj, r_hj, w_hj = calcular_stats(df_hoje)
         else:
-            df_hoje = df_7dias = df_mes = pd.DataFrame(columns=['Resultado'])
+            df_hoje = pd.DataFrame()
+            t_hj, g_hj, r_hj, w_hj = 0, 0, 0, 0.0
 
-        # CÁLCULO DE MÉTRICAS
-        t_hj, g_hj, r_hj, w_hj = calcular_stats(df_hoje)
-        t_7d, g_7d, r_7d, w_7d = calcular_stats(df_7dias)
-        t_ms, g_ms, r_ms, w_ms = calcular_stats(df_mes)
-        t_all, g_all, r_all, w_all = calcular_stats(df_full)
+        # PLACAR NO TOPO
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t_hj}</div><div class="metric-sub">{g_hj} Green | {r_hj} Red</div></div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="metric-box"><div class="metric-title">Assertividade</div><div class="metric-value">{w_hj:.0f}%</div><div class="metric-sub">Hoje</div></div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
+        c4.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
+        
+        st.write("")
 
-        # 1. ABAS DE NAVEGAÇÃO
-        t1, t2, t3, t4, t5, t6, t7 = st.tabs([
-            f"📡 Radar ({len(radar)})", 
-            f"📈 Estatísticas", 
-            f"📜 Histórico ({len(df_hoje)})",
-            f"📅 Agenda ({len(agenda)})", 
-            f"🚫 Blacklist ({len(st.session_state['df_black'])})", 
-            f"🛡️ Seguras ({len(st.session_state['ligas_imunes'])})", 
-            "⚠️ Obs"
+        # ABAS
+        t1, t2, t3, t4, t5, t6 = st.tabs([
+            f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", 
+            f"📜 Histórico ({len(df_hoje)})", f"📈 Estatísticas",
+            f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"⚠️ Obs ({len(st.session_state['df_vip'])})"
         ])
         
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
             else: st.info("Buscando jogos...")
         
-        # ABA NOVA: ESTATÍSTICAS AVANÇADAS
         with t2:
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                st.markdown(f'<div class="metric-box"><div class="metric-title">HOJE</div><div class="metric-value">{w_hj:.0f}%</div><div style="font-size:12px">{g_hj}G - {r_hj}R</div></div>', unsafe_allow_html=True)
-            with c2:
-                st.markdown(f'<div class="metric-box"><div class="metric-title">7 DIAS</div><div class="metric-value">{w_7d:.0f}%</div><div style="font-size:12px">{g_7d}G - {r_7d}R</div></div>', unsafe_allow_html=True)
-            with c3:
-                st.markdown(f'<div class="metric-box"><div class="metric-title">MÊS ATUAL</div><div class="metric-value">{w_ms:.0f}%</div><div style="font-size:12px">{g_ms}G - {r_ms}R</div></div>', unsafe_allow_html=True)
-            with c4:
-                st.markdown(f'<div class="metric-box"><div class="metric-title">GERAL</div><div class="metric-value">{w_all:.0f}%</div><div style="font-size:12px">{g_all}G - {r_all}R</div></div>', unsafe_allow_html=True)
+            if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
+            else: st.caption("Sem jogos.")
             
-            st.caption("Baseado nos dados salvos no histórico.")
-
         with t3:
             if not df_hoje.empty: st.dataframe(df_hoje.astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Nenhum sinal hoje.")
             
         with t4:
-            if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
-            else: st.caption("Sem jogos.")
-            
+            # Estatísticas Completas
+            if not df_full.empty:
+                df_full['Data_Dt'] = pd.to_datetime(df_full['Data'], errors='coerce')
+                dt_7d = pd.to_datetime(datetime.now()) - timedelta(days=7)
+                df_7d = df_full[df_full['Data_Dt'] >= dt_7d]
+                
+                t_all, g_all, r_all, w_all = calcular_stats(df_full)
+                t_7d, g_7d, r_7d, w_7d = calcular_stats(df_7d)
+                
+                sc1, sc2 = st.columns(2)
+                sc1.markdown(f"**Geral:** {w_all:.1f}% ({g_all}G - {r_all}R)")
+                sc2.markdown(f"**7 Dias:** {w_7d:.1f}% ({g_7d}G - {r_7d}R)")
+            else: st.caption("Sem dados suficientes.")
+
         with t5:
             if not st.session_state['df_black'].empty: st.dataframe(st.session_state['df_black'].astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Limpo.")
             
         with t6:
-            if st.session_state['ligas_imunes']: 
-                safe_l = [{'id': k, 'País': v['País'], 'Liga': v['Liga']} for k,v in st.session_state['ligas_imunes'].items()]
-                st.dataframe(pd.DataFrame(safe_l).astype(str), use_container_width=True, hide_index=True)
-            else: st.caption("Nenhuma.")
-            
-        with t7:
             if not st.session_state['df_vip'].empty: st.dataframe(st.session_state['df_vip'].astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Tudo ok.")
 
