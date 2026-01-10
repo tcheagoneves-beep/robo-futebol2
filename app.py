@@ -30,9 +30,11 @@ if 'alertas_enviados' not in st.session_state:
 if 'memoria_pressao' not in st.session_state:
     st.session_state['memoria_pressao'] = {}
 
-# MEMÓRIA DE ERROS (SISTEMA DE STRIKES)
+# MEMÓRIA DE INTELIGÊNCIA DA LIGA
 if 'erros_por_liga' not in st.session_state:
-    st.session_state['erros_por_liga'] = {}
+    st.session_state['erros_por_liga'] = {} # Conta falhas
+if 'ligas_imunes' not in st.session_state:
+    st.session_state['ligas_imunes'] = set() # Ligas que provaram ter dados
 
 def carregar_blacklist():
     if not os.path.exists(BLACK_FILE): return pd.DataFrame(columns=['id', 'País', 'Liga'])
@@ -74,7 +76,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Sistema de Strikes Ativo.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Sistema de Imunidade Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -88,7 +90,8 @@ with st.sidebar:
             if st.button("♻️ Reset Sessão"):
                 st.session_state['alertas_enviados'] = set() 
                 st.session_state['memoria_pressao'] = {}
-                st.session_state['erros_por_liga'] = {} # Reseta os strikes
+                st.session_state['erros_por_liga'] = {}
+                st.session_state['ligas_imunes'] = set()
                 st.toast("Memória limpa!")
                 time.sleep(1)
                 st.rerun()
@@ -255,7 +258,10 @@ if ROBO_LIGADO:
     
     for j in jogos_live:
         l_id = str(j['league']['id'])
-        if l_id in ids_bloqueados: continue
+        
+        # Se estiver na Blacklist, pula silenciosamente
+        if l_id in ids_bloqueados: 
+            continue
         
         f_id = j['fixture']['id']
         tempo = j['fixture']['status'].get('elapsed', 0)
@@ -279,25 +285,29 @@ if ROBO_LIGADO:
         if dentro_janela:
             stats = buscar_stats(f_id)
             
-            # --- SISTEMA DE 3 STRIKES (VALIDAÇÃO DE INTEGRIDADE) ---
+            # --- SISTEMA DE IMUNIDADE E BANIMENTO ---
             if not stats and not MODO_DEMO:
-                # 1. Incrementa o contador de erro para essa liga
-                erros_atuais = st.session_state['erros_por_liga'].get(l_id, 0) + 1
-                st.session_state['erros_por_liga'][l_id] = erros_atuais
-                
-                # 2. Verifica se atingiu o limite de 3 falhas
-                if erros_atuais >= 3:
-                    salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
-                    st.toast(f"🚫 Liga Banida (Sem dados): {j['league']['name']}")
+                # Se a liga JÁ provou que tem dados (Imune), ignoramos esse erro.
+                if l_id in st.session_state['ligas_imunes']:
+                    pass # Liga é boa, só esse jogo tá ruim. Não bane.
                 else:
-                    # Apenas avisa, mas continua tentando
-                    pass 
-                
+                    # Liga suspeita. Conta strike.
+                    erros = st.session_state['erros_por_liga'].get(l_id, 0) + 1
+                    st.session_state['erros_por_liga'][l_id] = erros
+                    
+                    # 5 Strikes para banir (Tolerância alta)
+                    if erros >= 5:
+                        salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
+                        # Só avisa uma vez para não spamar
+                        st.toast(f"🚫 Banida: {j['league']['name']}")
                 continue
             
-            # Se deu certo, remove da lista de erros (Opcional: Zerar erros se funcionar)
-            if l_id in st.session_state['erros_por_liga']:
-                del st.session_state['erros_por_liga'][l_id]
+            if stats:
+                # SUCESSO! A liga tem dados. Vacina ela contra banimento.
+                st.session_state['ligas_imunes'].add(l_id)
+                # Reseta contador de erros
+                if l_id in st.session_state['erros_por_liga']:
+                    del st.session_state['erros_por_liga'][l_id]
 
             sinal = processar_jogo(j, stats)
             
@@ -361,13 +371,9 @@ if ROBO_LIGADO:
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
             else: st.info("Monitorando jogos...")
-        
         with t2:
-            if prox_filtrado:
-                st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
-            else:
-                st.caption("Sem mais jogos por hoje.")
-        
+            if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
+            else: st.caption("Sem mais jogos por hoje.")
         with t3:
             if not df_black.empty: st.table(df_black)
             else: st.caption("Limpo.")
