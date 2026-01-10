@@ -27,12 +27,12 @@ STRIKES_FILE = 'neves_strikes_vip.txt'
 HIST_FILE = 'neves_historico_sinais.csv'
 RELATORIO_FILE = 'neves_status_relatorio.txt'
 
-# --- 🛡️ LISTA VIP (Incluindo Estaduais BR) ---
+# --- 🛡️ LISTA VIP ---
 LIGAS_VIP = [
-    39, 78, 135, 140, 61, 2, 3, 9, 45, 48, # Europa
-    71, 72, 13, 11, # Brasil A/B/Liberta
-    474, 475, 476, 477, 478, 479, # Estaduais Principais (Gaúcho=477)
-    606, 610, 628, 55, 143 # Outros (Paranaense, Goiano, Brasiliense)
+    39, 78, 135, 140, 61, 2, 3, 9, 45, 48, 
+    71, 72, 13, 11, 
+    474, 475, 476, 477, 478, 479, 
+    606, 610, 628, 55, 143 
 ]
 
 # --- INICIALIZAÇÃO DE MEMÓRIA ---
@@ -46,7 +46,7 @@ if 'erros_vip' not in st.session_state: st.session_state['erros_vip'] = {}
 if 'ligas_imunes' not in st.session_state: st.session_state['ligas_imunes'] = {} 
 if 'erros_por_liga' not in st.session_state: st.session_state['erros_por_liga'] = {}
 
-# --- FUNÇÕES DE ARQUIVO (PERSISTÊNCIA) ---
+# --- FUNÇÕES DE ARQUIVO ---
 def carregar_historico():
     if not os.path.exists(HIST_FILE): return []
     try:
@@ -77,7 +77,7 @@ def marcar_relatorio_como_enviado():
 if 'historico_sinais' not in st.session_state:
     st.session_state['historico_sinais'] = carregar_historico()
 
-# --- FUNÇÕES ---
+# --- FUNÇÕES GERAIS ---
 def carregar_blacklist():
     if not os.path.exists(BLACK_FILE): return pd.DataFrame(columns=['id', 'País', 'Liga'])
     try: return pd.read_csv(BLACK_FILE)
@@ -363,14 +363,12 @@ if ROBO_LIGADO:
             stats = buscar_stats(f_id)
             stats_validos = verificar_qualidade_dados(stats)
             
-            # LÓGICA DE INTEGRIDADE
             if not stats_validos and not MODO_DEMO:
                 if int(l_id) in LIGAS_VIP:
                     if l_id not in st.session_state['ligas_imunes']:
                         registrar_erro_vip(l_id, j['league']['country'], j['league']['name'])
                 elif l_id in st.session_state['ligas_imunes']: pass
                 else:
-                    # Regra dos 45 min para não VIPs
                     if tempo >= 45:
                         salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
                         st.toast(f"🚫 Banida (45min sem dados): {j['league']['name']}")
@@ -441,39 +439,29 @@ if ROBO_LIGADO:
         if not verificar_relatorio_enviado():
             enviar_relatorio_diario(tg_token, tg_chat_ids)
 
-    # --- EXIBIÇÃO SEGURA (SEM CRASH) ---
+    # --- EXIBIÇÃO (LAYOUT LIMPO) ---
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # Histórico recarregado
+        # Histórico e Dados para as Abas
         historico_real = carregar_historico()
-        
-        # Métricas
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f'<div class="metric-card"><div class="metric-value">{len(historico_real)}</div><div class="metric-label">Sinais Hoje</div></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="metric-card"><div class="metric-value">{len(radar)}</div><div class="metric-label">Jogos Live</div></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="metric-card"><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-label">Ligas Seguras</div></div>', unsafe_allow_html=True)
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # Dataframes Seguros (Convertidos para String para evitar erro)
         df_radar = pd.DataFrame(radar).astype(str)
         df_hist = pd.DataFrame(historico_real).astype(str)
         df_agenda = pd.DataFrame(prox_filtrado).astype(str)
         
-        lista_imunes = list(st.session_state['ligas_imunes'].values())
-        df_imunes = pd.DataFrame(lista_imunes).astype(str) if lista_imunes else pd.DataFrame(columns=['País', 'Liga'])
+        lista_segura = list(st.session_state['ligas_imunes'].values())
+        df_imunes = pd.DataFrame(lista_segura).astype(str) if lista_segura else pd.DataFrame(columns=['País', 'Liga'])
         
         df_obs = carregar_strikes_vip()
-        if not df_obs.empty and 'País' in df_obs.columns: 
-            df_obs = df_obs[['País', 'Liga', 'Data_Erro', 'Strikes']].astype(str)
+        if not df_obs.empty and 'País' in df_obs.columns: df_obs = df_obs[['País', 'Liga', 'Data_Erro', 'Strikes']].astype(str)
 
-        # Tabs
-        t1, t2, t3, t4, t5, t6 = st.tabs([
+        # ABAS ORGANIZADAS (Dashboard em aba separada)
+        t1, t2, t3, t4, t5, t6, t7 = st.tabs([
             f"📡 Radar ({len(radar)})", 
-            f"📜 Histórico ({len(historico_real)})",
             f"📅 Agenda ({len(prox_filtrado)})", 
+            f"📊 Dashboard",
+            f"📜 Histórico ({len(historico_real)})",
             f"🚫 Blacklist ({len(df_black)})",
             f"🛡️ Seguras ({len(df_imunes)})",
             f"⚠️ Observação ({len(df_obs)})"
@@ -481,16 +469,26 @@ if ROBO_LIGADO:
         
         with t1:
             if not df_radar.empty: st.dataframe(df_radar, use_container_width=True, hide_index=True)
-            else: st.info("Monitorando...")
+            else: st.info("Aguardando jogos ao vivo...")
+            
         with t2:
-            if not df_hist.empty: st.dataframe(df_hist, use_container_width=True, hide_index=True)
-            else: st.caption("Nenhum sinal hoje.")
-        with t3:
             if not df_agenda.empty: st.dataframe(df_agenda.sort_values("Hora"), use_container_width=True, hide_index=True)
-            else: st.caption("Sem jogos.")
-        with t4: st.table(df_black.sort_values(['País', 'Liga']).astype(str)) if not df_black.empty else st.caption("Limpo.")
-        with t5: st.table(df_imunes.sort_values(['País', 'Liga'])) if not df_imunes.empty else st.caption("Vazio.")
-        with t6: st.table(df_obs) if not df_obs.empty else st.caption("Tudo ok.")
+            else: st.caption("Agenda vazia por hoje.")
+
+        with t3:
+            st.markdown("### 📈 Resumo do Dia")
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f'<div class="metric-card"><div class="metric-value">{len(historico_real)}</div><div class="metric-label">Sinais Enviados</div></div>', unsafe_allow_html=True)
+            c2.markdown(f'<div class="metric-card"><div class="metric-value">{len(radar)}</div><div class="metric-label">Jogos Monitorados Agora</div></div>', unsafe_allow_html=True)
+            c3.markdown(f'<div class="metric-card"><div class="metric-value">{len(lista_segura)}</div><div class="metric-label">Ligas Validadas</div></div>', unsafe_allow_html=True)
+            
+        with t4:
+            if not df_hist.empty: st.dataframe(df_hist, use_container_width=True, hide_index=True)
+            else: st.caption("Nenhum sinal gerado ainda.")
+            
+        with t5: st.table(df_black.sort_values(['País', 'Liga']).astype(str)) if not df_black.empty else st.caption("Limpo.")
+        with t6: st.table(df_imunes.sort_values(['País', 'Liga'])) if not df_imunes.empty else st.caption("Vazio.")
+        with t7: st.table(df_obs) if not df_obs.empty else st.caption("Tudo ok.")
 
         relogio = st.empty()
         for i in range(INTERVALO, 0, -1):
