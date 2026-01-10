@@ -24,9 +24,9 @@ st.markdown("""
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 
-# --- AUTOCORREÇÃO DE MEMÓRIA (CORRIGE O ERRO DE TYPE) ---
+# --- AUTOCORREÇÃO DE MEMÓRIA ---
 if 'ligas_imunes' in st.session_state and not isinstance(st.session_state['ligas_imunes'], dict):
-    st.session_state['ligas_imunes'] = {} # Reseta para o formato correto (Dicionário)
+    st.session_state['ligas_imunes'] = {} 
 
 if 'alertas_enviados' not in st.session_state:
     st.session_state['alertas_enviados'] = set()
@@ -36,9 +36,9 @@ if 'memoria_pressao' not in st.session_state:
 
 # MEMÓRIA DE INTELIGÊNCIA DA LIGA
 if 'erros_por_liga' not in st.session_state:
-    st.session_state['erros_por_liga'] = {} # Conta falhas
+    st.session_state['erros_por_liga'] = {} 
 if 'ligas_imunes' not in st.session_state:
-    st.session_state['ligas_imunes'] = {} # Agora garantido ser Dicionário {id: nome_liga}
+    st.session_state['ligas_imunes'] = {} 
 
 def carregar_blacklist():
     if not os.path.exists(BLACK_FILE): return pd.DataFrame(columns=['id', 'País', 'Liga'])
@@ -80,7 +80,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Correção de Memória Aplicada.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Listas em Ordem Alfabética.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -292,11 +292,9 @@ if ROBO_LIGADO:
             
             # --- SISTEMA DE IMUNIDADE (STRIKES) ---
             if not stats and not MODO_DEMO:
-                # Se já é imune (Whitelist), ignora erro e continua
                 if l_id in st.session_state['ligas_imunes']:
                     pass
                 else:
-                    # Conta erro (Strike)
                     erros = st.session_state['erros_por_liga'].get(l_id, 0) + 1
                     st.session_state['erros_por_liga'][l_id] = erros
                     
@@ -306,7 +304,6 @@ if ROBO_LIGADO:
                 continue
             
             if stats:
-                # SUCESSO! Salva na Whitelist
                 st.session_state['ligas_imunes'][l_id] = j['league']['name']
                 if l_id in st.session_state['erros_por_liga']:
                     del st.session_state['erros_por_liga'][l_id]
@@ -364,11 +361,11 @@ if ROBO_LIGADO:
             "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
         })
 
+    # --- EXIBIÇÃO ---
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # Cria dataframe da whitelist com segurança
         lista_segura = list(st.session_state['ligas_imunes'].values())
         df_imunes = pd.DataFrame(lista_segura, columns=['Liga']) if lista_segura else pd.DataFrame(columns=['Liga'])
         
@@ -386,10 +383,12 @@ if ROBO_LIGADO:
             if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
             else: st.caption("Sem mais jogos por hoje.")
         with t3:
-            if not df_black.empty: st.table(df_black)
+            # CORREÇÃO: Ordenação alfabética Blacklist
+            if not df_black.empty: st.table(df_black.sort_values('Liga'))
             else: st.caption("Limpo.")
         with t4:
-            if not df_imunes.empty: st.table(df_imunes)
+            # CORREÇÃO: Ordenação alfabética Whitelist
+            if not df_imunes.empty: st.table(df_imunes.sort_values('Liga'))
             else: st.caption("Nenhuma liga validada ainda.")
 
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
