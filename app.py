@@ -61,14 +61,12 @@ FILES = {
 
 # --- 2. FUNÇÕES DE DADOS ---
 def get_time_br():
-    """Retorna horário de Brasília corrigido"""
     return datetime.now(pytz.timezone('America/Sao_Paulo'))
 
 def load_safe(path, cols):
     if not os.path.exists(path): return pd.DataFrame(columns=cols)
     try:
         df = pd.read_csv(path)
-        # Garante colunas mínimas
         for c in cols:
             if c not in df.columns: df[c] = ""
         return df.fillna("").astype(str)
@@ -79,7 +77,6 @@ def carregar_tudo():
     st.session_state['df_vip'] = load_safe(FILES['vip'], ['id', 'País', 'Liga', 'Data_Erro', 'Strikes'])
     st.session_state['df_safe'] = load_safe(FILES['safe'], ['id', 'País', 'Liga'])
     
-    # Histórico agora tem FID (Fixture ID) para rastreio preciso
     df = load_safe(FILES['hist'], ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado'])
     hoje = get_time_br().strftime('%Y-%m-%d')
     if not df.empty and 'Data' in df.columns:
@@ -118,7 +115,6 @@ def salvar_strike(id_liga, pais, nome_liga, strikes):
 
 def salvar_historico(item):
     df = pd.DataFrame([item])
-    # Append mode com header inteligente
     hdr = not os.path.exists(FILES['hist'])
     df.to_csv(FILES['hist'], mode='a', header=hdr, index=False)
 
@@ -145,14 +141,12 @@ def processar_resultado(sinal, jogo_api, token, chats):
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
-    # GREEN
     if (gh+ga) > (ph+pa):
         sinal['Resultado'] = '✅ GREEN'
         msg = f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar Atual: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}"
         enviar_telegram(token, chats, msg)
         return True
     
-    # RED
     status = jogo_api['fixture']['status']['short']
     if status in ['FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
@@ -163,30 +157,34 @@ def processar_resultado(sinal, jogo_api, token, chats):
     return False
 
 def check_green_red_avancado(jogos_live, token, chats, api_key):
-    """Verifica Live E busca por ID se necessário"""
     atualizou = False
     hist = st.session_state['historico_sinais']
     pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
     
     if not pendentes: return
 
-    # 1. Verifica na lista LIVE primeiro
     ids_live = [j['fixture']['id'] for j in jogos_live]
     
     for s in pendentes:
-        # Recupera FID (Se não tiver FID antigo, tenta pelo nome, mas FID é preferencial)
-        fid = int(float(s.get('FID', 0)))
+        # --- BLINDAGEM DO VALUE ERROR AQUI ---
+        try:
+            # Tenta converter. Se for vazio ou erro, vira 0.
+            raw_fid = s.get('FID', 0)
+            if pd.isna(raw_fid) or str(raw_fid).strip() == "":
+                fid = 0
+            else:
+                fid = int(float(raw_fid))
+        except:
+            fid = 0
+        # -------------------------------------
         
-        # Se está no Live, processa
         if fid in ids_live:
             jogo = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
             if jogo and processar_resultado(s, jogo, token, chats): atualizou = True
         
-        # Se NÃO está no live, busca na API individualmente (Jogo acabou)
         elif fid > 0:
             try:
                 url = "https://v3.football.api-sports.io/fixtures"
-                # Busca direta pelo ID é mais rápida e precisa
                 res = requests.get(url, headers={"x-apisports-key": api_key}, params={"id": fid}).json()
                 if res['response']:
                     jogo_ft = res['response'][0]
@@ -194,13 +192,18 @@ def check_green_red_avancado(jogos_live, token, chats, api_key):
             except: pass
             
     if atualizou:
-        # Reescreve o CSV inteiro para atualizar status
         df_all = load_safe(FILES['hist'], ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado'])
-        # Atualiza os dados na memória para o disco
         for s in hist:
-            idx = df_all[df_all['FID'] == str(s['FID'])].index
-            if not idx.empty:
-                df_all.at[idx[0], 'Resultado'] = s['Resultado']
+            # Garante que FID seja string para comparar
+            fid_str = str(s.get('FID', '')).split('.')[0] # Remove .0 se houver
+            if not fid_str: continue
+            
+            # Atualiza no arquivo original
+            mask = df_all['FID'].astype(str).str.split('.').str[0] == fid_str
+            if mask.any():
+                idx = df_all[mask].index[0]
+                df_all.at[idx, 'Resultado'] = s['Resultado']
+        
         df_all.to_csv(FILES['hist'], index=False)
 
 def reenviar_sinais(token, chats):
@@ -290,7 +293,6 @@ def gerenciar_strikes(id_liga, pais, nome_liga):
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves PRO")
-    
     with st.expander("⚙️ Configurações", expanded=True):
         API_KEY = st.text_input("Chave API:", type="password")
         TG_TOKEN = st.text_input("Token Telegram:", type="password")
@@ -316,7 +318,6 @@ if ROBO_LIGADO:
     carregar_tudo()
     try:
         url = "https://v3.football.api-sports.io/fixtures"
-        # Força Fuso Horário BRASIL na API para pegar os jogos certos
         res = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10).json()
         jogos_live = res.get('response', [])
     except: jogos_live = []
@@ -346,7 +347,6 @@ if ROBO_LIGADO:
         
         if not sinal and not stats and tempo >= 45: gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
         
-        # Salva Liga Segura Persistente
         if stats:
             salvar_safe_league(lid, j['league']['country'], j['league']['name'])
         
@@ -357,7 +357,6 @@ if ROBO_LIGADO:
                 msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 <b>ESTRATÉGIA: {sinal['tag'].upper()}</b>\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>"
                 enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                 st.session_state['alertas_enviados'].add(fid)
-                # Salva com FID agora
                 item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": sinal['tag'], "Resultado": "Pendente"}
                 st.session_state['historico_sinais'].insert(0, item)
                 salvar_historico(item)
@@ -365,11 +364,10 @@ if ROBO_LIGADO:
 
         radar.append({"Liga": j['league']['name'], "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
-    # Agenda (Corrigida com Fuso Horário)
+    # Agenda
     agenda = []
     try:
         prox = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"date": get_time_br().strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}).json().get('response', [])
-        # Filtra jogos que ainda vão acontecer (Hora Atual BR + 15min)
         limit = (get_time_br() - timedelta(minutes=15)).strftime('%H:%M')
         for p in prox:
             if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] == 'NS' and p['fixture']['date'][11:16] >= limit:
