@@ -25,8 +25,13 @@ DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 STRIKES_FILE = 'neves_strikes_vip.txt'
 
-# --- 🛡️ LISTA VIP ---
-LIGAS_VIP = [39, 78, 135, 140, 61, 71, 72, 2, 13, 11, 3, 4, 9, 10, 1]
+# --- 🛡️ LISTA VIP (EUROPA + ESTADUAIS BRASIL) ---
+# 474=Gaúcho, 475=Mineiro, 476=Paulista, 477=Carioca, 478=Catarinense, 479=Baiano
+LIGAS_VIP = [
+    39, 78, 135, 140, 61, 2, 3, # Europa
+    71, 72, 13, 11, # Brasileirão/Liberta
+    474, 475, 476, 477, 478, 479 # Estaduais
+]
 
 # --- AUTOCORREÇÃO DE MEMÓRIA ---
 if 'ligas_imunes' in st.session_state:
@@ -41,6 +46,8 @@ if 'memoria_pressao' not in st.session_state:
 
 if 'erros_por_liga' not in st.session_state:
     st.session_state['erros_por_liga'] = {} 
+if 'erros_vip' not in st.session_state:
+    st.session_state['erros_vip'] = {}
 if 'ligas_imunes' not in st.session_state:
     st.session_state['ligas_imunes'] = {} 
 
@@ -56,14 +63,12 @@ def salvar_na_blacklist(id_liga, pais, nome_liga):
         novo = pd.DataFrame([{'id': str(id_liga), 'País': pais, 'Liga': nome_liga}])
         pd.concat([df, novo], ignore_index=True).to_csv(BLACK_FILE, index=False)
 
-# --- NOVA LÓGICA: STRIKES COM NOME ---
+# --- STRIKES DE LONGO PRAZO ---
 def carregar_strikes_vip():
-    # Agora inclui País e Liga na estrutura
     cols = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes']
     if not os.path.exists(STRIKES_FILE): return pd.DataFrame(columns=cols)
     try: 
         df = pd.read_csv(STRIKES_FILE)
-        # Garante compatibilidade se o arquivo antigo tiver menos colunas
         if 'Liga' not in df.columns: return pd.DataFrame(columns=cols)
         return df
     except: return pd.DataFrame(columns=cols)
@@ -82,7 +87,6 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
             strikes_atuais += 1
             df.at[idx, 'Data_Erro'] = hoje
             df.at[idx, 'Strikes'] = strikes_atuais
-            # Atualiza nome e país caso tenha mudado ou esteja vazio
             df.at[idx, 'Liga'] = nome_liga
             df.at[idx, 'País'] = pais
             df.to_csv(STRIKES_FILE, index=False)
@@ -97,7 +101,6 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
         else:
             return "HOJE_JA_FOI"
     else:
-        # Salva COMPLETO agora
         novo = pd.DataFrame([{
             'id': id_liga, 
             'País': pais, 
@@ -145,7 +148,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Nomes nas Observações.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Fix Estaduais Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -160,6 +163,7 @@ with st.sidebar:
                 st.session_state['alertas_enviados'] = set() 
                 st.session_state['memoria_pressao'] = {}
                 st.session_state['erros_por_liga'] = {}
+                st.session_state['erros_vip'] = {}
                 st.session_state['ligas_imunes'] = {}
                 st.toast("Memória limpa!")
                 time.sleep(1)
@@ -325,9 +329,7 @@ if ROBO_LIGADO:
     
     for j in jogos_live:
         l_id = str(j['league']['id'])
-        
-        if l_id in ids_bloqueados: 
-            continue
+        if l_id in ids_bloqueados: continue
         
         f_id = j['fixture']['id']
         tempo = j['fixture']['status'].get('elapsed', 0)
@@ -351,20 +353,11 @@ if ROBO_LIGADO:
         if dentro_janela:
             stats = buscar_stats(f_id)
             
-            # --- SISTEMA DE INTEGRIDADE ---
             if not stats and not MODO_DEMO:
-                # VIP: Verifica histórico de rodadas
                 if int(l_id) in LIGAS_VIP:
-                    if l_id in st.session_state['ligas_imunes']:
-                        pass
-                    else:
-                        registrar_erro_vip(l_id, j['league']['country'], j['league']['name'])
-                
-                # Whitelist: Ignora erro
-                elif l_id in st.session_state['ligas_imunes']:
-                    pass
-                
-                # Desconhecida: Strike tradicional
+                    if l_id in st.session_state['ligas_imunes']: pass
+                    else: registrar_erro_vip(l_id, j['league']['country'], j['league']['name'])
+                elif l_id in st.session_state['ligas_imunes']: pass
                 else:
                     erros = st.session_state['erros_por_liga'].get(l_id, 0) + 1
                     st.session_state['erros_por_liga'][l_id] = erros
@@ -412,7 +405,9 @@ if ROBO_LIGADO:
 
     prox_raw = buscar_proximos(API_KEY)
     prox_filtrado = []
-    hora_atual = agora_brasil().strftime('%H:%M')
+    
+    # CORREÇÃO CRÍTICA: Tolerância de 15 minutos para jogos atrasados não sumirem
+    limite_tolerancia = (agora_brasil() - timedelta(minutes=15)).strftime('%H:%M')
     
     for p in prox_raw:
         lid = str(p['league']['id'])
@@ -423,7 +418,9 @@ if ROBO_LIGADO:
         if status != 'NS': continue
         
         hora_jogo = data_jogo_raw[11:16]
-        if hora_jogo <= hora_atual: continue 
+        
+        # Só esconde se o jogo deveria ter começado há mais de 15 minutos e ainda está NS
+        if hora_jogo < limite_tolerancia: continue 
         
         prox_filtrado.append({
             "Hora": hora_jogo, 
@@ -443,7 +440,6 @@ if ROBO_LIGADO:
         else:
             df_imunes = pd.DataFrame(columns=['País', 'Liga'])
         
-        # DataFrame de Observação (Agora com nomes)
         df_obs = carregar_strikes_vip()
         if not df_obs.empty and 'País' in df_obs.columns:
              df_obs = df_obs[['País', 'Liga', 'Data_Erro', 'Strikes']]
