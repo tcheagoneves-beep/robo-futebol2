@@ -34,7 +34,7 @@ if 'memoria_pressao' not in st.session_state:
 if 'erros_por_liga' not in st.session_state:
     st.session_state['erros_por_liga'] = {} # Conta falhas
 if 'ligas_imunes' not in st.session_state:
-    st.session_state['ligas_imunes'] = set() # Ligas que provaram ter dados
+    st.session_state['ligas_imunes'] = {} # Dicionário {id: nome_liga}
 
 def carregar_blacklist():
     if not os.path.exists(BLACK_FILE): return pd.DataFrame(columns=['id', 'País', 'Liga'])
@@ -76,7 +76,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Sistema de Imunidade Ativo.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Whitelist visual ativa.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -91,7 +91,7 @@ with st.sidebar:
                 st.session_state['alertas_enviados'] = set() 
                 st.session_state['memoria_pressao'] = {}
                 st.session_state['erros_por_liga'] = {}
-                st.session_state['ligas_imunes'] = set()
+                st.session_state['ligas_imunes'] = {}
                 st.toast("Memória limpa!")
                 time.sleep(1)
                 st.rerun()
@@ -100,7 +100,7 @@ with st.sidebar:
             if st.button("🗑️ Del. Blacklist"):
                 if os.path.exists(BLACK_FILE): 
                     os.remove(BLACK_FILE)
-                    st.toast("Blacklist apagada!")
+                    st.toast("Blacklist apagada! Começando do zero.")
                 else:
                     st.toast("Já vazia.")
                 time.sleep(1)
@@ -259,7 +259,7 @@ if ROBO_LIGADO:
     for j in jogos_live:
         l_id = str(j['league']['id'])
         
-        # Se estiver na Blacklist, pula silenciosamente
+        # Filtro Blacklist
         if l_id in ids_bloqueados: 
             continue
         
@@ -287,25 +287,23 @@ if ROBO_LIGADO:
             
             # --- SISTEMA DE IMUNIDADE E BANIMENTO ---
             if not stats and not MODO_DEMO:
-                # Se a liga JÁ provou que tem dados (Imune), ignoramos esse erro.
+                # Se já é imune, ignora o erro
                 if l_id in st.session_state['ligas_imunes']:
-                    pass # Liga é boa, só esse jogo tá ruim. Não bane.
+                    pass
                 else:
-                    # Liga suspeita. Conta strike.
+                    # Strike system
                     erros = st.session_state['erros_por_liga'].get(l_id, 0) + 1
                     st.session_state['erros_por_liga'][l_id] = erros
                     
-                    # 5 Strikes para banir (Tolerância alta)
-                    if erros >= 5:
+                    if erros >= 5: # Tolerância de 5 erros
                         salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
-                        # Só avisa uma vez para não spamar
                         st.toast(f"🚫 Banida: {j['league']['name']}")
                 continue
             
             if stats:
-                # SUCESSO! A liga tem dados. Vacina ela contra banimento.
-                st.session_state['ligas_imunes'].add(l_id)
-                # Reseta contador de erros
+                # DADOS ENCONTRADOS! Liga entra na Whitelist.
+                st.session_state['ligas_imunes'][l_id] = j['league']['name']
+                # Remove strikes anteriores se houver
                 if l_id in st.session_state['erros_por_liga']:
                     del st.session_state['erros_por_liga'][l_id]
 
@@ -362,21 +360,38 @@ if ROBO_LIGADO:
             "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
         })
 
+    # --- EXIBIÇÃO ---
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        t1, t2, t3 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(prox_filtrado)})", f"🚫 Blacklist ({len(df_black)})"])
+        # Cria dataframe da whitelist para exibição
+        df_imunes = pd.DataFrame(list(st.session_state['ligas_imunes'].values()), columns=['Liga'])
+        
+        t1, t2, t3, t4 = st.tabs([
+            f"📡 Radar ({len(radar)})", 
+            f"📅 Agenda ({len(prox_filtrado)})", 
+            f"🚫 Blacklist ({len(df_black)})",
+            f"🛡️ Seguras ({len(df_imunes)})"
+        ])
         
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
             else: st.info("Monitorando jogos...")
+        
         with t2:
-            if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
-            else: st.caption("Sem mais jogos por hoje.")
+            if prox_filtrado:
+                st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Sem mais jogos por hoje.")
+        
         with t3:
             if not df_black.empty: st.table(df_black)
             else: st.caption("Limpo.")
+            
+        with t4:
+            if not df_imunes.empty: st.table(df_imunes)
+            else: st.caption("Nenhuma liga validada ainda.")
 
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
             c1, c2 = st.columns(2)
