@@ -75,13 +75,11 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
     hoje = datetime.now().strftime('%Y-%m-%d')
     id_liga = str(id_liga)
     
-    # Se já tem registro
     if id_liga in df['id'].astype(str).values:
         idx = df.index[df['id'].astype(str) == id_liga].tolist()[0]
         ultima_data = df.at[idx, 'Data_Erro']
         strikes_atuais = df.at[idx, 'Strikes']
         
-        # Só conta strike se for OUTRO DIA
         if ultima_data != hoje:
             strikes_atuais += 1
             df.at[idx, 'Data_Erro'] = hoje
@@ -94,22 +92,41 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
                 salvar_na_blacklist(id_liga, pais, nome_liga)
                 st.toast(f"🚫 VIP Banida (2 Rodadas Falhas): {nome_liga}")
     else:
-        # Primeiro erro
         novo = pd.DataFrame([{
             'id': id_liga, 'País': pais, 'Liga': nome_liga, 
             'Data_Erro': hoje, 'Strikes': 1
         }])
         pd.concat([df, novo], ignore_index=True).to_csv(STRIKES_FILE, index=False)
-        st.toast(f"⚠️ VIP Alertada: {nome_liga}")
+        st.toast(f"⚠️ VIP Alertada (Falta Estatística): {nome_liga}")
 
 def limpar_erro_vip(id_liga):
-    # Se a liga funcionou, remove da lista de observação/strikes
     if not os.path.exists(STRIKES_FILE): return
     df = pd.read_csv(STRIKES_FILE)
     if str(id_liga) in df['id'].astype(str).values:
         df = df[df['id'].astype(str) != str(id_liga)]
         df.to_csv(STRIKES_FILE, index=False)
-        st.toast(f"✅ VIP Recuperada: Liga {id_liga} voltou a funcionar!")
+        st.toast(f"✅ VIP Recuperada (Dados Ok): Liga {id_liga}")
+
+# --- 🆕 VALIDAÇÃO DE QUALIDADE DE DADOS ---
+def verificar_qualidade_dados(stats):
+    """
+    Retorna True APENAS se houver números reais de Chutes.
+    Evita validar ligas que só mandam placar.
+    """
+    if not stats: return False
+    try:
+        dados_uteis = False
+        for time_stats in stats:
+            for item in time_stats.get('statistics', []):
+                # O scout PRECISA informar Chutes ou Chutes no Gol
+                if item['type'] in ['Shots on Goal', 'Total Shots']:
+                    if item['value'] is not None:
+                        dados_uteis = True
+                        break
+            if dados_uteis: break
+        return dados_uteis
+    except:
+        return False
 
 def enviar_telegram_real(token, chat_ids, mensagem):
     if token and chat_ids:
@@ -140,7 +157,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Monitoramento VIP Ativo.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Filtro de Qualidade Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -346,15 +363,21 @@ if ROBO_LIGADO:
         if dentro_janela:
             stats = buscar_stats(f_id)
             
+            # --- VALIDAÇÃO DA QUALIDADE DOS DADOS (AQUI É O SEGREDO) ---
+            # Verifica se os dados contêm "Chutes no Gol" ou "Total de Chutes"
+            # Se não tiver, o robô considera que está SEM DADOS úteis.
+            stats_validos = verificar_qualidade_dados(stats)
+            
             # --- SISTEMA DE INTEGRIDADE (VIP CONDICIONAL) ---
-            if not stats and not MODO_DEMO:
+            if not stats_validos and not MODO_DEMO:
                 # 1. VIP (Estadual/Europa): Segue Regra de 45 min
                 if int(l_id) in LIGAS_VIP:
+                    # Se não estiver salvo como seguro, registra erro
                     if l_id not in st.session_state['ligas_imunes']:
                         registrar_erro_vip(l_id, j['league']['country'], j['league']['name'])
-                        # Continua processando o jogo no Radar (Sem Break!)
+                        # Continua processando o jogo no Radar (Sem Break!), apenas avisa
                 
-                # 2. Whitelist: Já provou, segue vida
+                # 2. Whitelist: Se já foi aprovado antes, mantém (pode ser falha momentânea)
                 elif l_id in st.session_state['ligas_imunes']:
                     pass
                 
@@ -366,12 +389,12 @@ if ROBO_LIGADO:
                     else:
                         pass # Espera até os 45
             
-            # --- REDENÇÃO AUTOMÁTICA ---
-            if stats:
+            # --- REDENÇÃO AUTOMÁTICA (Só se tiver dados úteis) ---
+            if stats_validos:
                 st.session_state['ligas_imunes'][l_id] = {'País': j['league']['country'], 'Liga': j['league']['name']}
                 if int(l_id) in LIGAS_VIP: limpar_erro_vip(l_id)
 
-            # --- PROCESSA O JOGO (MESMO SE TIVER ERRO DE DADOS ANTES) ---
+            # --- PROCESSA O JOGO ---
             sinal = processar_jogo(j, stats)
             
             if sinal:
