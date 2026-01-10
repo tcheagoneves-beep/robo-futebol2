@@ -145,11 +145,17 @@ def verificar_qualidade_dados(stats):
     except: return False
 
 def enviar_telegram_real(token, chat_ids, mensagem):
+    """
+    Envia mensagem para múltiplos destinatários separados por vírgula.
+    """
     if token and chat_ids:
-        for cid in chat_ids.split(','):
+        # Divide a string de IDs por vírgula e remove espaços extras
+        lista_ids = [id.strip() for id in chat_ids.split(',') if id.strip()]
+        
+        for cid in lista_ids:
             try:
                 requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                              data={"chat_id": cid.strip(), "text": mensagem, "parse_mode": "Markdown"}, timeout=5)
+                              data={"chat_id": cid, "text": mensagem, "parse_mode": "Markdown"}, timeout=5)
             except: pass
 
 def enviar_relatorio_diario(token, chat_ids):
@@ -188,7 +194,7 @@ with st.sidebar:
     with st.expander("⚙️ Configurações", expanded=False):
         API_KEY = st.text_input("Chave API-SPORTS:", type="password")
         tg_token = st.text_input("Telegram Token:", type="password")
-        tg_chat_ids = st.text_input("Chat IDs:")
+        tg_chat_ids = st.text_input("Chat IDs (Separar por vírgula):")
         
         st.markdown("---")
         if st.button("📤 Forçar Relatório"):
@@ -205,7 +211,7 @@ with st.sidebar:
                 st.session_state['memoria_pressao'] = {}
                 st.session_state['erros_vip'] = {}
                 st.session_state['ligas_imunes'] = {}
-                st.session_state['historico_sinais'] = []
+                # Não limpa o histórico de arquivo, só da RAM se precisar
                 st.toast("Reiniciado!")
                 time.sleep(1)
                 st.rerun()
@@ -214,6 +220,7 @@ with st.sidebar:
             if st.button("🗑️ Limpar DB"):
                 for f in [BLACK_FILE, STRIKES_FILE, HIST_FILE, RELATORIO_FILE]:
                     if os.path.exists(f): os.remove(f)
+                st.session_state['historico_sinais'] = []
                 st.toast("Arquivos limpos!")
                 time.sleep(1)
                 st.rerun()
@@ -304,8 +311,6 @@ def processar_jogo(j, stats):
         
         recentes_h, recentes_a = atualizar_momentum(f_id, sog_h, sog_a)
         
-        # --- ESTRATÉGIAS ---
-        # A) PORTEIRA ABERTA (AJUSTADO PARA ENTRADA SECA)
         if tempo <= 30 and total_gols >= 2:
             return {
                 "tag": "🟣 Porteira Aberta", 
@@ -395,15 +400,15 @@ if ROBO_LIGADO:
                         f"🏆 {j['league']['name']}\n"
                         f"⏰ {tempo}'\n\n"
                         f"🧩 *Estratégia:* {sinal['tag']}\n"
-                        f"⚠️ *ORDEM:*\n"
-                        f"{sinal['ordem']}\n\n"
-                        f"📊 *Motivo:* {sinal['motivo']}\n"
+                        f"⚠️ *ORDEM:* {sinal['ordem']}\n"
                         f"📈 *Dados:* {sinal['stats']}"
                     )
+                    # Envia para todos da lista
                     enviar_telegram_real(tg_token, tg_chat_ids, msg)
                     st.session_state['alertas_enviados'].add(f_id)
                     st.toast(f"Sinal Enviado: {sinal['tag']}")
                     
+                    # SALVA NO ARQUIVO PERMANENTE
                     item_historico = {
                         "Data": agora_brasil().strftime('%Y-%m-%d'),
                         "Hora": agora_brasil().strftime('%H:%M'),
@@ -414,6 +419,7 @@ if ROBO_LIGADO:
                         "Resultado": "Pendente"
                     }
                     salvar_sinal_historico(item_historico)
+                    # Adiciona à RAM para mostrar na tela
                     st.session_state['historico_sinais'].append(item_historico)
 
         mem = st.session_state['memoria_pressao'].get(f_id, {})
@@ -452,9 +458,12 @@ if ROBO_LIGADO:
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
+        # Histórico recarregado DO ARQUIVO para garantir integridade
+        historico_real = carregar_historico()
+        st.session_state['historico_sinais'] = historico_real # Sincroniza RAM
+        
         # DASHBOARD MINIMIZÁVEL NO TOPO
         with st.expander("📊 Painel de Controle (Métricas)", expanded=False):
-            historico_real = carregar_historico()
             c1, c2, c3 = st.columns(3)
             c1.markdown(f'<div class="metric-card"><div class="metric-value">{len(historico_real)}</div><div class="metric-label">Sinais Hoje</div></div>', unsafe_allow_html=True)
             c2.markdown(f'<div class="metric-card"><div class="metric-value">{len(radar)}</div><div class="metric-label">Jogos Live</div></div>', unsafe_allow_html=True)
