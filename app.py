@@ -252,6 +252,7 @@ def processar_jogo(j, stats):
     away = j['teams']['away']['name']
     gh = j['goals']['home'] or 0
     ga = j['goals']['away'] or 0
+    total_gols = gh + ga
     
     try:
         def get_val(idx, nome):
@@ -477,4 +478,19 @@ if ROBO_LIGADO:
         
         with t1: st.dataframe(df_radar, use_container_width=True, hide_index=True) if not df_radar.empty else st.info("Aguardando jogos ao vivo...")
         with t2: st.dataframe(df_hist, use_container_width=True, hide_index=True) if not df_hist.empty else st.caption("Nenhum sinal hoje.")
-        with t3: st.dataframe(df_agenda.sort_values("Hora"), use_container
+        with t3: st.dataframe(df_agenda.sort_values("Hora"), use_container_width=True, hide_index=True) if not df_agenda.empty else st.caption("Sem jogos.")
+        with t4: st.table(df_black.sort_values(['País', 'Liga'])) if not df_black.empty else st.caption("Limpo.")
+        with t5: st.table(df_imunes) if not df_imunes.empty else st.caption("Vazio.")
+        with t6: st.table(df_obs) if not df_obs.empty else st.caption("Tudo ok.")
+
+        relogio = st.empty()
+        for i in range(INTERVALO, 0, -1):
+            relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
+            time.sleep(1)
+    
+    st.rerun()
+
+else:
+    with main_placeholder.container():
+        st.title("❄️ Neves Analytics PRO")
+        st.info("💡 Robô em espera. Configure e ligue na lateral.")
