@@ -24,11 +24,13 @@ st.markdown("""
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 
-# --- AUTOCORREÇÃO DE MEMÓRIA (EVITA CONFLITO DE VERSÃO) ---
-# Se a memória antiga tiver formato errado (string), reseta para dicionário
+# --- 🛡️ LISTA VIP (Monitoradas com prioridade) ---
+LIGAS_VIP = [39, 78, 135, 140, 61, 71, 72, 2, 13, 11, 3, 4, 9, 10, 1]
+
+# --- AUTOCORREÇÃO DE MEMÓRIA ---
 if 'ligas_imunes' in st.session_state:
     if st.session_state['ligas_imunes'] and isinstance(list(st.session_state['ligas_imunes'].values())[0], str):
-        st.session_state['ligas_imunes'] = {} # Limpa para formato novo
+        st.session_state['ligas_imunes'] = {} 
 
 if 'alertas_enviados' not in st.session_state:
     st.session_state['alertas_enviados'] = set()
@@ -39,6 +41,8 @@ if 'memoria_pressao' not in st.session_state:
 # MEMÓRIA DE INTELIGÊNCIA DA LIGA
 if 'erros_por_liga' not in st.session_state:
     st.session_state['erros_por_liga'] = {} 
+if 'erros_vip' not in st.session_state:
+    st.session_state['erros_vip'] = {} # Contador específico para VIPs
 if 'ligas_imunes' not in st.session_state:
     st.session_state['ligas_imunes'] = {} 
 
@@ -82,7 +86,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Ordenação por País Ativa.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* VIP Condicional Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -97,6 +101,7 @@ with st.sidebar:
                 st.session_state['alertas_enviados'] = set() 
                 st.session_state['memoria_pressao'] = {}
                 st.session_state['erros_por_liga'] = {}
+                st.session_state['erros_vip'] = {}
                 st.session_state['ligas_imunes'] = {}
                 st.toast("Memória limpa!")
                 time.sleep(1)
@@ -166,8 +171,8 @@ def atualizar_momentum(fid, sog_h_atual, sog_a_atual):
     memoria['sog_h_total'] = sog_h_atual
     memoria['sog_a_total'] = sog_a_atual
     
-    memoria['sog_h_total'] = sog_h_atual
-    memoria['sog_a_total'] = sog_a_atual
+    memoria['sog_h_timestamps'] = [t for t in memoria['sog_h_timestamps'] if agora - t <= janela_tempo]
+    memoria['sog_a_timestamps'] = [t for t in memoria['sog_a_timestamps'] if agora - t <= janela_tempo]
     
     st.session_state['memoria_pressao'][fid] = memoria
     return len(memoria['sog_h_timestamps']), len(memoria['sog_a_timestamps'])
@@ -219,7 +224,6 @@ def processar_jogo(j, stats):
 
         # B) REAÇÃO DO GIGANTE / BLITZ
         if tempo <= 60:
-            # HOME PRESSIONANDO
             if (gh <= ga) and (recentes_h >= 2 or sh_h >= 6):
                 oponente_vivo = (recentes_a >= 1 or sh_a >= 4)
                 acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Mandante"
@@ -230,7 +234,6 @@ def processar_jogo(j, stats):
                     "stats": f"Blitz Recente: {recentes_h} | Total: {sh_h}"
                 }
             
-            # AWAY PRESSIONANDO
             if (ga <= gh) and (recentes_a >= 2 or sh_a >= 6):
                 oponente_vivo = (recentes_h >= 1 or sh_h >= 4)
                 acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Visitante"
@@ -292,24 +295,42 @@ if ROBO_LIGADO:
         if dentro_janela:
             stats = buscar_stats(f_id)
             
-            # --- SISTEMA DE IMUNIDADE (STRIKES) ---
+            # --- SISTEMA DE INTEGRIDADE (VIP CONDICIONAL) ---
             if not stats and not MODO_DEMO:
-                if l_id in st.session_state['ligas_imunes']:
+                # Se for VIP, trata diferente
+                if int(l_id) in LIGAS_VIP:
+                    # Avisa especificamente qual jogo está falhando
+                    st.toast(f"⚠️ VIP sem dados: {home} x {away}")
+                    
+                    # Conta erro VIP
+                    erros_v = st.session_state['erros_vip'].get(l_id, 0) + 1
+                    st.session_state['erros_vip'][l_id] = erros_v
+                    
+                    # Se falhar persistentemente (aprox 3 ciclos), bane por segurança
+                    if erros_v >= 5: # Tolerância
+                        salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
+                        st.toast(f"🚫 VIP Banida (Sem dados persistentes): {j['league']['name']}")
+                
+                # Se já provou ter dados, ignora erro individual
+                elif l_id in st.session_state['ligas_imunes']:
                     pass
+                
+                # Liga desconhecida
                 else:
                     erros = st.session_state['erros_por_liga'].get(l_id, 0) + 1
                     st.session_state['erros_por_liga'][l_id] = erros
-                    
                     if erros >= 5:
                         salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
                         st.toast(f"🚫 Banida: {j['league']['name']}")
                 continue
             
             if stats:
-                # Agora salva o PAÍS também para ordenar
+                # SUCESSO!
                 st.session_state['ligas_imunes'][l_id] = {'País': j['league']['country'], 'Liga': j['league']['name']}
-                if l_id in st.session_state['erros_por_liga']:
-                    del st.session_state['erros_por_liga'][l_id]
+                
+                # Limpa contadores de erro (A liga está viva!)
+                if l_id in st.session_state['erros_por_liga']: del st.session_state['erros_por_liga'][l_id]
+                if l_id in st.session_state['erros_vip']: del st.session_state['erros_vip'][l_id]
 
             sinal = processar_jogo(j, stats)
             
@@ -369,13 +390,11 @@ if ROBO_LIGADO:
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # Constrói o DataFrame da Whitelist com País
         lista_segura = list(st.session_state['ligas_imunes'].values())
         if lista_segura:
             df_imunes = pd.DataFrame(lista_segura)
-            # Garante que as colunas existem antes de ordenar (caso de bug)
             if 'País' in df_imunes.columns:
-                df_imunes = df_imunes[['País', 'Liga']] # Reorganiza colunas
+                df_imunes = df_imunes[['País', 'Liga']]
         else:
             df_imunes = pd.DataFrame(columns=['País', 'Liga'])
         
@@ -393,11 +412,9 @@ if ROBO_LIGADO:
             if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
             else: st.caption("Sem mais jogos por hoje.")
         with t3:
-            # Ordenação por PAÍS
             if not df_black.empty: st.table(df_black.sort_values(['País', 'Liga']))
             else: st.caption("Limpo.")
         with t4:
-            # Ordenação por PAÍS
             if not df_imunes.empty: st.table(df_imunes.sort_values(['País', 'Liga']))
             else: st.caption("Nenhuma liga validada ainda.")
 
