@@ -25,7 +25,7 @@ DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 STRIKES_FILE = 'neves_strikes_vip.txt'
 
-# --- 🛡️ LISTA VIP (Imunidade para Grandes Ligas) ---
+# --- 🛡️ LISTA VIP (Imunidade para Grandes Ligas e Estaduais) ---
 LIGAS_VIP = [
     39, 78, 135, 140, 61, 2, 3, 9, 45, 48, # Europa
     71, 72, 13, 11, # Brasil A/B/Liberta
@@ -75,11 +75,13 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
     hoje = datetime.now().strftime('%Y-%m-%d')
     id_liga = str(id_liga)
     
+    # Se já tem registro
     if id_liga in df['id'].astype(str).values:
         idx = df.index[df['id'].astype(str) == id_liga].tolist()[0]
         ultima_data = df.at[idx, 'Data_Erro']
         strikes_atuais = df.at[idx, 'Strikes']
         
+        # Só conta strike se for OUTRO DIA
         if ultima_data != hoje:
             strikes_atuais += 1
             df.at[idx, 'Data_Erro'] = hoje
@@ -87,10 +89,12 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
             df.at[idx, 'Liga'] = nome_liga
             df.at[idx, 'País'] = pais
             df.to_csv(STRIKES_FILE, index=False)
+            
             if strikes_atuais >= 2:
                 salvar_na_blacklist(id_liga, pais, nome_liga)
                 st.toast(f"🚫 VIP Banida (2 Rodadas Falhas): {nome_liga}")
     else:
+        # Primeiro erro
         novo = pd.DataFrame([{
             'id': id_liga, 'País': pais, 'Liga': nome_liga, 
             'Data_Erro': hoje, 'Strikes': 1
@@ -99,11 +103,13 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
         st.toast(f"⚠️ VIP Alertada: {nome_liga}")
 
 def limpar_erro_vip(id_liga):
+    # Se a liga funcionou, remove da lista de observação/strikes
     if not os.path.exists(STRIKES_FILE): return
     df = pd.read_csv(STRIKES_FILE)
     if str(id_liga) in df['id'].astype(str).values:
         df = df[df['id'].astype(str) != str(id_liga)]
         df.to_csv(STRIKES_FILE, index=False)
+        st.toast(f"✅ VIP Recuperada: Liga {id_liga} voltou a funcionar!")
 
 def enviar_telegram_real(token, chat_ids, mensagem):
     if token and chat_ids:
@@ -134,7 +140,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Regra 45min Ativa.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Monitoramento VIP Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -328,7 +334,7 @@ if ROBO_LIGADO:
         eh_intervalo = (status_short in ['HT', 'BT']) or (48 <= tempo <= 52)
         eh_aquecimento = (tempo < 5)
         eh_fim = (tempo > 80)
-        dentro_janela = not (eh_intervalo or eh_aquecimento or eh_fim) # Correção Sintaxe
+        dentro_janela = not (eh_intervalo or eh_aquecimento or eh_fim)
         
         sinal = None
         icone_visual = "👁️"
@@ -340,32 +346,32 @@ if ROBO_LIGADO:
         if dentro_janela:
             stats = buscar_stats(f_id)
             
-            # --- NOVA LÓGICA: REGRA DOS 45 MINUTOS ---
+            # --- SISTEMA DE INTEGRIDADE (VIP CONDICIONAL) ---
             if not stats and not MODO_DEMO:
-                # 1. VIPs: Seguem a regra de Longo Prazo (Rodadas)
+                # 1. VIP (Estadual/Europa): Segue Regra de 45 min
                 if int(l_id) in LIGAS_VIP:
                     if l_id not in st.session_state['ligas_imunes']:
                         registrar_erro_vip(l_id, j['league']['country'], j['league']['name'])
+                        # Continua processando o jogo no Radar (Sem Break!)
                 
-                # 2. Whitelisted: Ignora erro
+                # 2. Whitelist: Já provou, segue vida
                 elif l_id in st.session_state['ligas_imunes']:
                     pass
                 
-                # 3. LIGA DESCONHECIDA: Só bane se tempo >= 45
+                # 3. Desconhecida: Regra 45 Min
                 else:
                     if tempo >= 45:
                         salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
-                        st.toast(f"🚫 Banida (+45min sem dados): {j['league']['name']}")
+                        st.toast(f"🚫 Banida: {j['league']['name']}")
                     else:
-                        # Ainda está no 1º tempo, dá chance
-                        pass 
-                
-                continue # Pula processamento desse jogo
+                        pass # Espera até os 45
             
+            # --- REDENÇÃO AUTOMÁTICA ---
             if stats:
                 st.session_state['ligas_imunes'][l_id] = {'País': j['league']['country'], 'Liga': j['league']['name']}
                 if int(l_id) in LIGAS_VIP: limpar_erro_vip(l_id)
 
+            # --- PROCESSA O JOGO (MESMO SE TIVER ERRO DE DADOS ANTES) ---
             sinal = processar_jogo(j, stats)
             
             if sinal:
@@ -412,6 +418,7 @@ if ROBO_LIGADO:
         if status != 'NS': continue
         
         hora_jogo = data_jogo_raw[11:16]
+        
         if hora_jogo < limite_tolerancia: continue 
         
         prox_filtrado.append({
