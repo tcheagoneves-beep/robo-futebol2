@@ -30,6 +30,10 @@ if 'alertas_enviados' not in st.session_state:
 if 'memoria_pressao' not in st.session_state:
     st.session_state['memoria_pressao'] = {}
 
+# MEMÓRIA DE ERROS (SISTEMA DE STRIKES)
+if 'erros_por_liga' not in st.session_state:
+    st.session_state['erros_por_liga'] = {}
+
 def carregar_blacklist():
     if not os.path.exists(BLACK_FILE): return pd.DataFrame(columns=['id', 'País', 'Liga'])
     try: return pd.read_csv(BLACK_FILE)
@@ -70,7 +74,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Sistema Completo Online.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Sistema de Strikes Ativo.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -84,6 +88,7 @@ with st.sidebar:
             if st.button("♻️ Reset Sessão"):
                 st.session_state['alertas_enviados'] = set() 
                 st.session_state['memoria_pressao'] = {}
+                st.session_state['erros_por_liga'] = {} # Reseta os strikes
                 st.toast("Memória limpa!")
                 time.sleep(1)
                 st.rerun()
@@ -205,7 +210,6 @@ def processar_jogo(j, stats):
 
         # B) REAÇÃO DO GIGANTE / BLITZ
         if tempo <= 60:
-            # HOME PRESSIONANDO
             if (gh <= ga) and (recentes_h >= 2 or sh_h >= 6):
                 oponente_vivo = (recentes_a >= 1 or sh_a >= 4)
                 acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Mandante"
@@ -216,7 +220,6 @@ def processar_jogo(j, stats):
                     "stats": f"Blitz Recente: {recentes_h} | Total: {sh_h}"
                 }
             
-            # AWAY PRESSIONANDO
             if (ga <= gh) and (recentes_a >= 2 or sh_a >= 6):
                 oponente_vivo = (recentes_h >= 1 or sh_h >= 4)
                 acao = "⚠️ Jogo Aberto: Apostar em Mais 1 Gol na Partida" if oponente_vivo else "✅ Apostar no Gol do Visitante"
@@ -261,7 +264,6 @@ if ROBO_LIGADO:
         away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"
         
-        # Soneca Inteligente
         eh_intervalo = (status_short in ['HT', 'BT']) or (48 <= tempo <= 52)
         eh_aquecimento = (tempo < 5)
         eh_fim = (tempo > 80)
@@ -276,10 +278,27 @@ if ROBO_LIGADO:
         
         if dentro_janela:
             stats = buscar_stats(f_id)
+            
+            # --- SISTEMA DE 3 STRIKES (VALIDAÇÃO DE INTEGRIDADE) ---
             if not stats and not MODO_DEMO:
-                salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
+                # 1. Incrementa o contador de erro para essa liga
+                erros_atuais = st.session_state['erros_por_liga'].get(l_id, 0) + 1
+                st.session_state['erros_por_liga'][l_id] = erros_atuais
+                
+                # 2. Verifica se atingiu o limite de 3 falhas
+                if erros_atuais >= 3:
+                    salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
+                    st.toast(f"🚫 Liga Banida (Sem dados): {j['league']['name']}")
+                else:
+                    # Apenas avisa, mas continua tentando
+                    pass 
+                
                 continue
             
+            # Se deu certo, remove da lista de erros (Opcional: Zerar erros se funcionar)
+            if l_id in st.session_state['erros_por_liga']:
+                del st.session_state['erros_por_liga'][l_id]
+
             sinal = processar_jogo(j, stats)
             
             if sinal:
@@ -312,7 +331,6 @@ if ROBO_LIGADO:
             "Status": f"{icone_visual} {sinal['tag'] if sinal else ''}{info_mom}"
         })
 
-    # --- AGENDA ---
     prox_raw = buscar_proximos(API_KEY)
     prox_filtrado = []
     hora_atual = agora_brasil().strftime('%H:%M')
@@ -334,7 +352,6 @@ if ROBO_LIGADO:
             "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
         })
 
-    # --- EXIBIÇÃO ---
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
@@ -342,65 +359,52 @@ if ROBO_LIGADO:
         t1, t2, t3 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(prox_filtrado)})", f"🚫 Blacklist ({len(df_black)})"])
         
         with t1:
-            if radar:
-                st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else:
-                st.info("Monitorando jogos...")
-            
+            if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
+            else: st.info("Monitorando jogos...")
+        
         with t2:
-            # Correção aqui: Usa 'prox_filtrado' e está em bloco separado
             if prox_filtrado:
                 st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
             else:
                 st.caption("Sem mais jogos por hoje.")
-            
+        
         with t3:
-            if not df_black.empty:
-                st.table(df_black)
-            else:
-                st.caption("Limpo.")
+            if not df_black.empty: st.table(df_black)
+            else: st.caption("Limpo.")
 
-        # --- MANUAL (Restaurado e Detalhado) ---
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
             c1, c2 = st.columns(2)
-            
             with c1:
                 st.markdown("""
                 <div class="strategy-card">
                     <div class="strategy-title">🟣 A - Porteira Aberta</div>
                     <div class="strategy-desc">
-                        <b>Cenário:</b> Jogo frenético antes dos 30'.<br>
-                        <b>Gatilho Matemático:</b> Tempo <= 30' E Soma de Gols >= 2.<br>
+                        <b>Cenário:</b> Jogo frenético < 30'.<br>
                         <b>Ação:</b> Múltipla Over Gols.
                     </div>
                 </div>
                 <div class="strategy-card">
                     <div class="strategy-title">🟢 B - Reação / Blitz</div>
                     <div class="strategy-desc">
-                        <b>Cenário:</b> Time perdendo/empatando (< 60').<br>
-                        <b>Gatilho 1 (Volume):</b> 6+ chutes totais.<br>
-                        <b>Gatilho 2 (Blitz):</b> 2+ chutes no alvo nos últimos 7 min.<br>
-                        <b>Ação:</b> Back Favorito ou Over Gols.
+                        <b>Cenário:</b> Fav perdendo e amassando.<br>
+                        <b>Ação:</b> Apostar no Gol ou Mais 1 Gol.
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
-            
             with c2:
                 st.markdown("""
                 <div class="strategy-card">
                     <div class="strategy-title">💰 C - Janela de Ouro</div>
                     <div class="strategy-desc">
-                        <b>Cenário:</b> Reta final (70'-75') indefinida.<br>
-                        <b>Gatilho Matemático:</b> 18+ chutes somados E Diferença <= 1 gol.<br>
+                        <b>Cenário:</b> Reta final (70-75') com pressão.<br>
                         <b>Ação:</b> Over Limite (Gol Asiático).
                     </div>
                 </div>
                 <div class="strategy-card">
                     <div class="strategy-title">⚡ D - Gol Relâmpago</div>
                     <div class="strategy-desc">
-                        <b>Cenário:</b> Início elétrico (5'-15').<br>
-                        <b>Gatilho Matemático:</b> Pelo menos 1 chute no alvo de qualquer time.<br>
-                        <b>Ação:</b> Over 0.5 HT (Gol no 1º Tempo).
+                        <b>Cenário:</b> Início elétrico (5-15').<br>
+                        <b>Ação:</b> Over 0.5 HT.
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
