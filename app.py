@@ -5,36 +5,51 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# --- 0. CONFIGURAÇÃO VISUAL (CENTRALIZADO E LIMPO) ---
-st.set_page_config(page_title="Neves Analytics PRO", layout="centered", page_icon="❄️")
+# --- 0. CONFIGURAÇÃO E CSS REFINADO ---
+st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 st.cache_data.clear()
 
 st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
     
-    /* Cards de Métricas Compactos */
+    /* LIMITADOR DE LARGURA (Para não ficar esticado demais, mas caber a tabela) */
+    .main .block-container {
+        max-width: 95%;
+        padding-top: 1rem;
+        padding-right: 1rem;
+        padding-left: 1rem;
+        padding-bottom: 5rem;
+    }
+
+    /* Cards de Métricas */
     .metric-box {
-        background-color: #1A1C24; 
-        border: 1px solid #333; 
-        border-radius: 8px; 
-        padding: 10px; 
-        text-align: center;
-        margin-bottom: 5px;
+        background-color: #1A1C24; border: 1px solid #333; 
+        border-radius: 8px; padding: 10px; text-align: center;
         box-shadow: 0 2px 4px rgba(0,0,0,0.2);
     }
-    .metric-title {font-size: 11px; color: #aaaaaa; text-transform: uppercase; letter-spacing: 1px;}
-    .metric-value {font-size: 20px; font-weight: bold; color: #00FF00;}
+    .metric-title {font-size: 11px; color: #aaaaaa; text-transform: uppercase;}
+    .metric-value {font-size: 22px; font-weight: bold; color: #00FF00;}
     
     /* Status Ativo */
     .status-active {
         background-color: #1F4025; color: #00FF00; 
         border: 1px solid #00FF00; padding: 8px; 
         text-align: center; border-radius: 6px; font-weight: bold;
-        font-size: 14px; margin-bottom: 15px;
+        font-size: 14px; margin-bottom: 10px;
     }
     
-    /* Timer Fixo no Rodapé */
+    /* BOTÕES DA SIDEBAR (Correção de texto cortado) */
+    .stButton button {
+        width: 100%;
+        white-space: normal !important;
+        height: auto !important;
+        padding: 10px 5px !important;
+        font-size: 12px !important;
+        line-height: 1.2 !important;
+    }
+    
+    /* Timer Fixo */
     .footer-timer {
         position: fixed; left: 0; bottom: 0; width: 100%;
         background-color: #0E1117; color: #FFD700;
@@ -42,9 +57,6 @@ st.markdown("""
         font-weight: bold; border-top: 1px solid #333;
         z-index: 9999;
     }
-    
-    /* Ajuste de Tabelas */
-    .stDataFrame { font-size: 12px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,7 +71,7 @@ FILES = {
 # --- 2. LISTA VIP ---
 LIGAS_VIP = [39, 78, 135, 140, 61, 2, 3, 9, 45, 48, 71, 72, 13, 11, 474, 475, 476, 477, 478, 479, 606, 610, 628, 55, 143]
 
-# --- 3. FUNÇÕES DE DADOS SEGURAS ---
+# --- 3. DADOS ---
 def load_safe(path, cols):
     if not os.path.exists(path): return pd.DataFrame(columns=cols)
     try:
@@ -106,7 +118,7 @@ def salvar_historico(item):
     df = pd.DataFrame([item])
     df.to_csv(FILES['hist'], mode='a', header=not os.path.exists(FILES['hist']), index=False)
 
-# --- 4. LÓGICA DE INTEGRIDADE (2 RODADAS) ---
+# --- 4. INTEGRIDADE ---
 def gerenciar_strikes(id_liga, pais, nome_liga):
     df = st.session_state['df_vip']
     hoje = datetime.now().strftime('%Y-%m-%d')
@@ -119,7 +131,7 @@ def gerenciar_strikes(id_liga, pais, nome_liga):
         strikes = int(row['Strikes'])
         data_antiga = row['Data_Erro']
     
-    if data_antiga == hoje: return # Já anotou hoje
+    if data_antiga == hoje: return
 
     novo_strike = strikes + 1
     if novo_strike >= 2:
@@ -129,7 +141,7 @@ def gerenciar_strikes(id_liga, pais, nome_liga):
         salvar_strike(id_liga, pais, nome_liga, novo_strike)
         st.toast(f"⚠️ {nome_liga} Strike 1/2")
 
-# --- 5. TELEGRAM ---
+# --- 5. TELEGRAM (VALIDADO) ---
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
@@ -137,37 +149,47 @@ def enviar_telegram(token, chat_ids, msg):
         try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": cid, "text": msg, "parse_mode": "Markdown"}, timeout=3)
         except: pass
 
-def reenviar_sinais(token, chats):
-    hist = st.session_state['historico_sinais']
-    if not hist: return st.toast("Nada para reenviar.")
-    st.toast(f"Reenviando {len(hist)} sinais...")
-    for s in reversed(hist):
-        msg = f"🔄 *REENVIO*\n\n🚨 *{s['Estrategia']}*\n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n⚠️ {s.get('Placar_Sinal','?')}"
-        enviar_telegram(token, chats, msg)
-        time.sleep(1)
-
 def check_green_red(jogos, token, chats):
     atualizou = False
     hist = st.session_state['historico_sinais']
+    
     for s in hist:
         if s['Resultado'] == 'Pendente':
+            # Busca o jogo na lista
             jogo = next((j for j in jogos if j['teams']['home']['name'] in s['Jogo']), None)
+            
             if jogo:
                 gh = jogo['goals']['home'] or 0
                 ga = jogo['goals']['away'] or 0
                 try: ph, pa = map(int, s['Placar_Sinal'].split('x'))
                 except: continue
                 
+                # Lógica de Green (Saiu Gol)
                 if (gh+ga) > (ph+pa):
                     s['Resultado'] = '✅ GREEN'
-                    enviar_telegram(token, chats, f"✅ *GREEN!* \n⚽ {s['Jogo']}\n💰 {s['Estrategia']}")
+                    msg = f"✅ *GREEN CONFIRMADO!* \n\n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📈 Placar Atual: {gh}x{ga}\n🎯 {s['Estrategia']}"
+                    enviar_telegram(token, chats, msg)
                     atualizou = True
+                
+                # Lógica de Red (Jogo Acabou)
                 elif jogo['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
                     s['Resultado'] = '❌ RED'
-                    enviar_telegram(token, chats, f"❌ *RED* \n⚽ {s['Jogo']}\n📉 {s['Estrategia']}")
+                    msg = f"❌ *RED* \n\n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📉 Placar Final: {gh}x{ga}\n🎯 {s['Estrategia']}"
+                    enviar_telegram(token, chats, msg)
                     atualizou = True
+    
     if atualizou:
+        # Salva a atualização no CSV
         pd.DataFrame(hist).to_csv(FILES['hist'], index=False)
+
+def reenviar_sinais(token, chats):
+    hist = st.session_state['historico_sinais']
+    if not hist: return st.toast("Nada para reenviar.")
+    st.toast("Reenviando...")
+    for s in reversed(hist):
+        msg = f"🔄 *REENVIO*\n\n🚨 *{s['Estrategia']}*\n⚽ {s['Jogo']}\n⚠️ Placar Sinal: {s.get('Placar_Sinal','?')}"
+        enviar_telegram(token, chats, msg)
+        time.sleep(1)
 
 def relatorio_final(token, chats):
     hoje = datetime.now().strftime('%Y-%m-%d')
@@ -179,7 +201,7 @@ def relatorio_final(token, chats):
     total = len(hist)
     winrate = (greens / (greens+reds) * 100) if (greens+reds) > 0 else 0
     
-    msg = f"📊 *RELATÓRIO ({hoje})*\n\n🚀 Sinais: {total}\n✅ Greens: {greens}\n❌ Reds: {reds}\n🎯 Winrate: {winrate:.1f}%"
+    msg = f"📊 *FECHAMENTO DO DIA* ({hoje})\n\n🚀 Sinais: {total}\n✅ Greens: {greens}\n❌ Reds: {reds}\n🎯 Winrate: {winrate:.1f}%"
     enviar_telegram(token, chats, msg)
     with open(FILES['report'], 'w') as f: f.write(hoje)
 
@@ -189,31 +211,19 @@ if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviado
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 carregar_tudo()
 
-# --- CORREÇÃO DO KEYERROR: MOMENTUM BLINDADO ---
 def momentum(fid, sog_h, sog_a):
-    # Tenta pegar a memória. Se vier vazia OU com chaves erradas (da versão antiga), reseta.
-    mem = st.session_state['memoria_pressao'].get(fid)
+    mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
     
-    # Validação de integridade do dicionário (A CURA DO ERRO)
-    if not mem or 'sog_h' not in mem or 'sog_a' not in mem:
-        mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []}
+    # Cura dados antigos
+    if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []}
     
     now = datetime.now()
-    
-    # Lógica de acúmulo
-    if sog_h > mem['sog_h']: 
-        mem['h_t'].extend([now] * (sog_h - mem['sog_h']))
-    if sog_a > mem['sog_a']: 
-        mem['a_t'].extend([now] * (sog_a - mem['sog_a']))
-    
-    # Limpeza de tempo
+    if sog_h > mem['sog_h']: mem['h_t'].extend([now]*(sog_h-mem['sog_h']))
+    if sog_a > mem['sog_a']: mem['a_t'].extend([now]*(sog_a-mem['sog_a']))
     mem['h_t'] = [t for t in mem['h_t'] if now - t <= timedelta(minutes=7)]
     mem['a_t'] = [t for t in mem['a_t'] if now - t <= timedelta(minutes=7)]
-    
-    # Atualiza estado
     mem['sog_h'], mem['sog_a'] = sog_h, sog_a
     st.session_state['memoria_pressao'][fid] = mem
-    
     return len(mem['h_t']), len(mem['a_t'])
 
 def processar(j, stats, tempo, placar):
@@ -245,7 +255,7 @@ def processar(j, stats, tempo, placar):
         if ga <= gh and (ra >= 2 or sh_a >= 8): return {"tag": "🟢 Blitz Visitante", "ordem": "Gol Visitante", "stats": f"Pressão: {ra}"}
     return None
 
-# --- 8. SIDEBAR ---
+# --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves PRO")
     
@@ -256,8 +266,8 @@ with st.sidebar:
         INTERVALO = st.slider("Ciclo (s):", 30, 300, 60)
         
         c1, c2 = st.columns(2)
-        if c1.button("🔄 Reenviar Sinais"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if c2.button("🗑️ Limpar Blacklist"):
+        if c1.button("🔄 Reenviar\nSinais"): reenviar_sinais(TG_TOKEN, TG_CHAT)
+        if c2.button("🗑️ Limpar\nBlacklist"):
             if os.path.exists(FILES['black']): os.remove(FILES['black'])
             st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
             st.rerun()
@@ -270,7 +280,7 @@ with st.sidebar:
 
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
-# --- 9. DISPLAY ---
+# --- 8. DASHBOARD ---
 main = st.empty()
 
 if ROBO_LIGADO:
@@ -281,6 +291,7 @@ if ROBO_LIGADO:
         jogos = res.get('response', [])
     except: jogos = []
 
+    # Valida Green/Red
     check_green_red(jogos, TG_TOKEN, TG_CHAT)
 
     radar = []
@@ -337,7 +348,7 @@ if ROBO_LIGADO:
         if not os.path.exists(FILES['report']) or open(FILES['report']).read() != datetime.now().strftime('%Y-%m-%d'):
             relatorio_final(TG_TOKEN, TG_CHAT)
 
-    # --- RENDERIZAÇÃO ---
+    # --- TELA ---
     with main.container():
         st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
@@ -346,7 +357,6 @@ if ROBO_LIGADO:
         c1, c2, c3 = st.columns(3)
         c1.markdown(f'<div class="metric-box"><div class="metric-value">{len(hist_hoje)}</div><div class="metric-title">Sinais Hoje</div></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-box"><div class="metric-value">{len(radar)}</div><div class="metric-title">Jogos Live</div></div>', unsafe_allow_html=True)
-        # CORREÇÃO: Mostra Ligas Seguras no Card
         c3.markdown(f'<div class="metric-box"><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-title">Ligas Seguras</div></div>', unsafe_allow_html=True)
         
         st.write("")
@@ -357,10 +367,9 @@ if ROBO_LIGADO:
             f"🛡️ Seguras ({len(st.session_state['ligas_imunes'])})", f"⚠️ Obs ({len(st.session_state['df_vip'])})"
         ])
         
-        # CORREÇÃO DO ERRO VISUAL: USANDO IF/ELSE EXPLÍCITO
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
-            else: st.info("Monitorando jogos...")
+            else: st.info("Buscando jogos...")
         
         with t2:
             if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
@@ -382,7 +391,7 @@ if ROBO_LIGADO:
             
         with t6:
             if not st.session_state['df_vip'].empty: st.dataframe(st.session_state['df_vip'].astype(str), use_container_width=True, hide_index=True)
-            else: st.caption("Limpo.")
+            else: st.caption("Tudo ok.")
 
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
