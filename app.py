@@ -23,7 +23,7 @@ st.markdown("""
 # --- 2. GESTÃO DE DADOS E MEMÓRIA ---
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
-STRIKES_FILE = 'neves_strikes_vip.txt' # Arquivo novo para memória de longo prazo
+STRIKES_FILE = 'neves_strikes_vip.txt'
 
 # --- 🛡️ LISTA VIP ---
 LIGAS_VIP = [39, 78, 135, 140, 61, 71, 72, 2, 13, 11, 3, 4, 9, 10, 1]
@@ -56,49 +56,60 @@ def salvar_na_blacklist(id_liga, pais, nome_liga):
         novo = pd.DataFrame([{'id': str(id_liga), 'País': pais, 'Liga': nome_liga}])
         pd.concat([df, novo], ignore_index=True).to_csv(BLACK_FILE, index=False)
 
-# --- NOVA LÓGICA: STRIKES DE LONGO PRAZO ---
+# --- NOVA LÓGICA: STRIKES COM NOME ---
 def carregar_strikes_vip():
-    if not os.path.exists(STRIKES_FILE): return pd.DataFrame(columns=['id', 'Data_Erro', 'Strikes'])
-    try: return pd.read_csv(STRIKES_FILE)
-    except: return pd.DataFrame(columns=['id', 'Data_Erro', 'Strikes'])
+    # Agora inclui País e Liga na estrutura
+    cols = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes']
+    if not os.path.exists(STRIKES_FILE): return pd.DataFrame(columns=cols)
+    try: 
+        df = pd.read_csv(STRIKES_FILE)
+        # Garante compatibilidade se o arquivo antigo tiver menos colunas
+        if 'Liga' not in df.columns: return pd.DataFrame(columns=cols)
+        return df
+    except: return pd.DataFrame(columns=cols)
 
 def registrar_erro_vip(id_liga, pais, nome_liga):
     df = carregar_strikes_vip()
     hoje = datetime.now().strftime('%Y-%m-%d')
     id_liga = str(id_liga)
     
-    # Verifica se a liga já tem histórico de erro
     if id_liga in df['id'].astype(str).values:
         idx = df.index[df['id'].astype(str) == id_liga].tolist()[0]
         ultima_data = df.at[idx, 'Data_Erro']
         strikes_atuais = df.at[idx, 'Strikes']
         
-        # Só conta strike se for em DIA DIFERENTE (Outra rodada)
         if ultima_data != hoje:
             strikes_atuais += 1
             df.at[idx, 'Data_Erro'] = hoje
             df.at[idx, 'Strikes'] = strikes_atuais
+            # Atualiza nome e país caso tenha mudado ou esteja vazio
+            df.at[idx, 'Liga'] = nome_liga
+            df.at[idx, 'País'] = pais
             df.to_csv(STRIKES_FILE, index=False)
             
-            if strikes_atuais >= 2: # SEGUNDA RODADA FALHA -> BANIR
+            if strikes_atuais >= 2:
                 salvar_na_blacklist(id_liga, pais, nome_liga)
-                st.toast(f"🚫 VIP Banida (2 Rodadas sem dados): {nome_liga}")
+                st.toast(f"🚫 VIP Banida (2 Rodadas): {nome_liga}")
                 return "BAN"
             else:
-                st.toast(f"⚠️ VIP em Observação (Rodada 1 Falhou): {nome_liga}")
+                st.toast(f"⚠️ VIP Observação: {nome_liga}")
                 return "WARN"
         else:
-            # Já errou hoje, não faz nada (espera a próxima rodada)
             return "HOJE_JA_FOI"
     else:
-        # Primeiro erro da história
-        novo = pd.DataFrame([{'id': id_liga, 'Data_Erro': hoje, 'Strikes': 1}])
+        # Salva COMPLETO agora
+        novo = pd.DataFrame([{
+            'id': id_liga, 
+            'País': pais, 
+            'Liga': nome_liga, 
+            'Data_Erro': hoje, 
+            'Strikes': 1
+        }])
         pd.concat([df, novo], ignore_index=True).to_csv(STRIKES_FILE, index=False)
-        st.toast(f"⚠️ VIP Alertada (Falta de dados hoje): {nome_liga}")
+        st.toast(f"⚠️ VIP Alertada: {nome_liga}")
         return "FIRST"
 
 def limpar_erro_vip(id_liga):
-    # Se a liga funcionou, limpamos a ficha dela!
     if not os.path.exists(STRIKES_FILE): return
     df = pd.read_csv(STRIKES_FILE)
     if str(id_liga) in df['id'].astype(str).values:
@@ -134,7 +145,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Memória de Rodadas Ativa.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Nomes nas Observações.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -150,15 +161,15 @@ with st.sidebar:
                 st.session_state['memoria_pressao'] = {}
                 st.session_state['erros_por_liga'] = {}
                 st.session_state['ligas_imunes'] = {}
-                st.toast("Memória RAM limpa!")
+                st.toast("Memória limpa!")
                 time.sleep(1)
                 st.rerun()
         
         with col_res2:
             if st.button("🗑️ Del. Blacklist"):
                 if os.path.exists(BLACK_FILE): os.remove(BLACK_FILE)
-                if os.path.exists(STRIKES_FILE): os.remove(STRIKES_FILE) # Limpa histórico de rodadas tb
-                st.toast("Tudo apagado (Blacklist + Strikes)!")
+                if os.path.exists(STRIKES_FILE): os.remove(STRIKES_FILE)
+                st.toast("Tudo apagado!")
                 time.sleep(1)
                 st.rerun()
 
@@ -340,19 +351,21 @@ if ROBO_LIGADO:
         if dentro_janela:
             stats = buscar_stats(f_id)
             
-            # --- LÓGICA DE VALIDAÇÃO DE DADOS ---
+            # --- SISTEMA DE INTEGRIDADE ---
             if not stats and not MODO_DEMO:
-                # 1. É VIP?
+                # VIP: Verifica histórico de rodadas
                 if int(l_id) in LIGAS_VIP:
-                    # Se já provou ter dados (Imune), ignora o erro
                     if l_id in st.session_state['ligas_imunes']:
                         pass
                     else:
-                        # Se não tem dados, aciona a Auditoria de Rodadas
                         registrar_erro_vip(l_id, j['league']['country'], j['league']['name'])
                 
-                # 2. É Várzea?
-                elif l_id not in st.session_state['ligas_imunes']:
+                # Whitelist: Ignora erro
+                elif l_id in st.session_state['ligas_imunes']:
+                    pass
+                
+                # Desconhecida: Strike tradicional
+                else:
                     erros = st.session_state['erros_por_liga'].get(l_id, 0) + 1
                     st.session_state['erros_por_liga'][l_id] = erros
                     if erros >= 5:
@@ -361,15 +374,9 @@ if ROBO_LIGADO:
                 continue
             
             if stats:
-                # SUCESSO! A liga está saudável.
                 st.session_state['ligas_imunes'][l_id] = {'País': j['league']['country'], 'Liga': j['league']['name']}
-                
-                # Redenção: Se a VIP voltou a funcionar, limpa a ficha suja dela
-                if int(l_id) in LIGAS_VIP:
-                    limpar_erro_vip(l_id)
-                
-                if l_id in st.session_state['erros_por_liga']:
-                    del st.session_state['erros_por_liga'][l_id]
+                if int(l_id) in LIGAS_VIP: limpar_erro_vip(l_id)
+                if l_id in st.session_state['erros_por_liga']: del st.session_state['erros_por_liga'][l_id]
 
             sinal = processar_jogo(j, stats)
             
@@ -432,13 +439,14 @@ if ROBO_LIGADO:
         lista_segura = list(st.session_state['ligas_imunes'].values())
         if lista_segura:
             df_imunes = pd.DataFrame(lista_segura)
-            if 'País' in df_imunes.columns:
-                df_imunes = df_imunes[['País', 'Liga']]
+            if 'País' in df_imunes.columns: df_imunes = df_imunes[['País', 'Liga']]
         else:
             df_imunes = pd.DataFrame(columns=['País', 'Liga'])
         
-        # Carrega Observação VIP para mostrar
+        # DataFrame de Observação (Agora com nomes)
         df_obs = carregar_strikes_vip()
+        if not df_obs.empty and 'País' in df_obs.columns:
+             df_obs = df_obs[['País', 'Liga', 'Data_Erro', 'Strikes']]
         
         t1, t2, t3, t4, t5 = st.tabs([
             f"📡 Radar ({len(radar)})", 
