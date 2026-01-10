@@ -13,16 +13,13 @@ st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
     
-    /* LARGURA TOTAL (Para a tabela não cortar descrições) */
+    /* LARGURA TOTAL */
     .main .block-container {
         max-width: 100%;
-        padding-top: 1rem;
-        padding-bottom: 5rem;
-        padding-left: 2rem;
-        padding-right: 2rem;
+        padding: 1rem 2rem 5rem 2rem;
     }
 
-    /* PLACAR DE MÉTRICAS (TOPO) */
+    /* PLACAR DE MÉTRICAS */
     .metric-box {
         background-color: #1A1C24; 
         border: 1px solid #333; 
@@ -43,11 +40,11 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* BOTÕES SIDEBAR (Ajuste para quebra de linha e clareza) */
+    /* BOTÕES SIDEBAR */
     .stButton button {
         width: 100%;
         height: auto !important;
-        white-space: normal !important; /* Permite quebra de linha */
+        white-space: normal !important;
         word-wrap: break-word !important;
         font-size: 13px !important;
         font-weight: bold !important;
@@ -134,16 +131,15 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 5. TELEGRAM ---
+# --- 5. TELEGRAM (AGORA EM HTML) ---
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
     for cid in ids:
-        try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": cid, "text": msg, "parse_mode": "Markdown"}, timeout=3)
+        try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": cid, "text": msg, "parse_mode": "HTML"}, timeout=3)
         except: pass
 
 def check_green_red(jogos, token, chats):
-    """Verifica Green/Red e atualiza Telegram"""
     atualizou = False
     hist = st.session_state['historico_sinais']
     
@@ -156,17 +152,31 @@ def check_green_red(jogos, token, chats):
                 try: ph, pa = map(int, s['Placar_Sinal'].split('x'))
                 except: continue
                 
-                # Green: Saiu Gol
+                # --- VISUAL GREEN ---
                 if (gh+ga) > (ph+pa):
                     s['Resultado'] = '✅ GREEN'
-                    msg = f"✅ *GREEN CONFIRMADO!* \n\n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📈 Placar Atual: {gh}x{ga}\n🎯 {s['Estrategia']}"
+                    msg = f"""
+<b>✅✅ GREEN! GREEN! GREEN! ✅✅</b>
+
+⚽ <b>{s['Jogo']}</b>
+💰 <b>{s['Estrategia']} BATEU!</b>
+
+📈 Placar Novo: <b>{gh}x{ga}</b>
+<i>(Entrada foi em: {s['Placar_Sinal']})</i>
+"""
                     enviar_telegram(token, chats, msg)
                     atualizou = True
                 
-                # Red: Acabou
+                # --- VISUAL RED ---
                 elif jogo['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
                     s['Resultado'] = '❌ RED'
-                    msg = f"❌ *RED* \n\n⚽ {s['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {s['Estrategia']}"
+                    msg = f"""
+❌ <b>RED | ENCERRADO</b>
+
+⚽ {s['Jogo']}
+📉 Estratégia: {s['Estrategia']}
+🛑 Placar Final: {gh}x{ga}
+"""
                     enviar_telegram(token, chats, msg)
                     atualizou = True
     
@@ -179,7 +189,14 @@ def reenviar_sinais(token, chats):
     if not hist: return st.toast("Sem sinais hoje.")
     st.toast("Reenviando sinais...")
     for s in reversed(hist):
-        msg = f"🔄 *REENVIO DE SINAL*\n\n🚨 *{s['Estrategia']}*\n⚽ {s['Jogo']}\n⚠️ Placar Sinal: {s.get('Placar_Sinal','?')}"
+        msg = f"""
+🔄 <b>REENVIO DE SINAL</b>
+
+🚨 <b>{s['Estrategia']}</b>
+⚽ {s['Jogo']}
+🏆 {s['Liga']}
+⚠️ Placar Sinal: {s.get('Placar_Sinal','?')}
+"""
         enviar_telegram(token, chats, msg)
         time.sleep(1)
 
@@ -191,7 +208,16 @@ def relatorio_final(token, chats):
     df_hj = pd.DataFrame(hist)
     tot, g, r, wr = calcular_stats(df_hj)
     
-    msg = f"📊 *FECHAMENTO DO MERCADO* ({hoje})\n\n🚀 Sinais: {tot}\n✅ Greens: {g}\n❌ Reds: {r}\n🎯 Assertividade: {wr:.1f}%"
+    msg = f"""
+📊 <b>FECHAMENTO DO MERCADO</b>
+📅 Data: {hoje}
+
+🚀 <b>Sinais Totais:</b> {tot}
+✅ <b>Greens:</b> {g}
+❌ <b>Reds:</b> {r}
+
+🎯 <b>Assertividade: {wr:.1f}%</b>
+"""
     enviar_telegram(token, chats, msg)
     with open(FILES['report'], 'w') as f: f.write(hoje)
 
@@ -234,8 +260,9 @@ def processar(j, stats, tempo, placar):
     ga = j['goals']['away'] or 0
     rh, ra = momentum(fid, sog_h, sog_a)
     
+    # ESTRATÉGIAS
     if tempo <= 30 and (gh+ga) >= 2: return {"tag": "🟣 Porteira Aberta", "ordem": "🔥 ENTRADA SECA: Over Gols", "stats": f"{gh}x{ga}"}
-    if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1: return {"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sog_h+sog_a}"}
+    if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1: return {"tag": "⚡ Gol Relâmpago", "ordem": "Apostar Over 0.5 HT", "stats": f"Chutes: {sog_h+sog_a}"}
     if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: return {"tag": "💰 Janela de Ouro", "ordem": "Over Gols Asiático", "stats": f"Total: {sh_h+sh_a}"}
     if tempo <= 60:
         if gh <= ga and (rh >= 2 or sh_h >= 8): return {"tag": "🟢 Blitz Casa", "ordem": "Gol Mandante", "stats": f"Pressão: {rh}"}
@@ -261,7 +288,7 @@ def gerenciar_strikes(id_liga, pais, nome_liga):
         salvar_strike(id_liga, pais, nome_liga, novo_strike)
         st.toast(f"⚠️ {nome_liga} Strike 1/2")
 
-# --- 7. SIDEBAR (BOTÕES AJUSTADOS) ---
+# --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves PRO")
     
@@ -271,10 +298,9 @@ with st.sidebar:
         TG_CHAT = st.text_input("Chat IDs:")
         INTERVALO = st.slider("Ciclo (s):", 30, 300, 60)
         
-        # Botões lado a lado com quebra de linha clara
-        col_b1, col_b2 = st.columns(2)
-        if col_b1.button("🔄 Reenviar\nSinais"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if col_b2.button("🗑️ Limpar\nBlacklist"):
+        c1, c2 = st.columns(2)
+        if c1.button("🔄 Reenviar\nSinais"): reenviar_sinais(TG_TOKEN, TG_CHAT)
+        if c2.button("🗑️ Limpar\nBlacklist"):
             if os.path.exists(FILES['black']): os.remove(FILES['black'])
             st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
             st.rerun()
@@ -328,7 +354,19 @@ if ROBO_LIGADO:
         if sinal:
             status_vis = "✅ " + sinal['tag']
             if fid not in st.session_state['alertas_enviados']:
-                msg = f"🚨 *{sinal['tag']}*\n⚽ {home} {placar} {away}\n🏆 {j['league']['name']}\n⚠️ {sinal['ordem']}\n📈 {sinal['stats']}"
+                # --- DESIGN DE ENTRADA (VISUAL NOVO) ---
+                msg = f"""
+<b>🚨 SINAL ENCONTRADO 🚨</b>
+
+🏆 <b>{j['league']['name']}</b>
+⚽ {home} 🆚 {away}
+⏰ <b>{tempo}' minutos</b> (Placar: {placar})
+
+🔥 <b>ESTRATÉGIA: {sinal['tag'].upper()}</b>
+⚠️ <b>AÇÃO:</b> {sinal['ordem']}
+
+📊 <i>Dados: {sinal['stats']}</i>
+"""
                 enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                 st.session_state['alertas_enviados'].add(fid)
                 item = {"Data": datetime.now().strftime('%Y-%m-%d'), "Hora": datetime.now().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": sinal['tag'], "Resultado": "Pendente"}
@@ -356,14 +394,12 @@ if ROBO_LIGADO:
     with main.container():
         st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # PREPARAÇÃO DE DADOS PARA MÉTRICAS
+        hist_hoje = [x for x in st.session_state['historico_sinais'] if x['Data'] == datetime.now().strftime('%Y-%m-%d')]
         df_full = pd.DataFrame(st.session_state['historico_sinais'])
         if not df_full.empty:
-            hoje = datetime.now().strftime('%Y-%m-%d')
-            df_hoje = df_full[df_full['Data'] == hoje]
+            df_hoje = df_full[df_full['Data'] == datetime.now().strftime('%Y-%m-%d')]
             t_hj, g_hj, r_hj, w_hj = calcular_stats(df_hoje)
         else:
-            df_hoje = pd.DataFrame()
             t_hj, g_hj, r_hj, w_hj = 0, 0, 0, 0.0
 
         # PLACAR NO TOPO
@@ -377,7 +413,7 @@ if ROBO_LIGADO:
         # ABAS
         t1, t2, t3, t4, t5, t6 = st.tabs([
             f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", 
-            f"📜 Histórico ({len(df_hoje)})", f"📈 Estatísticas",
+            f"📜 Histórico ({len(hist_hoje)})", f"📈 Estatísticas",
             f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"⚠️ Obs ({len(st.session_state['df_vip'])})"
         ])
         
@@ -390,23 +426,20 @@ if ROBO_LIGADO:
             else: st.caption("Sem jogos.")
             
         with t3:
-            if not df_hoje.empty: st.dataframe(df_hoje.astype(str), use_container_width=True, hide_index=True)
+            if hist_hoje: st.dataframe(pd.DataFrame(hist_hoje).astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Nenhum sinal hoje.")
             
         with t4:
-            # Estatísticas Completas
             if not df_full.empty:
                 df_full['Data_Dt'] = pd.to_datetime(df_full['Data'], errors='coerce')
                 dt_7d = pd.to_datetime(datetime.now()) - timedelta(days=7)
-                df_7d = df_full[df_full['Data_Dt'] >= dt_7d]
-                
                 t_all, g_all, r_all, w_all = calcular_stats(df_full)
-                t_7d, g_7d, r_7d, w_7d = calcular_stats(df_7d)
+                t_7d, g_7d, r_7d, w_7d = calcular_stats(df_full[df_full['Data_Dt'] >= dt_7d])
                 
                 sc1, sc2 = st.columns(2)
                 sc1.markdown(f"**Geral:** {w_all:.1f}% ({g_all}G - {r_all}R)")
                 sc2.markdown(f"**7 Dias:** {w_7d:.1f}% ({g_7d}G - {r_7d}R)")
-            else: st.caption("Sem dados suficientes.")
+            else: st.caption("Sem dados.")
 
         with t5:
             if not st.session_state['df_black'].empty: st.dataframe(st.session_state['df_black'].astype(str), use_container_width=True, hide_index=True)
