@@ -5,6 +5,9 @@ import time
 import os
 from datetime import datetime, timedelta
 
+# --- 0. LIMPEZA DE CACHE (CRÍTICO PARA CORRIGIR O ERRO) ---
+st.cache_data.clear()
+
 # --- 1. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 
@@ -20,7 +23,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 2. GESTÃO DE DADOS E MEMÓRIA ---
+# --- 2. CONSTANTES ---
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 STRIKES_FILE = 'neves_strikes_vip.txt'
@@ -35,88 +38,87 @@ LIGAS_VIP = [
     606, 610, 628, 55, 143 
 ]
 
-# --- 3. FUNÇÕES DE ARQUIVO BLINDADAS (CORREÇÃO DE ERRO) ---
+# --- 3. FUNÇÕES DE ARQUIVO BLINDADAS (ANTI-CRASH) ---
 def carregar_blacklist():
-    cols_esperadas = ['id', 'País', 'Liga']
-    if not os.path.exists(BLACK_FILE): return pd.DataFrame(columns=cols_esperadas)
+    cols = ['id', 'País', 'Liga']
+    # Se não existe, cria vazio
+    if not os.path.exists(BLACK_FILE): return pd.DataFrame(columns=cols)
     
     try:
         df = pd.read_csv(BLACK_FILE)
-        # Se faltar coluna (arquivo velho), recria do zero
-        if not set(cols_esperadas).issubset(df.columns):
-            return pd.DataFrame(columns=cols_esperadas)
-        return df
+        # Se o arquivo é velho e não tem as colunas novas, recria do zero
+        if not set(cols).issubset(df.columns):
+            return pd.DataFrame(columns=cols)
+        return df.astype(str) # Força tudo texto para não quebrar
     except:
-        return pd.DataFrame(columns=cols_esperadas)
+        return pd.DataFrame(columns=cols)
 
 def carregar_strikes_vip():
-    cols_esperadas = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes']
-    if not os.path.exists(STRIKES_FILE): return pd.DataFrame(columns=cols_esperadas)
+    cols = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes']
+    if not os.path.exists(STRIKES_FILE): return pd.DataFrame(columns=cols)
     
     try:
         df = pd.read_csv(STRIKES_FILE)
-        if not set(cols_esperadas).issubset(df.columns):
-            return pd.DataFrame(columns=cols_esperadas)
-        return df
+        if not set(cols).issubset(df.columns):
+            return pd.DataFrame(columns=cols)
+        return df.astype(str)
     except:
-        return pd.DataFrame(columns=cols_esperadas)
+        return pd.DataFrame(columns=cols)
 
 def carregar_historico():
     if not os.path.exists(HIST_FILE): return []
     try:
         df = pd.read_csv(HIST_FILE)
         hoje = datetime.now().strftime('%Y-%m-%d')
-        # Filtra apenas hoje e converte para dicionário
-        df = df[df['Data'] == hoje]
-        return df.to_dict('records')
+        # Filtra hoje e converte para dicionário
+        if 'Data' in df.columns:
+            df = df[df['Data'] == hoje]
+        return df.fillna("").astype(str).to_dict('records')
     except: return []
 
-# --- INICIALIZAÇÃO DE MEMÓRIA ---
-if 'ligas_imunes' in st.session_state:
-    # Correção de tipo se a memória estiver suja
-    if st.session_state['ligas_imunes'] and isinstance(list(st.session_state['ligas_imunes'].values())[0], str):
-        st.session_state['ligas_imunes'] = {} 
+# --- INICIALIZAÇÃO SEGURA ---
+if 'ligas_imunes' not in st.session_state: st.session_state['ligas_imunes'] = {}
+# Correção se a memória estiver corrompida com tipo errado
+if isinstance(st.session_state['ligas_imunes'], list): st.session_state['ligas_imunes'] = {}
 
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'erros_vip' not in st.session_state: st.session_state['erros_vip'] = {}
-if 'ligas_imunes' not in st.session_state: st.session_state['ligas_imunes'] = {} 
 if 'erros_por_liga' not in st.session_state: st.session_state['erros_por_liga'] = {}
 if 'historico_sinais' not in st.session_state: st.session_state['historico_sinais'] = carregar_historico()
 
 # --- FUNÇÕES LÓGICAS ---
 def salvar_na_blacklist(id_liga, pais, nome_liga):
     df = carregar_blacklist()
-    # Garante que é string para evitar erro de comparação
-    if str(id_liga) not in df['id'].astype(str).values:
-        novo = pd.DataFrame([{'id': str(id_liga), 'País': str(pais), 'Liga': str(nome_liga)}])
+    id_str = str(id_liga)
+    if id_str not in df['id'].values:
+        novo = pd.DataFrame([{'id': id_str, 'País': str(pais), 'Liga': str(nome_liga)}])
         pd.concat([df, novo], ignore_index=True).to_csv(BLACK_FILE, index=False)
 
 def registrar_erro_vip(id_liga, pais, nome_liga):
     df = carregar_strikes_vip()
     hoje = datetime.now().strftime('%Y-%m-%d')
-    id_liga = str(id_liga)
+    id_str = str(id_liga)
     
-    if id_liga in df['id'].astype(str).values:
-        idx = df.index[df['id'].astype(str) == id_liga].tolist()[0]
+    if id_str in df['id'].values:
+        idx = df.index[df['id'] == id_str].tolist()[0]
         ultima_data = df.at[idx, 'Data_Erro']
-        strikes_atuais = int(df.at[idx, 'Strikes'])
+        strikes = int(float(df.at[idx, 'Strikes'])) # Garante numero
         
         if ultima_data != hoje:
-            strikes_atuais += 1
+            strikes += 1
             df.at[idx, 'Data_Erro'] = hoje
-            df.at[idx, 'Strikes'] = strikes_atuais
-            # Atualiza nomes caso mude
+            df.at[idx, 'Strikes'] = strikes
             df.at[idx, 'Liga'] = str(nome_liga)
             df.at[idx, 'País'] = str(pais)
             df.to_csv(STRIKES_FILE, index=False)
             
-            if strikes_atuais >= 2:
-                salvar_na_blacklist(id_liga, pais, nome_liga)
+            if strikes >= 2:
+                salvar_na_blacklist(id_str, pais, nome_liga)
                 st.toast(f"🚫 VIP Banida: {nome_liga}")
     else:
         novo = pd.DataFrame([{
-            'id': str(id_liga), 'País': str(pais), 'Liga': str(nome_liga), 
+            'id': id_str, 'País': str(pais), 'Liga': str(nome_liga), 
             'Data_Erro': hoje, 'Strikes': 1
         }])
         pd.concat([df, novo], ignore_index=True).to_csv(STRIKES_FILE, index=False)
@@ -124,11 +126,13 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
 
 def limpar_erro_vip(id_liga):
     if not os.path.exists(STRIKES_FILE): return
-    df = pd.read_csv(STRIKES_FILE)
-    if str(id_liga) in df['id'].astype(str).values:
-        df = df[df['id'].astype(str) != str(id_liga)]
-        df.to_csv(STRIKES_FILE, index=False)
-        st.toast(f"✅ VIP Recuperada: {id_liga}")
+    try:
+        df = pd.read_csv(STRIKES_FILE, dtype=str)
+        if str(id_liga) in df['id'].values:
+            df = df[df['id'] != str(id_liga)]
+            df.to_csv(STRIKES_FILE, index=False)
+            st.toast(f"✅ VIP Recuperada: {id_liga}")
+    except: pass
 
 def salvar_sinal_historico(sinal_dict):
     df_novo = pd.DataFrame([sinal_dict])
@@ -149,13 +153,15 @@ def verificar_qualidade_dados(stats):
 
 def enviar_telegram_real(token, chat_ids, mensagem):
     if token and chat_ids:
-        # Corrige envio para múltiplos IDs
-        lista_ids = [id.strip() for id in str(chat_ids).split(',') if id.strip()]
+        # Tratamento seguro para múltiplos IDs
+        lista_ids = str(chat_ids).replace(';', ',').split(',')
         for cid in lista_ids:
-            try:
-                requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                              data={"chat_id": cid, "text": mensagem, "parse_mode": "Markdown"}, timeout=5)
-            except: pass
+            cid_limpo = cid.strip()
+            if cid_limpo:
+                try:
+                    requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
+                                  data={"chat_id": cid_limpo, "text": mensagem, "parse_mode": "Markdown"}, timeout=5)
+                except: pass
 
 def verificar_relatorio_enviado():
     if not os.path.exists(RELATORIO_FILE): return False
@@ -335,7 +341,7 @@ main_placeholder = st.empty()
 
 if ROBO_LIGADO:
     df_black = carregar_blacklist()
-    ids_bloqueados = df_black['id'].astype(str).values
+    ids_bloqueados = df_black['id'].values
     
     jogos_live = buscar_dados("fixtures", {"live": "all"}, API_KEY)
     radar = []
@@ -444,30 +450,30 @@ if ROBO_LIGADO:
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # Carregamento seguro
         historico_real = carregar_historico()
         st.session_state['historico_sinais'] = historico_real
         
-        # Painel Minimizável
         with st.expander("📊 Painel de Controle (Métricas)", expanded=False):
             c1, c2, c3 = st.columns(3)
             c1.markdown(f'<div class="metric-card"><div class="metric-value">{len(historico_real)}</div><div class="metric-label">Sinais Hoje</div></div>', unsafe_allow_html=True)
             c2.markdown(f'<div class="metric-card"><div class="metric-value">{len(radar)}</div><div class="metric-label">Jogos Live</div></div>', unsafe_allow_html=True)
-            c3.markdown(f'<div class="metric-card"><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-label">Ligas Seguras</div></div>', unsafe_allow_html=True)
+            c3.markdown(f'<div class="metric-card"><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-label">Seguras</div></div>', unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # Prepara DataFrames convertendo tudo para String (Evita Attribute Error)
+        # PREPARAÇÃO DE DADOS SEGURA (CONVERTE TUDO PARA STRING PARA EVITAR CRASH)
+        # Se qualquer coluna faltar, o .astype(str) e fillna garante que exibe vazio mas não crasha
         df_radar = pd.DataFrame(radar).astype(str)
         df_hist = pd.DataFrame(historico_real).astype(str)
         df_agenda = pd.DataFrame(prox_filtrado).astype(str)
-        df_black = df_black.astype(str)
+        df_black = df_black.fillna("").astype(str)
         
         lista_segura = list(st.session_state['ligas_imunes'].values())
         df_imunes = pd.DataFrame(lista_segura).astype(str) if lista_segura else pd.DataFrame(columns=['País', 'Liga'])
         
         df_obs = carregar_strikes_vip()
-        if not df_obs.empty: df_obs = df_obs.astype(str)
+        if not df_obs.empty:
+            df_obs = df_obs.fillna("").astype(str)
 
         t1, t2, t3, t4, t5, t6 = st.tabs([
             f"📡 Radar ({len(radar)})", 
@@ -478,11 +484,11 @@ if ROBO_LIGADO:
             f"⚠️ Observação ({len(df_obs)})"
         ])
         
-        with t1: st.dataframe(df_radar, use_container_width=True, hide_index=True) if not df_radar.empty else st.info("Aguardando jogos...")
+        with t1: st.dataframe(df_radar, use_container_width=True, hide_index=True) if not df_radar.empty else st.info("Aguardando jogos ao vivo...")
         with t2: st.dataframe(df_hist, use_container_width=True, hide_index=True) if not df_hist.empty else st.caption("Nenhum sinal hoje.")
         with t3: st.dataframe(df_agenda.sort_values("Hora"), use_container_width=True, hide_index=True) if not df_agenda.empty else st.caption("Sem jogos.")
         with t4: st.table(df_black.sort_values(['País', 'Liga'])) if not df_black.empty else st.caption("Limpo.")
-        with t5: st.table(df_imunes) if not df_imunes.empty else st.caption("Vazio.")
+        with t5: st.table(df_imunes.sort_values(['País', 'Liga'])) if not df_imunes.empty else st.caption("Vazio.")
         with t6: st.table(df_obs) if not df_obs.empty else st.caption("Tudo ok.")
 
         relogio = st.empty()
