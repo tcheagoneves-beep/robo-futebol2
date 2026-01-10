@@ -304,8 +304,15 @@ def processar_jogo(j, stats):
         
         recentes_h, recentes_a = atualizar_momentum(f_id, sog_h, sog_a)
         
+        # --- ESTRATÉGIAS ---
+        # A) PORTEIRA ABERTA (AJUSTADO PARA ENTRADA SECA)
         if tempo <= 30 and total_gols >= 2:
-            return {"tag": "🟣 Porteira Aberta", "ordem": "Adicionar em Múltipla Over Gols", "motivo": f"Jogo frenético ({gh}x{ga}).", "stats": f"{gh}x{ga}"}
+            return {
+                "tag": "🟣 Porteira Aberta", 
+                "ordem": "🔥 ENTRADA SECA: Over Gols Limite (Asiático)", 
+                "motivo": f"Jogo frenético ({gh}x{ga}).", 
+                "stats": f"{gh}x{ga}"
+            }
 
         if 5 <= tempo <= 15:
             if (sog_h >= 1 or sog_a >= 1):
@@ -388,7 +395,9 @@ if ROBO_LIGADO:
                         f"🏆 {j['league']['name']}\n"
                         f"⏰ {tempo}'\n\n"
                         f"🧩 *Estratégia:* {sinal['tag']}\n"
-                        f"⚠️ *ORDEM:* {sinal['ordem']}\n"
+                        f"⚠️ *ORDEM:*\n"
+                        f"{sinal['ordem']}\n\n"
+                        f"📊 *Motivo:* {sinal['motivo']}\n"
                         f"📈 *Dados:* {sinal['stats']}"
                     )
                     enviar_telegram_real(tg_token, tg_chat_ids, msg)
@@ -434,18 +443,26 @@ if ROBO_LIGADO:
             "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
         })
 
-    # --- AUTOMAÇÃO DO RELATÓRIO ---
     if not radar and not prox_filtrado:
         if not verificar_relatorio_enviado():
             enviar_relatorio_diario(tg_token, tg_chat_ids)
 
-    # --- EXIBIÇÃO (LAYOUT LIMPO) ---
+    # --- EXIBIÇÃO ---
     with main_placeholder.container():
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # Histórico e Dados para as Abas
-        historico_real = carregar_historico()
+        # DASHBOARD MINIMIZÁVEL NO TOPO
+        with st.expander("📊 Painel de Controle (Métricas)", expanded=False):
+            historico_real = carregar_historico()
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f'<div class="metric-card"><div class="metric-value">{len(historico_real)}</div><div class="metric-label">Sinais Hoje</div></div>', unsafe_allow_html=True)
+            c2.markdown(f'<div class="metric-card"><div class="metric-value">{len(radar)}</div><div class="metric-label">Jogos Live</div></div>', unsafe_allow_html=True)
+            c3.markdown(f'<div class="metric-card"><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-label">Ligas Seguras</div></div>', unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # TABELAS
         df_radar = pd.DataFrame(radar).astype(str)
         df_hist = pd.DataFrame(historico_real).astype(str)
         df_agenda = pd.DataFrame(prox_filtrado).astype(str)
@@ -456,12 +473,10 @@ if ROBO_LIGADO:
         df_obs = carregar_strikes_vip()
         if not df_obs.empty and 'País' in df_obs.columns: df_obs = df_obs[['País', 'Liga', 'Data_Erro', 'Strikes']].astype(str)
 
-        # ABAS ORGANIZADAS (Dashboard em aba separada)
-        t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+        t1, t2, t3, t4, t5, t6 = st.tabs([
             f"📡 Radar ({len(radar)})", 
-            f"📅 Agenda ({len(prox_filtrado)})", 
-            f"📊 Dashboard",
             f"📜 Histórico ({len(historico_real)})",
+            f"📅 Agenda ({len(prox_filtrado)})", 
             f"🚫 Blacklist ({len(df_black)})",
             f"🛡️ Seguras ({len(df_imunes)})",
             f"⚠️ Observação ({len(df_obs)})"
@@ -470,25 +485,15 @@ if ROBO_LIGADO:
         with t1:
             if not df_radar.empty: st.dataframe(df_radar, use_container_width=True, hide_index=True)
             else: st.info("Aguardando jogos ao vivo...")
-            
         with t2:
-            if not df_agenda.empty: st.dataframe(df_agenda.sort_values("Hora"), use_container_width=True, hide_index=True)
-            else: st.caption("Agenda vazia por hoje.")
-
-        with t3:
-            st.markdown("### 📈 Resumo do Dia")
-            c1, c2, c3 = st.columns(3)
-            c1.markdown(f'<div class="metric-card"><div class="metric-value">{len(historico_real)}</div><div class="metric-label">Sinais Enviados</div></div>', unsafe_allow_html=True)
-            c2.markdown(f'<div class="metric-card"><div class="metric-value">{len(radar)}</div><div class="metric-label">Jogos Monitorados Agora</div></div>', unsafe_allow_html=True)
-            c3.markdown(f'<div class="metric-card"><div class="metric-value">{len(lista_segura)}</div><div class="metric-label">Ligas Validadas</div></div>', unsafe_allow_html=True)
-            
-        with t4:
             if not df_hist.empty: st.dataframe(df_hist, use_container_width=True, hide_index=True)
-            else: st.caption("Nenhum sinal gerado ainda.")
-            
-        with t5: st.table(df_black.sort_values(['País', 'Liga']).astype(str)) if not df_black.empty else st.caption("Limpo.")
-        with t6: st.table(df_imunes.sort_values(['País', 'Liga'])) if not df_imunes.empty else st.caption("Vazio.")
-        with t7: st.table(df_obs) if not df_obs.empty else st.caption("Tudo ok.")
+            else: st.caption("Nenhum sinal hoje.")
+        with t3:
+            if not df_agenda.empty: st.dataframe(df_agenda.sort_values("Hora"), use_container_width=True, hide_index=True)
+            else: st.caption("Sem jogos.")
+        with t4: st.table(df_black.sort_values(['País', 'Liga']).astype(str)) if not df_black.empty else st.caption("Limpo.")
+        with t5: st.table(df_imunes.sort_values(['País', 'Liga'])) if not df_imunes.empty else st.caption("Vazio.")
+        with t6: st.table(df_obs) if not df_obs.empty else st.caption("Tudo ok.")
 
         relogio = st.empty()
         for i in range(INTERVALO, 0, -1):
