@@ -25,12 +25,13 @@ DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 STRIKES_FILE = 'neves_strikes_vip.txt'
 
-# --- 🛡️ LISTA VIP (EUROPA + ESTADUAIS BRASIL) ---
-# 474=Gaúcho, 475=Mineiro, 476=Paulista, 477=Carioca, 478=Catarinense, 479=Baiano
+# --- 🛡️ LISTA VIP (EUROPA + BRASILEIRÃO + ESTADUAIS) ---
+# Adicionei os IDs dos estaduais para protegê-los do banimento rápido
 LIGAS_VIP = [
-    39, 78, 135, 140, 61, 2, 3, # Europa
-    71, 72, 13, 11, # Brasileirão/Liberta
-    474, 475, 476, 477, 478, 479 # Estaduais
+    39, 78, 135, 140, 61, 2, 3, 9, 45, 48, # Europa Principais
+    71, 72, 13, 11, # Brasil A/B, Liberta, Sula
+    474, 475, 476, 477, 478, 479, # Estaduais (Gaúcho, Mineiro, Paulista, Carioca, Catarinense, Baiano)
+    606, 610, 628, 55, 143 # Paranaense, Brasiliense, Goiano, etc.
 ]
 
 # --- AUTOCORREÇÃO DE MEMÓRIA ---
@@ -83,6 +84,7 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
         ultima_data = df.at[idx, 'Data_Erro']
         strikes_atuais = df.at[idx, 'Strikes']
         
+        # Só conta strike se for em OUTRO DIA
         if ultima_data != hoje:
             strikes_atuais += 1
             df.at[idx, 'Data_Erro'] = hoje
@@ -93,10 +95,10 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
             
             if strikes_atuais >= 2:
                 salvar_na_blacklist(id_liga, pais, nome_liga)
-                st.toast(f"🚫 VIP Banida (2 Rodadas): {nome_liga}")
+                st.toast(f"🚫 VIP Banida (2 Rodadas falhas): {nome_liga}")
                 return "BAN"
             else:
-                st.toast(f"⚠️ VIP Observação: {nome_liga}")
+                st.toast(f"⚠️ VIP em Observação (Rodada 1 Falhou): {nome_liga}")
                 return "WARN"
         else:
             return "HOJE_JA_FOI"
@@ -109,7 +111,7 @@ def registrar_erro_vip(id_liga, pais, nome_liga):
             'Strikes': 1
         }])
         pd.concat([df, novo], ignore_index=True).to_csv(STRIKES_FILE, index=False)
-        st.toast(f"⚠️ VIP Alertada: {nome_liga}")
+        st.toast(f"⚠️ VIP Alertada (Falta de dados): {nome_liga}")
         return "FIRST"
 
 def limpar_erro_vip(id_liga):
@@ -148,7 +150,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Fix Estaduais Ativo.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Estaduais Protegidos.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -329,7 +331,9 @@ if ROBO_LIGADO:
     
     for j in jogos_live:
         l_id = str(j['league']['id'])
-        if l_id in ids_bloqueados: continue
+        
+        if l_id in ids_bloqueados: 
+            continue
         
         f_id = j['fixture']['id']
         tempo = j['fixture']['status'].get('elapsed', 0)
@@ -341,178 +345,4 @@ if ROBO_LIGADO:
         eh_intervalo = (status_short in ['HT', 'BT']) or (48 <= tempo <= 52)
         eh_aquecimento = (tempo < 5)
         eh_fim = (tempo > 80)
-        dentro_janela = not (eh_intervalo or eh_aquecimento or eh_fim)
-        
-        sinal = None
-        icone_visual = "👁️"
-        
-        if eh_aquecimento: icone_visual = "⏳"
-        elif eh_intervalo: icone_visual = "💤"
-        elif eh_fim: icone_visual = "🏁"
-        
-        if dentro_janela:
-            stats = buscar_stats(f_id)
-            
-            if not stats and not MODO_DEMO:
-                if int(l_id) in LIGAS_VIP:
-                    if l_id in st.session_state['ligas_imunes']: pass
-                    else: registrar_erro_vip(l_id, j['league']['country'], j['league']['name'])
-                elif l_id in st.session_state['ligas_imunes']: pass
-                else:
-                    erros = st.session_state['erros_por_liga'].get(l_id, 0) + 1
-                    st.session_state['erros_por_liga'][l_id] = erros
-                    if erros >= 5:
-                        salvar_na_blacklist(l_id, j['league']['country'], j['league']['name'])
-                        st.toast(f"🚫 Banida: {j['league']['name']}")
-                continue
-            
-            if stats:
-                st.session_state['ligas_imunes'][l_id] = {'País': j['league']['country'], 'Liga': j['league']['name']}
-                if int(l_id) in LIGAS_VIP: limpar_erro_vip(l_id)
-                if l_id in st.session_state['erros_por_liga']: del st.session_state['erros_por_liga'][l_id]
-
-            sinal = processar_jogo(j, stats)
-            
-            if sinal:
-                icone_visual = "✅"
-                if f_id not in st.session_state['alertas_enviados']:
-                    msg = (
-                        f"🚨 *NEVES ANALYTICS PRO* 🚨\n\n"
-                        f"⚽ *{home}* {placar} *{away}*\n"
-                        f"🏆 {j['league']['name']}\n"
-                        f"⏰ {tempo}'\n\n"
-                        f"🧩 *Estratégia:* {sinal['tag']}\n"
-                        f"⚠️ *ORDEM:*\n"
-                        f"{sinal['ordem']}\n\n"
-                        f"📊 *Motivo:* {sinal['motivo']}\n"
-                        f"📈 *Dados:* {sinal['stats']}"
-                    )
-                    enviar_telegram_real(tg_token, tg_chat_ids, msg)
-                    st.session_state['alertas_enviados'].add(f_id)
-                    st.toast(f"Sinal Enviado: {sinal['tag']}")
-
-        mem = st.session_state['memoria_pressao'].get(f_id, {})
-        rec_h = len(mem.get('sog_h_timestamps', [])) if mem else 0
-        rec_a = len(mem.get('sog_a_timestamps', [])) if mem else 0
-        info_mom = f" | ⚡ {rec_h}x{rec_a}" if (rec_h + rec_a) > 0 else ""
-
-        radar.append({
-            "Liga": j['league']['name'],
-            "Jogo": f"{home} {placar} {away}",
-            "Tempo": f"{tempo}'",
-            "Status": f"{icone_visual} {sinal['tag'] if sinal else ''}{info_mom}"
-        })
-
-    prox_raw = buscar_proximos(API_KEY)
-    prox_filtrado = []
-    
-    # CORREÇÃO CRÍTICA: Tolerância de 15 minutos para jogos atrasados não sumirem
-    limite_tolerancia = (agora_brasil() - timedelta(minutes=15)).strftime('%H:%M')
-    
-    for p in prox_raw:
-        lid = str(p['league']['id'])
-        status = p['fixture']['status']['short']
-        data_jogo_raw = p['fixture']['date']
-        
-        if lid in ids_bloqueados: continue
-        if status != 'NS': continue
-        
-        hora_jogo = data_jogo_raw[11:16]
-        
-        # Só esconde se o jogo deveria ter começado há mais de 15 minutos e ainda está NS
-        if hora_jogo < limite_tolerancia: continue 
-        
-        prox_filtrado.append({
-            "Hora": hora_jogo, 
-            "Liga": p['league']['name'], 
-            "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"
-        })
-
-    # --- EXIBIÇÃO ---
-    with main_placeholder.container():
-        st.title("❄️ Neves Analytics PRO")
-        st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
-        
-        lista_segura = list(st.session_state['ligas_imunes'].values())
-        if lista_segura:
-            df_imunes = pd.DataFrame(lista_segura)
-            if 'País' in df_imunes.columns: df_imunes = df_imunes[['País', 'Liga']]
-        else:
-            df_imunes = pd.DataFrame(columns=['País', 'Liga'])
-        
-        df_obs = carregar_strikes_vip()
-        if not df_obs.empty and 'País' in df_obs.columns:
-             df_obs = df_obs[['País', 'Liga', 'Data_Erro', 'Strikes']]
-        
-        t1, t2, t3, t4, t5 = st.tabs([
-            f"📡 Radar ({len(radar)})", 
-            f"📅 Agenda ({len(prox_filtrado)})", 
-            f"🚫 Blacklist ({len(df_black)})",
-            f"🛡️ Seguras ({len(df_imunes)})",
-            f"⚠️ Observação ({len(df_obs)})"
-        ])
-        
-        with t1:
-            if radar: st.dataframe(pd.DataFrame(radar), use_container_width=True, hide_index=True)
-            else: st.info("Monitorando jogos...")
-        with t2:
-            if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
-            else: st.caption("Sem mais jogos por hoje.")
-        with t3:
-            if not df_black.empty: st.table(df_black.sort_values(['País', 'Liga']))
-            else: st.caption("Limpo.")
-        with t4:
-            if not df_imunes.empty: st.table(df_imunes.sort_values(['País', 'Liga']))
-            else: st.caption("Nenhuma liga validada ainda.")
-        with t5:
-            if not df_obs.empty: st.table(df_obs)
-            else: st.caption("Nenhuma VIP com problema.")
-
-        with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("""
-                <div class="strategy-card">
-                    <div class="strategy-title">🟣 A - Porteira Aberta</div>
-                    <div class="strategy-desc">
-                        <b>Cenário:</b> Jogo frenético < 30'.<br>
-                        <b>Ação:</b> Múltipla Over Gols.
-                    </div>
-                </div>
-                <div class="strategy-card">
-                    <div class="strategy-title">🟢 B - Reação / Blitz</div>
-                    <div class="strategy-desc">
-                        <b>Cenário:</b> Fav perdendo e amassando.<br>
-                        <b>Ação:</b> Apostar no Gol ou Mais 1 Gol.
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            with c2:
-                st.markdown("""
-                <div class="strategy-card">
-                    <div class="strategy-title">💰 C - Janela de Ouro</div>
-                    <div class="strategy-desc">
-                        <b>Cenário:</b> Reta final (70-75') com pressão.<br>
-                        <b>Ação:</b> Over Limite (Gol Asiático).
-                    </div>
-                </div>
-                <div class="strategy-card">
-                    <div class="strategy-title">⚡ D - Gol Relâmpago</div>
-                    <div class="strategy-desc">
-                        <b>Cenário:</b> Início elétrico (5-15').<br>
-                        <b>Ação:</b> Over 0.5 HT.
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
-        relogio = st.empty()
-        for i in range(INTERVALO, 0, -1):
-            relogio.markdown(f'<div class="timer-text">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
-            time.sleep(1)
-    
-    st.rerun()
-
-else:
-    with main_placeholder.container():
-        st.title("❄️ Neves Analytics PRO")
-        st.info("💡 Robô em espera. Configure e ligue na lateral.")
+        dentro_janela = not (eh
