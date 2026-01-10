@@ -5,7 +5,7 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# --- 0. CONFIGURAÇÃO E CSS REFINADO ---
+# --- 0. CONFIGURAÇÃO VISUAL ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 st.cache_data.clear()
 
@@ -13,41 +13,14 @@ st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
     
-    /* LIMITADOR DE LARGURA (Para não ficar esticado demais, mas caber a tabela) */
-    .main .block-container {
-        max-width: 95%;
-        padding-top: 1rem;
-        padding-right: 1rem;
-        padding-left: 1rem;
-        padding-bottom: 5rem;
-    }
-
     /* Cards de Métricas */
     .metric-box {
         background-color: #1A1C24; border: 1px solid #333; 
-        border-radius: 8px; padding: 10px; text-align: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        border-radius: 8px; padding: 15px; text-align: center;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2); margin-bottom: 5px;
     }
-    .metric-title {font-size: 11px; color: #aaaaaa; text-transform: uppercase;}
+    .metric-title {font-size: 11px; color: #aaaaaa; text-transform: uppercase; letter-spacing: 1px;}
     .metric-value {font-size: 22px; font-weight: bold; color: #00FF00;}
-    
-    /* Status Ativo */
-    .status-active {
-        background-color: #1F4025; color: #00FF00; 
-        border: 1px solid #00FF00; padding: 8px; 
-        text-align: center; border-radius: 6px; font-weight: bold;
-        font-size: 14px; margin-bottom: 10px;
-    }
-    
-    /* BOTÕES DA SIDEBAR (Correção de texto cortado) */
-    .stButton button {
-        width: 100%;
-        white-space: normal !important;
-        height: auto !important;
-        padding: 10px 5px !important;
-        font-size: 12px !important;
-        line-height: 1.2 !important;
-    }
     
     /* Timer Fixo */
     .footer-timer {
@@ -56,6 +29,15 @@ st.markdown("""
         text-align: center; padding: 8px; font-size: 14px;
         font-weight: bold; border-top: 1px solid #333;
         z-index: 9999;
+    }
+    
+    /* Tabelas */
+    .stDataFrame { font-size: 12px; }
+    
+    /* Status */
+    .status-active {
+        background-color: #1F4025; color: #00FF00; padding: 8px; 
+        text-align: center; border-radius: 6px; font-weight: bold; margin-bottom: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -84,10 +66,8 @@ def carregar_tudo():
     st.session_state['df_black'] = load_safe(FILES['black'], ['id', 'País', 'Liga'])
     st.session_state['df_vip'] = load_safe(FILES['vip'], ['id', 'País', 'Liga', 'Data_Erro', 'Strikes'])
     
+    # Carrega histórico completo para estatísticas
     df = load_safe(FILES['hist'], ['Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado'])
-    hoje = datetime.now().strftime('%Y-%m-%d')
-    if not df.empty:
-        df = df[df['Data'] == hoje]
     st.session_state['historico_sinais'] = df.to_dict('records')
 
 def salvar_blacklist(id_liga, pais, nome_liga):
@@ -118,30 +98,16 @@ def salvar_historico(item):
     df = pd.DataFrame([item])
     df.to_csv(FILES['hist'], mode='a', header=not os.path.exists(FILES['hist']), index=False)
 
-# --- 4. INTEGRIDADE ---
-def gerenciar_strikes(id_liga, pais, nome_liga):
-    df = st.session_state['df_vip']
-    hoje = datetime.now().strftime('%Y-%m-%d')
-    id_str = str(id_liga)
-    strikes = 0
-    data_antiga = ""
-    
-    if id_str in df['id'].values:
-        row = df[df['id'] == id_str].iloc[0]
-        strikes = int(row['Strikes'])
-        data_antiga = row['Data_Erro']
-    
-    if data_antiga == hoje: return
+# --- 4. ESTATÍSTICAS ---
+def calcular_stats(df_raw):
+    if df_raw.empty: return 0, 0, 0, 0
+    greens = len(df_raw[df_raw['Resultado'].str.contains('GREEN', na=False)])
+    reds = len(df_raw[df_raw['Resultado'].str.contains('RED', na=False)])
+    total = len(df_raw)
+    winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
+    return total, greens, reds, winrate
 
-    novo_strike = strikes + 1
-    if novo_strike >= 2:
-        salvar_blacklist(id_liga, pais, nome_liga)
-        st.toast(f"🚫 {nome_liga} Banida (2 Rodadas)")
-    else:
-        salvar_strike(id_liga, pais, nome_liga, novo_strike)
-        st.toast(f"⚠️ {nome_liga} Strike 1/2")
-
-# --- 5. TELEGRAM (VALIDADO) ---
+# --- 5. TELEGRAM ---
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
@@ -155,36 +121,34 @@ def check_green_red(jogos, token, chats):
     
     for s in hist:
         if s['Resultado'] == 'Pendente':
-            # Busca o jogo na lista
             jogo = next((j for j in jogos if j['teams']['home']['name'] in s['Jogo']), None)
-            
             if jogo:
                 gh = jogo['goals']['home'] or 0
                 ga = jogo['goals']['away'] or 0
                 try: ph, pa = map(int, s['Placar_Sinal'].split('x'))
                 except: continue
                 
-                # Lógica de Green (Saiu Gol)
+                # Green: Saiu Gol
                 if (gh+ga) > (ph+pa):
                     s['Resultado'] = '✅ GREEN'
-                    msg = f"✅ *GREEN CONFIRMADO!* \n\n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📈 Placar Atual: {gh}x{ga}\n🎯 {s['Estrategia']}"
+                    msg = f"✅ *GREEN!* \n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📈 {gh}x{ga} (Era {s['Placar_Sinal']})\n🎯 {s['Estrategia']}"
                     enviar_telegram(token, chats, msg)
                     atualizou = True
                 
-                # Lógica de Red (Jogo Acabou)
+                # Red: Acabou
                 elif jogo['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
                     s['Resultado'] = '❌ RED'
-                    msg = f"❌ *RED* \n\n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📉 Placar Final: {gh}x{ga}\n🎯 {s['Estrategia']}"
+                    msg = f"❌ *RED* \n⚽ {s['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {s['Estrategia']}"
                     enviar_telegram(token, chats, msg)
                     atualizou = True
     
     if atualizou:
-        # Salva a atualização no CSV
         pd.DataFrame(hist).to_csv(FILES['hist'], index=False)
 
 def reenviar_sinais(token, chats):
-    hist = st.session_state['historico_sinais']
-    if not hist: return st.toast("Nada para reenviar.")
+    hoje = datetime.now().strftime('%Y-%m-%d')
+    hist = [h for h in st.session_state['historico_sinais'] if h['Data'] == hoje]
+    if not hist: return st.toast("Sem sinais hoje.")
     st.toast("Reenviando...")
     for s in reversed(hist):
         msg = f"🔄 *REENVIO*\n\n🚨 *{s['Estrategia']}*\n⚽ {s['Jogo']}\n⚠️ Placar Sinal: {s.get('Placar_Sinal','?')}"
@@ -196,12 +160,10 @@ def relatorio_final(token, chats):
     hist = [h for h in st.session_state['historico_sinais'] if h['Data'] == hoje]
     if not hist: return
     
-    greens = len([h for h in hist if 'GREEN' in h['Resultado']])
-    reds = len([h for h in hist if 'RED' in h['Resultado']])
-    total = len(hist)
-    winrate = (greens / (greens+reds) * 100) if (greens+reds) > 0 else 0
+    df_hj = pd.DataFrame(hist)
+    tot, g, r, wr = calcular_stats(df_hj)
     
-    msg = f"📊 *FECHAMENTO DO DIA* ({hoje})\n\n🚀 Sinais: {total}\n✅ Greens: {greens}\n❌ Reds: {reds}\n🎯 Winrate: {winrate:.1f}%"
+    msg = f"📊 *FECHAMENTO DO MERCADO* ({hoje})\n\n🚀 Sinais: {tot}\n✅ Greens: {g}\n❌ Reds: {r}\n🎯 Assertividade: {wr:.1f}%"
     enviar_telegram(token, chats, msg)
     with open(FILES['report'], 'w') as f: f.write(hoje)
 
@@ -213,10 +175,7 @@ carregar_tudo()
 
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
-    
-    # Cura dados antigos
-    if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []}
-    
+    if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []} # Cura erro
     now = datetime.now()
     if sog_h > mem['sog_h']: mem['h_t'].extend([now]*(sog_h-mem['sog_h']))
     if sog_a > mem['sog_a']: mem['a_t'].extend([now]*(sog_a-mem['sog_a']))
@@ -255,6 +214,25 @@ def processar(j, stats, tempo, placar):
         if ga <= gh and (ra >= 2 or sh_a >= 8): return {"tag": "🟢 Blitz Visitante", "ordem": "Gol Visitante", "stats": f"Pressão: {ra}"}
     return None
 
+def gerenciar_strikes(id_liga, pais, nome_liga):
+    df = st.session_state['df_vip']
+    hoje = datetime.now().strftime('%Y-%m-%d')
+    id_str = str(id_liga)
+    strikes = 0
+    data_antiga = ""
+    if id_str in df['id'].values:
+        row = df[df['id'] == id_str].iloc[0]
+        strikes = int(row['Strikes'])
+        data_antiga = row['Data_Erro']
+    if data_antiga == hoje: return
+    novo_strike = strikes + 1
+    if novo_strike >= 2:
+        salvar_blacklist(id_liga, pais, nome_liga)
+        st.toast(f"🚫 {nome_liga} Banida")
+    else:
+        salvar_strike(id_liga, pais, nome_liga, novo_strike)
+        st.toast(f"⚠️ {nome_liga} Strike 1/2")
+
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves PRO")
@@ -273,10 +251,10 @@ with st.sidebar:
             st.rerun()
 
     with st.expander("📘 Manual", expanded=False):
-        st.markdown("**🟣 Porteira:** 2 gols < 30min")
-        st.markdown("**🟢 Blitz:** Pressão forte")
-        st.markdown("**💰 Janela:** 70-75min intenso")
-        st.markdown("**⚡ Relâmpago:** 5-15' elétrico")
+        st.write("🟣 **Porteira:** 2 gols < 30min")
+        st.write("🟢 **Blitz:** Pressão forte")
+        st.write("💰 **Janela:** 70-75min intenso")
+        st.write("⚡ **Relâmpago:** 5-15' elétrico")
 
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
@@ -291,7 +269,6 @@ if ROBO_LIGADO:
         jogos = res.get('response', [])
     except: jogos = []
 
-    # Valida Green/Red
     check_green_red(jogos, TG_TOKEN, TG_CHAT)
 
     radar = []
@@ -315,9 +292,7 @@ if ROBO_LIGADO:
         
         sinal = processar(j, stats, tempo, placar)
         
-        if not sinal and not stats and tempo >= 45:
-            gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
-        
+        if not sinal and not stats and tempo >= 45: gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
         if stats: st.session_state['ligas_imunes'][lid] = {'País': j['league']['country'], 'Liga': j['league']['name']}
         
         status_vis = "👁️"
@@ -348,48 +323,79 @@ if ROBO_LIGADO:
         if not os.path.exists(FILES['report']) or open(FILES['report']).read() != datetime.now().strftime('%Y-%m-%d'):
             relatorio_final(TG_TOKEN, TG_CHAT)
 
-    # --- TELA ---
+    # --- RENDERIZAÇÃO ---
     with main.container():
         st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        hist_hoje = [x for x in st.session_state['historico_sinais'] if x['Data'] == datetime.now().strftime('%Y-%m-%d')]
-        
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f'<div class="metric-box"><div class="metric-value">{len(hist_hoje)}</div><div class="metric-title">Sinais Hoje</div></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="metric-box"><div class="metric-value">{len(radar)}</div><div class="metric-title">Jogos Live</div></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="metric-box"><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-title">Ligas Seguras</div></div>', unsafe_allow_html=True)
-        
-        st.write("")
+        # PREPARAÇÃO DE DADOS PARA ESTATÍSTICAS
+        df_full = pd.DataFrame(st.session_state['historico_sinais'])
+        if not df_full.empty:
+            hoje = datetime.now().strftime('%Y-%m-%d')
+            # Filtro Hoje
+            df_hoje = df_full[df_full['Data'] == hoje]
+            # Filtro 7 Dias (Simples)
+            df_full['Data_Dt'] = pd.to_datetime(df_full['Data'], errors='coerce')
+            data_7dias = pd.to_datetime(hoje) - timedelta(days=7)
+            df_7dias = df_full[df_full['Data_Dt'] >= data_7dias]
+            # Filtro Mês
+            df_mes = df_full[df_full['Data_Dt'].dt.month == datetime.now().month]
+        else:
+            df_hoje = df_7dias = df_mes = pd.DataFrame(columns=['Resultado'])
 
-        t1, t2, t3, t4, t5, t6 = st.tabs([
-            f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", 
-            f"📜 Histórico ({len(hist_hoje)})", f"🚫 Blacklist ({len(st.session_state['df_black'])})", 
-            f"🛡️ Seguras ({len(st.session_state['ligas_imunes'])})", f"⚠️ Obs ({len(st.session_state['df_vip'])})"
+        # CÁLCULO DE MÉTRICAS
+        t_hj, g_hj, r_hj, w_hj = calcular_stats(df_hoje)
+        t_7d, g_7d, r_7d, w_7d = calcular_stats(df_7dias)
+        t_ms, g_ms, r_ms, w_ms = calcular_stats(df_mes)
+        t_all, g_all, r_all, w_all = calcular_stats(df_full)
+
+        # 1. ABAS DE NAVEGAÇÃO
+        t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+            f"📡 Radar ({len(radar)})", 
+            f"📈 Estatísticas", 
+            f"📜 Histórico ({len(df_hoje)})",
+            f"📅 Agenda ({len(agenda)})", 
+            f"🚫 Blacklist ({len(st.session_state['df_black'])})", 
+            f"🛡️ Seguras ({len(st.session_state['ligas_imunes'])})", 
+            "⚠️ Obs"
         ])
         
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
             else: st.info("Buscando jogos...")
         
+        # ABA NOVA: ESTATÍSTICAS AVANÇADAS
         with t2:
-            if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
-            else: st.caption("Sem jogos.")
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">HOJE</div><div class="metric-value">{w_hj:.0f}%</div><div style="font-size:12px">{g_hj}G - {r_hj}R</div></div>', unsafe_allow_html=True)
+            with c2:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">7 DIAS</div><div class="metric-value">{w_7d:.0f}%</div><div style="font-size:12px">{g_7d}G - {r_7d}R</div></div>', unsafe_allow_html=True)
+            with c3:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">MÊS ATUAL</div><div class="metric-value">{w_ms:.0f}%</div><div style="font-size:12px">{g_ms}G - {r_ms}R</div></div>', unsafe_allow_html=True)
+            with c4:
+                st.markdown(f'<div class="metric-box"><div class="metric-title">GERAL</div><div class="metric-value">{w_all:.0f}%</div><div style="font-size:12px">{g_all}G - {r_all}R</div></div>', unsafe_allow_html=True)
             
+            st.caption("Baseado nos dados salvos no histórico.")
+
         with t3:
-            if hist_hoje: st.dataframe(pd.DataFrame(hist_hoje).astype(str), use_container_width=True, hide_index=True)
+            if not df_hoje.empty: st.dataframe(df_hoje.astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Nenhum sinal hoje.")
             
         with t4:
+            if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
+            else: st.caption("Sem jogos.")
+            
+        with t5:
             if not st.session_state['df_black'].empty: st.dataframe(st.session_state['df_black'].astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Limpo.")
             
-        with t5:
+        with t6:
             if st.session_state['ligas_imunes']: 
                 safe_l = [{'id': k, 'País': v['País'], 'Liga': v['Liga']} for k,v in st.session_state['ligas_imunes'].items()]
                 st.dataframe(pd.DataFrame(safe_l).astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Nenhuma.")
             
-        with t6:
+        with t7:
             if not st.session_state['df_vip'].empty: st.dataframe(st.session_state['df_vip'].astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Tudo ok.")
 
