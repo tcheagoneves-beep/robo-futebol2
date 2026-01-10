@@ -5,7 +5,7 @@ import time
 import os
 from datetime import datetime, timedelta
 
-# --- 0. CONFIGURAÇÃO E CSS (VISUAL CORRIGIDO) ---
+# --- 0. CONFIGURAÇÃO E CSS (VISUAL REFINADO) ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 st.cache_data.clear()
 
@@ -13,11 +13,13 @@ st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
     
-    /* LIMITADOR DE LARGURA (Elegante: nem muito largo, nem muito estreito) */
+    /* LARGURA TOTAL (Para a tabela não cortar descrições) */
     .main .block-container {
-        max-width: 95%;
+        max-width: 100%;
         padding-top: 1rem;
         padding-bottom: 5rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
     }
 
     /* PLACAR DE MÉTRICAS (TOPO) */
@@ -41,12 +43,16 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* BOTÕES SIDEBAR (Correção de quebra de texto) */
+    /* BOTÕES SIDEBAR (Ajuste para quebra de linha e clareza) */
     .stButton button {
         width: 100%;
-        font-size: 14px !important;
+        height: auto !important;
+        white-space: normal !important; /* Permite quebra de linha */
+        word-wrap: break-word !important;
+        font-size: 13px !important;
         font-weight: bold !important;
-        padding: 0.5rem !important;
+        padding: 10px 5px !important;
+        line-height: 1.3 !important;
     }
     
     /* TIMER FIXO */
@@ -60,7 +66,7 @@ st.markdown("""
     }
     
     /* TABELAS */
-    .stDataFrame { font-size: 13px; }
+    .stDataFrame { font-size: 14px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -137,6 +143,7 @@ def enviar_telegram(token, chat_ids, msg):
         except: pass
 
 def check_green_red(jogos, token, chats):
+    """Verifica Green/Red e atualiza Telegram"""
     atualizou = False
     hist = st.session_state['historico_sinais']
     
@@ -149,14 +156,17 @@ def check_green_red(jogos, token, chats):
                 try: ph, pa = map(int, s['Placar_Sinal'].split('x'))
                 except: continue
                 
+                # Green: Saiu Gol
                 if (gh+ga) > (ph+pa):
                     s['Resultado'] = '✅ GREEN'
-                    msg = f"✅ *GREEN!* \n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📈 {gh}x{ga} (Era {s['Placar_Sinal']})\n🎯 {s['Estrategia']}"
+                    msg = f"✅ *GREEN CONFIRMADO!* \n\n⚽ {s['Jogo']}\n🏆 {s['Liga']}\n📈 Placar Atual: {gh}x{ga}\n🎯 {s['Estrategia']}"
                     enviar_telegram(token, chats, msg)
                     atualizou = True
+                
+                # Red: Acabou
                 elif jogo['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
                     s['Resultado'] = '❌ RED'
-                    msg = f"❌ *RED* \n⚽ {s['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {s['Estrategia']}"
+                    msg = f"❌ *RED* \n\n⚽ {s['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {s['Estrategia']}"
                     enviar_telegram(token, chats, msg)
                     atualizou = True
     
@@ -167,9 +177,9 @@ def reenviar_sinais(token, chats):
     hoje = datetime.now().strftime('%Y-%m-%d')
     hist = [h for h in st.session_state['historico_sinais'] if h['Data'] == hoje]
     if not hist: return st.toast("Sem sinais hoje.")
-    st.toast("Reenviando...")
+    st.toast("Reenviando sinais...")
     for s in reversed(hist):
-        msg = f"🔄 *REENVIO*\n\n🚨 *{s['Estrategia']}*\n⚽ {s['Jogo']}\n⚠️ Placar Sinal: {s.get('Placar_Sinal','?')}"
+        msg = f"🔄 *REENVIO DE SINAL*\n\n🚨 *{s['Estrategia']}*\n⚽ {s['Jogo']}\n⚠️ Placar Sinal: {s.get('Placar_Sinal','?')}"
         enviar_telegram(token, chats, msg)
         time.sleep(1)
 
@@ -251,7 +261,7 @@ def gerenciar_strikes(id_liga, pais, nome_liga):
         salvar_strike(id_liga, pais, nome_liga, novo_strike)
         st.toast(f"⚠️ {nome_liga} Strike 1/2")
 
-# --- 7. SIDEBAR (BOTÕES LADO A LADO) ---
+# --- 7. SIDEBAR (BOTÕES AJUSTADOS) ---
 with st.sidebar:
     st.title("❄️ Neves PRO")
     
@@ -261,10 +271,10 @@ with st.sidebar:
         TG_CHAT = st.text_input("Chat IDs:")
         INTERVALO = st.slider("Ciclo (s):", 30, 300, 60)
         
-        # Botões lado a lado com textos curtos para não quebrar
+        # Botões lado a lado com quebra de linha clara
         col_b1, col_b2 = st.columns(2)
-        if col_b1.button("🔄 Reenviar"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if col_b2.button("🗑️ Limpar"):
+        if col_b1.button("🔄 Reenviar\nSinais"): reenviar_sinais(TG_TOKEN, TG_CHAT)
+        if col_b2.button("🗑️ Limpar\nBlacklist"):
             if os.path.exists(FILES['black']): os.remove(FILES['black'])
             st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
             st.rerun()
@@ -328,7 +338,7 @@ if ROBO_LIGADO:
 
         radar.append({"Liga": j['league']['name'], "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
-    # Agenda e Relatório
+    # Agenda
     agenda = []
     try:
         prox = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"date": datetime.now().strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}).json().get('response', [])
@@ -357,11 +367,10 @@ if ROBO_LIGADO:
             t_hj, g_hj, r_hj, w_hj = 0, 0, 0, 0.0
 
         # PLACAR NO TOPO
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t_hj}</div><div class="metric-sub">{g_hj} Green | {r_hj} Red</div></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="metric-box"><div class="metric-title">Assertividade</div><div class="metric-value">{w_hj:.0f}%</div><div class="metric-sub">Hoje</div></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
-        c4.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{len(st.session_state["ligas_imunes"])}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
         
         st.write("")
 
