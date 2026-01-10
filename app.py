@@ -12,21 +12,18 @@ st.cache_data.clear()
 st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
+    .main .block-container { max-width: 100%; padding: 1rem 2rem 5rem 2rem; }
     
-    .main .block-container {
-        max-width: 100%;
-        padding: 1rem 2rem 5rem 2rem;
-    }
-
+    /* PLACAR */
     .metric-box {
         background-color: #1A1C24; border: 1px solid #333; 
         border-radius: 8px; padding: 15px; text-align: center;
         box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
-    .metric-title {font-size: 13px; color: #aaaaaa; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;}
+    .metric-title {font-size: 13px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 5px;}
     .metric-value {font-size: 26px; font-weight: bold; color: #00FF00;}
-    .metric-sub {font-size: 12px; color: #888;}
     
+    /* STATUS */
     .status-active {
         background-color: #1F4025; color: #00FF00; 
         border: 1px solid #00FF00; padding: 10px; 
@@ -34,18 +31,21 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
+    /* BOTÕES */
     .stButton button {
-        width: 100%; height: auto !important; white-space: normal !important;
-        word-wrap: break-word !important; font-size: 13px !important;
-        font-weight: bold !important; padding: 10px 5px !important; line-height: 1.3 !important;
+        width: 100%; height: auto !important;
+        white-space: normal !important; word-wrap: break-word !important;
+        font-size: 13px !important; font-weight: bold !important;
+        padding: 10px 5px !important;
     }
     
+    /* TIMER */
     .footer-timer {
         position: fixed; left: 0; bottom: 0; width: 100%;
         background-color: #0E1117; color: #FFD700;
         text-align: center; padding: 10px; font-size: 16px;
         font-weight: bold; border-top: 1px solid #333;
-        z-index: 9999; box-shadow: 0 -5px 10px rgba(0,0,0,0.5);
+        z-index: 9999;
     }
     
     .stDataFrame { font-size: 14px; }
@@ -60,9 +60,10 @@ FILES = {
     'report': 'neves_status_relatorio.txt'
 }
 
+# --- 2. LISTA VIP ---
 LIGAS_VIP = [39, 78, 135, 140, 61, 2, 3, 9, 45, 48, 71, 72, 13, 11, 474, 475, 476, 477, 478, 479, 606, 610, 628, 55, 143]
 
-# --- 2. DADOS ---
+# --- 3. DADOS ---
 def load_safe(path, cols):
     if not os.path.exists(path): return pd.DataFrame(columns=cols)
     try:
@@ -101,7 +102,7 @@ def salvar_historico(item):
     df = pd.DataFrame([item])
     df.to_csv(FILES['hist'], mode='a', header=not os.path.exists(FILES['hist']), index=False)
 
-# --- 3. ESTATÍSTICAS ---
+# --- 4. ESTATÍSTICAS ---
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
     greens = len(df_raw[df_raw['Resultado'].str.contains('GREEN', na=False)])
@@ -110,7 +111,7 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. TELEGRAM ---
+# --- 5. TELEGRAM ---
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
@@ -119,7 +120,6 @@ def enviar_telegram(token, chat_ids, msg):
         except: pass
 
 def processar_resultado(sinal, jogo_api, token, chats):
-    """Lógica unificada de Green/Red"""
     gh = jogo_api['goals']['home'] or 0
     ga = jogo_api['goals']['away'] or 0
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
@@ -142,36 +142,26 @@ def processar_resultado(sinal, jogo_api, token, chats):
     
     return False
 
-def check_green_red_avancado(jogos_live, token, chats, api_key):
-    """Verifica jogos Live E busca jogos encerrados se necessário"""
-    atualizou = False
+def rastrear_jogos_encerrados(token, chats, api_key):
+    """Busca na API jogos que já acabaram para resolver os Pendentes"""
     hist = st.session_state['historico_sinais']
-    
-    # 1. Filtra pendentes
     pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
+    
     if not pendentes: return
 
-    # 2. Busca jogos encerrados se houver pendentes
-    jogos_encerrados = []
-    # Se tem pendente que não está no live, busca FT
-    nomes_live = [j['teams']['home']['name'] for j in jogos_live]
-    if any(p['Jogo'].split(' x ')[0] not in nomes_live for p in pendentes):
-        try:
-            url = "https://v3.football.api-sports.io/fixtures"
-            params = {"date": datetime.now().strftime('%Y-%m-%d'), "status": "FT-AET-PEN"}
-            jogos_encerrados = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json().get('response', [])
-        except: pass
+    # Busca jogos encerrados hoje
+    try:
+        url = "https://v3.football.api-sports.io/fixtures"
+        params = {"date": datetime.now().strftime('%Y-%m-%d'), "status": "FT-AET-PEN", "timezone": "America/Sao_Paulo"}
+        jogos_ft = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json().get('response', [])
+    except: return
 
-    # 3. Processa cada pendente
+    atualizou = False
     for s in pendentes:
-        home_name = s['Jogo'].split(' x ')[0]
-        
-        # Tenta achar no Live
-        jogo = next((j for j in jogos_live if j['teams']['home']['name'] == home_name), None)
-        
-        # Se não achou no Live, tenta nos Encerrados
-        if not jogo:
-            jogo = next((j for j in jogos_encerrados if j['teams']['home']['name'] == home_name), None)
+        # Tenta encontrar o jogo pendente na lista de encerrados
+        # (Comparação simples por nome do time da casa)
+        time_casa = s['Jogo'].split(' x ')[0].strip()
+        jogo = next((j for j in jogos_ft if j['teams']['home']['name'] == time_casa), None)
         
         if jogo:
             if processar_resultado(s, jogo, token, chats):
@@ -200,7 +190,7 @@ def relatorio_final(token, chats):
     enviar_telegram(token, chats, msg)
     with open(FILES['report'], 'w') as f: f.write(hoje)
 
-# --- 5. CORE ---
+# --- 6. CORE ---
 if 'ligas_imunes' not in st.session_state: st.session_state['ligas_imunes'] = {}
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
@@ -231,6 +221,7 @@ def processar(j, stats, tempo, placar):
                 ok=True
                 if i==0: sog_h=s['value']
                 else: sog_a=s['value']
+    
     if not ok: return None
     
     fid = j['fixture']['id']
@@ -265,9 +256,10 @@ def gerenciar_strikes(id_liga, pais, nome_liga):
         salvar_strike(id_liga, pais, nome_liga, novo_strike)
         st.toast(f"⚠️ {nome_liga} Strike 1/2")
 
-# --- 6. SIDEBAR ---
+# --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves PRO")
+    
     with st.expander("⚙️ Configurações", expanded=True):
         API_KEY = st.text_input("Chave API:", type="password")
         TG_TOKEN = st.text_input("Token Telegram:", type="password")
@@ -279,14 +271,16 @@ with st.sidebar:
             if os.path.exists(FILES['black']): os.remove(FILES['black'])
             st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
             st.rerun()
+
     with st.expander("📘 Manual", expanded=False):
-        st.write("🟣 **Porteira:** 2 gols < 30min")
-        st.write("🟢 **Blitz:** Pressão forte")
-        st.write("💰 **Janela:** 70-75min intenso")
-        st.write("⚡ **Relâmpago:** 5-15' elétrico")
+        st.markdown("**🟣 Porteira:** 2 gols < 30min")
+        st.markdown("**🟢 Blitz:** Pressão forte")
+        st.markdown("**💰 Janela:** 70-75min intenso")
+        st.markdown("**⚡ Relâmpago:** 5-15' elétrico")
+
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
-# --- 7. DASHBOARD ---
+# --- 8. DASHBOARD ---
 main = st.empty()
 
 if ROBO_LIGADO:
@@ -294,16 +288,22 @@ if ROBO_LIGADO:
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         res = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10).json()
-        jogos = res.get('response', [])
-    except: jogos = []
+        jogos_live = res.get('response', [])
+    except: jogos_live = []
 
-    # VERIFICAÇÃO AVANÇADA (Live + Encerrados)
-    check_green_red_avancado(jogos, TG_TOKEN, TG_CHAT, API_KEY)
+    # 1. Verifica Green/Red em Jogos Live
+    for s in st.session_state['historico_sinais']:
+        if s['Resultado'] == 'Pendente':
+            j_live = next((j for j in jogos_live if j['teams']['home']['name'] in s['Jogo']), None)
+            if j_live: processar_resultado(s, j_live, TG_TOKEN, TG_CHAT)
+
+    # 2. Verifica Green/Red em Jogos Encerrados (O Segredo!)
+    rastrear_jogos_encerrados(TG_TOKEN, TG_CHAT, API_KEY)
 
     radar = []
     ids_black = st.session_state['df_black']['id'].values
 
-    for j in jogos:
+    for j in jogos_live:
         lid = str(j['league']['id'])
         if lid in ids_black: continue
         
@@ -354,7 +354,7 @@ if ROBO_LIGADO:
         if not os.path.exists(FILES['report']) or open(FILES['report']).read() != datetime.now().strftime('%Y-%m-%d'):
             relatorio_final(TG_TOKEN, TG_CHAT)
 
-    # --- TELA ---
+    # --- RENDERIZAÇÃO ---
     with main.container():
         st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
@@ -380,15 +380,19 @@ if ROBO_LIGADO:
             f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"⚠️ Obs ({len(st.session_state['df_vip'])})"
         ])
         
+        # CORREÇÃO DO ATTRIBUTE ERROR: SEPARANDO IF/ELSE
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
             else: st.info("Buscando jogos...")
+        
         with t2:
             if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Sem jogos.")
+            
         with t3:
             if hist_hoje: st.dataframe(pd.DataFrame(hist_hoje).astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Nenhum sinal hoje.")
+            
         with t4:
             if not df_full.empty:
                 df_full['Data_Dt'] = pd.to_datetime(df_full['Data'], errors='coerce')
@@ -399,9 +403,11 @@ if ROBO_LIGADO:
                 sc1.markdown(f"**Geral:** {w_all:.1f}% ({g_all}G - {r_all}R)")
                 sc2.markdown(f"**7 Dias:** {w_7d:.1f}% ({g_7d}G - {r_7d}R)")
             else: st.caption("Sem dados.")
+
         with t5:
             if not st.session_state['df_black'].empty: st.dataframe(st.session_state['df_black'].astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Limpo.")
+            
         with t6:
             if not st.session_state['df_vip'].empty: st.dataframe(st.session_state['df_vip'].astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Tudo ok.")
