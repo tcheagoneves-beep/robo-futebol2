@@ -24,9 +24,11 @@ st.markdown("""
 DB_FILE = 'neves_dados.txt'
 BLACK_FILE = 'neves_blacklist.txt'
 
-# --- AUTOCORREÇÃO DE MEMÓRIA ---
-if 'ligas_imunes' in st.session_state and not isinstance(st.session_state['ligas_imunes'], dict):
-    st.session_state['ligas_imunes'] = {} 
+# --- AUTOCORREÇÃO DE MEMÓRIA (EVITA CONFLITO DE VERSÃO) ---
+# Se a memória antiga tiver formato errado (string), reseta para dicionário
+if 'ligas_imunes' in st.session_state:
+    if st.session_state['ligas_imunes'] and isinstance(list(st.session_state['ligas_imunes'].values())[0], str):
+        st.session_state['ligas_imunes'] = {} # Limpa para formato novo
 
 if 'alertas_enviados' not in st.session_state:
     st.session_state['alertas_enviados'] = set()
@@ -80,7 +82,7 @@ with st.sidebar:
         
         st.markdown("---")
         if st.button("🔔 Testar Telegram"):
-            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Listas em Ordem Alfabética.")
+            enviar_telegram_real(tg_token, tg_chat_ids, "✅ *Neves PRO:* Ordenação por País Ativa.")
             st.toast("Enviado!")
 
         INTERVALO = st.slider("Ciclo (seg):", 30, 300, 60)
@@ -164,8 +166,8 @@ def atualizar_momentum(fid, sog_h_atual, sog_a_atual):
     memoria['sog_h_total'] = sog_h_atual
     memoria['sog_a_total'] = sog_a_atual
     
-    memoria['sog_h_timestamps'] = [t for t in memoria['sog_h_timestamps'] if agora - t <= janela_tempo]
-    memoria['sog_a_timestamps'] = [t for t in memoria['sog_a_timestamps'] if agora - t <= janela_tempo]
+    memoria['sog_h_total'] = sog_h_atual
+    memoria['sog_a_total'] = sog_a_atual
     
     st.session_state['memoria_pressao'][fid] = memoria
     return len(memoria['sog_h_timestamps']), len(memoria['sog_a_timestamps'])
@@ -304,7 +306,8 @@ if ROBO_LIGADO:
                 continue
             
             if stats:
-                st.session_state['ligas_imunes'][l_id] = j['league']['name']
+                # Agora salva o PAÍS também para ordenar
+                st.session_state['ligas_imunes'][l_id] = {'País': j['league']['country'], 'Liga': j['league']['name']}
                 if l_id in st.session_state['erros_por_liga']:
                     del st.session_state['erros_por_liga'][l_id]
 
@@ -366,8 +369,15 @@ if ROBO_LIGADO:
         st.title("❄️ Neves Analytics PRO")
         st.markdown('<div class="status-box status-active">🟢 SISTEMA DE MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
+        # Constrói o DataFrame da Whitelist com País
         lista_segura = list(st.session_state['ligas_imunes'].values())
-        df_imunes = pd.DataFrame(lista_segura, columns=['Liga']) if lista_segura else pd.DataFrame(columns=['Liga'])
+        if lista_segura:
+            df_imunes = pd.DataFrame(lista_segura)
+            # Garante que as colunas existem antes de ordenar (caso de bug)
+            if 'País' in df_imunes.columns:
+                df_imunes = df_imunes[['País', 'Liga']] # Reorganiza colunas
+        else:
+            df_imunes = pd.DataFrame(columns=['País', 'Liga'])
         
         t1, t2, t3, t4 = st.tabs([
             f"📡 Radar ({len(radar)})", 
@@ -383,12 +393,12 @@ if ROBO_LIGADO:
             if prox_filtrado: st.dataframe(pd.DataFrame(prox_filtrado).sort_values("Hora"), use_container_width=True, hide_index=True)
             else: st.caption("Sem mais jogos por hoje.")
         with t3:
-            # CORREÇÃO: Ordenação alfabética Blacklist
-            if not df_black.empty: st.table(df_black.sort_values('Liga'))
+            # Ordenação por PAÍS
+            if not df_black.empty: st.table(df_black.sort_values(['País', 'Liga']))
             else: st.caption("Limpo.")
         with t4:
-            # CORREÇÃO: Ordenação alfabética Whitelist
-            if not df_imunes.empty: st.table(df_imunes.sort_values('Liga'))
+            # Ordenação por PAÍS
+            if not df_imunes.empty: st.table(df_imunes.sort_values(['País', 'Liga']))
             else: st.caption("Nenhuma liga validada ainda.")
 
         with st.expander("📘 Manual de Inteligência (Detalhes Técnicos)", expanded=False):
