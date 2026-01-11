@@ -412,7 +412,11 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     SINAIS = []
     
     if tempo <= 30 and (gh+ga) >= 2: SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols", "stats": f"{gh}x{ga}"})
-    if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1: SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sog_h+sog_a}"})
+    
+    # --- AQUI ESTÁ O AJUSTE DA TRAVA DE PLACAR ---
+    if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1 and (gh + ga) == 0: 
+        SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sog_h+sog_a}"})
+    
     if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols", "stats": f"Total: {sh_h+sh_a}"})
     if tempo <= 60:
         if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Gol Mandante", "stats": f"Pressão: {rh}"})
