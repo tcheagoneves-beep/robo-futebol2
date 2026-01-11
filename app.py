@@ -225,7 +225,6 @@ def deve_buscar_stats(tempo, gh, ga, status):
 
 # --- 5. TELEGRAM (ASSÍNCRONO - NOVO) ---
 def _worker_telegram(token, chat_id, msg):
-    """Função worker executada em thread separada para não travar o loop"""
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         data = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
@@ -234,7 +233,6 @@ def _worker_telegram(token, chat_id, msg):
         print(f"Erro envio Telegram: {e}")
 
 def enviar_telegram(token, chat_ids, msg):
-    """Dispara a thread de envio"""
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
     for cid in ids:
@@ -573,40 +571,45 @@ if ROBO_LIGADO:
             relatorio_final(TG_TOKEN, TG_CHAT)
             st.toast("Relatório Enviado!")
 
-    # DISPLAY
-    if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
-    else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
+    # --- AQUI COMEÇA A CORREÇÃO DE DISPLAY ---
+    # Criamos um container vazio para garantir que tudo seja desenhado em um local limpo
+    dashboard_placeholder = st.empty()
     
-    hist_hoje = pd.DataFrame(st.session_state['historico_sinais'])
-    t_hj, g_hj, r_hj, w_hj = calcular_stats(hist_hoje)
-    c1, c2, c3 = st.columns(3)
-    c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t_hj}</div><div class="metric-sub">{g_hj} Green | {r_hj} Red</div></div>', unsafe_allow_html=True)
-    c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
-    c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{len(st.session_state["df_safe"])}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
-    
-    st.write("")
-    t1, t2, t3, t4, t5, t6, t7 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"📜 Histórico ({len(hist_hoje)})", "📈 Estatísticas", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({len(st.session_state['df_safe'])})", f"⚠️ Obs ({len(st.session_state['df_vip'])})"])
-    
-    with t1:
-        if radar: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
-        else: st.info("Buscando jogos...")
-    with t2:
-        if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
-        else: st.caption("Sem jogos futuros hoje.")
-    with t3:
-        if not hist_hoje.empty: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
-        else: st.caption("Vazio.")
-    with t4:
-        df_full = st.session_state['historico_full']
-        if not df_full.empty:
-            t_all, g_all, r_all, w_all = calcular_stats(df_full)
-            st.markdown(f"**Geral:** {w_all:.1f}% ({g_all}G - {r_all}R)")
-        else: st.caption("Sem dados.")
-    with t5: st.dataframe(st.session_state['df_black'], use_container_width=True, hide_index=True)
-    with t6: st.dataframe(st.session_state['df_safe'], use_container_width=True, hide_index=True)
-    with t7: st.dataframe(st.session_state['df_vip'], use_container_width=True, hide_index=True)
+    with dashboard_placeholder.container():
+        # DISPLAY
+        if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
+        else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
+        
+        hist_hoje = pd.DataFrame(st.session_state['historico_sinais'])
+        t_hj, g_hj, r_hj, w_hj = calcular_stats(hist_hoje)
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t_hj}</div><div class="metric-sub">{g_hj} Green | {r_hj} Red</div></div>', unsafe_allow_html=True)
+        c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{len(st.session_state["df_safe"])}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
+        
+        st.write("")
+        t1, t2, t3, t4, t5, t6, t7 = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"📜 Histórico ({len(hist_hoje)})", "📈 Estatísticas", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({len(st.session_state['df_safe'])})", f"⚠️ Obs ({len(st.session_state['df_vip'])})"])
+        
+        with t1:
+            if radar: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
+            else: st.info("Buscando jogos...")
+        with t2:
+            if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
+            else: st.caption("Sem jogos futuros hoje.")
+        with t3:
+            if not hist_hoje.empty: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
+            else: st.caption("Vazio.")
+        with t4:
+            df_full = st.session_state['historico_full']
+            if not df_full.empty:
+                t_all, g_all, r_all, w_all = calcular_stats(df_full)
+                st.markdown(f"**Geral:** {w_all:.1f}% ({g_all}G - {r_all}R)")
+            else: st.caption("Sem dados.")
+        with t5: st.dataframe(st.session_state['df_black'], use_container_width=True, hide_index=True)
+        with t6: st.dataframe(st.session_state['df_safe'], use_container_width=True, hide_index=True)
+        with t7: st.dataframe(st.session_state['df_vip'], use_container_width=True, hide_index=True)
 
-    # TIMER VIVO NO RODAPÉ
+    # TIMER VIVO NO RODAPÉ (Fora do container para garantir execução)
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
         relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
