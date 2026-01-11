@@ -157,8 +157,8 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA DE TABELA (CACHE 24H) ---
-@st.cache_data(ttl=86400) # ATUALIZAÇÃO 1X AO DIA (24h)
+# --- 4. INTELIGÊNCIA DE TABELA ---
+@st.cache_data(ttl=86400)
 def buscar_ranking(api_key, league_id, season):
     try:
         url = "https://v3.football.api-sports.io/standings"
@@ -275,7 +275,6 @@ def momentum(fid, sog_h, sog_a):
     st.session_state['memoria_pressao'][fid] = mem
     return len(mem['h_t']), len(mem['a_t'])
 
-# --- PROCESSADOR MÚLTIPLO ---
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     sog_h, sog_a, sh_h, sh_a, ok = 0, 0, 0, 0, False
@@ -296,9 +295,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     ga = j['goals']['away'] or 0
     rh, ra = momentum(fid, sog_h, sog_a)
     
-    SINAIS = [] # Lista para acumular estratégias
+    SINAIS = []
 
-    # 1. ESTRATÉGIAS CLÁSSICAS
     if tempo <= 30 and (gh+ga) >= 2: 
         SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 ENTRADA SECA: Over Gols", "stats": f"{gh}x{ga}"})
     if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1: 
@@ -311,7 +309,6 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if ga <= gh and (ra >= 2 or sh_a >= 8): 
             SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Gol Visitante", "stats": f"Pressão: {ra}"})
 
-    # 2. ESTRATÉGIAS DE TABELA
     if rank_home and rank_away:
         is_top_home = rank_home <= 4
         is_top_away = rank_away <= 4
@@ -320,26 +317,22 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         is_mid_home = rank_home >= 5
         is_mid_away = rank_away >= 5
         
-        # 1°) Top 4 vs Bot 10
         if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
             if tempo <= 5 and (sh_h + sh_a) >= 1:
                 SINAIS.append({"tag": "🔥 Massacre (Top vs Bot)", "ordem": "Over 0.5 HT + Over 1.5 FT", "stats": f"Rank: {rank_home}x{rank_away}"})
         
-        # 2°) Top 4 Pressão (5-15 min)
         if 5 <= tempo <= 15:
             if is_top_home and (rh >= 2 or sh_h >= 3):
                 SINAIS.append({"tag": "🦁 Favorito Pressão", "ordem": "Gol do Favorito (Home)", "stats": f"Pressão: {rh}"})
             if is_top_away and (ra >= 2 or sh_a >= 3):
                 SINAIS.append({"tag": "🦁 Favorito Pressão", "ordem": "Gol do Favorito (Away)", "stats": f"Pressão: {ra}"})
 
-        # 3°) e 4°) Confronto Top 4
         if is_top_home and is_top_away and tempo <= 7:
             if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1:
                 SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sh_h+sh_a}"})
             if sog_h >= 1 and sog_a >= 1:
                 SINAIS.append({"tag": "⚔️ Choque Insano", "ordem": "Over 0.5 HT + Over 1.5 FT", "stats": f"SOG: {sog_h}x{sog_a}"})
 
-        # 5°) e 6°) Confronto Meio/Fim (5º ao 20º)
         if is_mid_home and is_mid_away:
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3:
                 SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sh_h+sh_a}"})
@@ -347,6 +340,28 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
                 SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
 
     return SINAIS
+
+def gerenciar_strikes(id_liga, pais, nome_liga):
+    df = st.session_state['df_vip']
+    hoje = get_time_br().strftime('%Y-%m-%d')
+    id_str = str(id_liga)
+    strikes = 0
+    data_antiga = ""
+    
+    if id_str in df['id'].values:
+        row = df[df['id'] == id_str].iloc[0]
+        strikes = int(row['Strikes'])
+        data_antiga = row['Data_Erro']
+    
+    if data_antiga == hoje: return
+
+    novo_strike = strikes + 1
+    if novo_strike >= 2:
+        salvar_blacklist(id_liga, pais, nome_liga)
+        st.toast(f"🚫 {nome_liga} Banida (Falha de Dados)")
+    else:
+        salvar_strike(id_liga, pais, nome_liga, novo_strike)
+        st.toast(f"⚠️ {nome_liga} Strike 1/2")
 
 # --- 7. SIDEBAR ---
 with st.sidebar:
@@ -420,7 +435,6 @@ if ROBO_LIGADO:
         if deve_buscar_stats(tempo, gh, ga):
             try:
                 stats = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}).json().get('response', [])
-                # PROCESSA E RECEBE LISTA DE SINAIS
                 lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
             except: pass
         else: status_vis = "💤"
@@ -428,11 +442,9 @@ if ROBO_LIGADO:
         if not lista_sinais and not stats and tempo >= 45: gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
         if stats: salvar_safe_league(lid, j['league']['country'], j['league']['name'])
         
-        # LOOP PARA DISPARAR MÚLTIPLOS SINAIS
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
             for sinal in lista_sinais:
-                # ID ÚNICO COMBINADO: JOGO + ESTRATÉGIA
                 id_unico = f"{fid}_{sinal['tag']}"
                 
                 if id_unico not in st.session_state['alertas_enviados']:
