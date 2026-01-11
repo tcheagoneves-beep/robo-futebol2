@@ -19,7 +19,6 @@ st.markdown("""
     .stApp {background-color: #0E1117; color: white;}
     .main .block-container { max-width: 100%; padding: 1rem 1rem 5rem 1rem; }
     
-    /* Caixas de Métricas */
     .metric-box { 
         background-color: #1A1C24; border: 1px solid #333; 
         border-radius: 8px; padding: 15px; text-align: center; 
@@ -28,21 +27,20 @@ st.markdown("""
     .metric-title {font-size: 12px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 5px;}
     .metric-value {font-size: 24px; font-weight: bold; color: #00FF00;}
     
-    /* Status */
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* Ajuste de Botões para não cortar texto */
     .stButton button {
         width: 100%; 
-        white-space: nowrap !important; 
+        white-space: normal !important; 
+        height: auto !important;       
+        min-height: 45px;              
         font-size: 14px !important; 
         font-weight: bold !important;
-        padding: 0.5rem 1rem !important;
-        height: auto !important;
+        padding: 5px 10px !important;
+        line-height: 1.2 !important;
     }
     
-    /* Timer Fixo */
     .footer-timer { 
         position: fixed; left: 0; bottom: 0; width: 100%; 
         background-color: #0E1117; color: #FFD700; 
@@ -153,16 +151,53 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA PREDIITIVA ---
-def buscar_probabilidade(estrategia, liga):
+# --- 4. INTELIGÊNCIA PREDIITIVA PONDERADA (NOVO!) ---
+def buscar_inteligencia(estrategia, liga, jogo):
+    """Calcula Média Ponderada (Time x5 + Liga x3 + Geral x1)"""
     df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return None
-    filtro = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
-    total = len(filtro)
-    if total < 3: return None 
-    greens = filtro['Resultado'].str.contains('GREEN').sum()
-    winrate = (greens / total) * 100
-    return f"{winrate:.0f}% ({greens}/{total})"
+    if df.empty: return ""
+    
+    times = jogo.split(' x ')
+    time_casa = times[0].strip() if len(times) > 0 else ""
+    
+    numerador = 0
+    denominador = 0
+    fontes = []
+
+    # 1. TIME (Peso 5)
+    f_time = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
+    if len(f_time) >= 3:
+        wr_time = (f_time['Resultado'].str.contains('GREEN').sum() / len(f_time)) * 100
+        numerador += wr_time * 5
+        denominador += 5
+        fontes.append("Time")
+    
+    # 2. LIGA (Peso 3)
+    f_liga = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
+    if len(f_liga) >= 5:
+        wr_liga = (f_liga['Resultado'].str.contains('GREEN').sum() / len(f_liga)) * 100
+        numerador += wr_liga * 3
+        denominador += 3
+        fontes.append("Liga")
+        
+    # 3. GERAL (Peso 1 - Base)
+    f_geral = df[df['Estrategia'] == estrategia]
+    if len(f_geral) >= 10:
+        wr_geral = (f_geral['Resultado'].str.contains('GREEN').sum() / len(f_geral)) * 100
+        numerador += wr_geral * 1
+        denominador += 1
+        
+    if denominador == 0: return ""
+    
+    prob_final = numerador / denominador
+    str_fontes = "+".join(fontes) if fontes else "Geral"
+    
+    # Define emoji baseado na confiança
+    emoji = "🔮"
+    if prob_final >= 80: emoji = "🔥"
+    elif prob_final <= 40: emoji = "⚠️"
+        
+    return f"\n{emoji} <b>Prob. Híbrida: {prob_final:.0f}%</b> ({str_fontes})"
 
 # --- 5. TELEGRAM E RELATÓRIOS ---
 def _worker_telegram(token, chat_id, msg):
@@ -202,31 +237,20 @@ def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
     total = greens + reds
     winrate = (greens/total * 100) if total > 0 else 0
     
-    # --- GRÁFICO PARA TELEGRAM (MATPLOTLIB MELHORADO) ---
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
-    
-    # Cores personalizadas
     colors = {'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}
     
     stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats_strat.empty:
         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
-        
-        # Plot manual para controlar cores
         counts.plot(kind='bar', stacked=True, color=[colors.get(x, '#888') for x in counts.columns], ax=ax, width=0.6)
-        
-        # Estilo Limpo
         ax.set_title(f'PERFORMANCE {tipo.upper()} (WR: {winrate:.1f}%)', color='white', fontsize=12, pad=15)
         ax.set_xlabel('')
         ax.tick_params(axis='x', rotation=45, labelsize=9, colors='#cccccc')
-        ax.tick_params(axis='y', colors='#cccccc')
         ax.grid(axis='y', linestyle='--', alpha=0.2)
         ax.legend(title='', frameon=False, loc='upper right')
-        
-        # Remove bordas
         for spine in ax.spines.values(): spine.set_visible(False)
-        
         plt.tight_layout()
         
         buf = io.BytesIO()
@@ -281,7 +305,9 @@ def reenviar_sinais(token, chats):
     if not hist: return st.toast("Sem sinais.")
     st.toast("Reenviando...")
     for s in reversed(hist):
-        msg = f"🔄 <b>REENVIO</b>\n\n🚨 {s['Estrategia']}\n⚽ {s['Jogo']}\n⚠️ Placar: {s.get('Placar_Sinal','?')}"
+        # AQUI TAMBÉM CALCULA A PONDERADA
+        prob = buscar_inteligencia(s['Estrategia'], s['Liga'], s['Jogo'])
+        msg = f"🔄 <b>REENVIO</b>\n\n🚨 {s['Estrategia']}\n⚽ {s['Jogo']}\n⚠️ Placar: {s.get('Placar_Sinal','?')}{prob}"
         enviar_telegram(token, chats, msg); time.sleep(0.5)
 
 # --- 6. CORE ---
@@ -388,24 +414,17 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     return SINAIS
 
 def gerenciar_strikes(id_liga, pais, nome_liga):
-    df = st.session_state.get('df_vip', pd.DataFrame()) # Busca do Session State
+    df = st.session_state.get('df_vip', pd.DataFrame())
     hoje = get_time_br().strftime('%Y-%m-%d')
     id_str = str(id_liga); strikes = 0; data_antiga = ""
-    
-    # Verifica se a liga já tem histórico de strike
     if not df.empty and id_str in df['id'].values:
         row = df[df['id'] == id_str].iloc[0]
         strikes = int(row['Strikes']); data_antiga = row['Data_Erro']
-        
     if data_antiga == hoje: return
     novo_strike = strikes + 1
-    
     salvar_strike(id_liga, pais, nome_liga, novo_strike)
     st.toast(f"⚠️ {nome_liga} Strike {novo_strike}")
-    
-    if novo_strike >= 2: 
-        salvar_blacklist(id_liga, pais, nome_liga)
-        st.toast(f"🚫 {nome_liga} Banida")
+    if novo_strike >= 2: salvar_blacklist(id_liga, pais, nome_liga); st.toast(f"🚫 {nome_liga} Banida")
 
 # --- 7. SIDEBAR ---
 with st.sidebar:
@@ -424,7 +443,7 @@ with st.sidebar:
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT, "Dia")
             st.toast("Relatório Enviado!")
             
-    verificar_reset_diario() 
+    verificar_reset_diario()
     with st.expander("📶 Consumo API", expanded=False):
         u = st.session_state['api_usage']
         perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
@@ -515,9 +534,10 @@ if ROBO_LIGADO:
                 if id_unico not in st.session_state['alertas_enviados']:
                     item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": sinal['tag'], "Resultado": "Pendente"}
                     if adicionar_historico(item):
-                        prob_msg = buscar_probabilidade(sinal['tag'], j['league']['name'])
-                        str_hist = f"\n🔮 <b>Histórico: {prob_msg}</b>" if prob_msg else ""
-                        msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 <b>{sinal['tag'].upper()}</b>\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>{str_hist}"
+                        # --- INTELIGÊNCIA PONDERADA ---
+                        prob_msg = buscar_inteligencia(sinal['tag'], j['league']['name'], f"{home} x {away}")
+                        
+                        msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 <b>{sinal['tag'].upper()}</b>\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>{prob_msg}"
                         enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                         st.session_state['alertas_enviados'].add(id_unico)
                         st.toast(f"Sinal: {sinal['tag']}")
@@ -552,7 +572,7 @@ if ROBO_LIGADO:
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT, "Dia")
             st.session_state[chave_relatorio] = True
 
-    # --- DISPLAY (CORRIGIDO E OTIMIZADO) ---
+    # DISPLAY
     dashboard_placeholder = st.empty()
     with dashboard_placeholder.container():
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
@@ -578,7 +598,7 @@ if ROBO_LIGADO:
             if not hist_hoje.empty: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
-        # --- BI COM PLOTLY (INTERATIVO E BONITO) ---
+        # --- BI COM PLOTLY ---
         with abas[3]: 
             st.markdown("### 📊 Inteligência de Mercado")
             df_bi = st.session_state.get('historico_full', pd.DataFrame())
@@ -601,7 +621,6 @@ if ROBO_LIGADO:
                     m1.metric("Sinais", tot_bi); m2.metric("Greens", greens_bi); m3.metric("Reds", reds_bi); m4.metric("Assertividade", f"{wr_bi:.1f}%")
                     st.divider()
                     
-                    # Gráfico Interativo com Plotly
                     stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                     if not stats_strat.empty:
                         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
