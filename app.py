@@ -5,24 +5,51 @@ import time
 import os
 import threading
 import matplotlib.pyplot as plt
+import plotly.express as px
 import io
 from datetime import datetime, timedelta
 import pytz
 from streamlit_gsheets import GSheetsConnection
 
 # --- 0. CONFIGURAÇÃO E CSS ---
-st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
+st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄️")
 
 st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
-    .main .block-container { max-width: 100%; padding: 1rem 2rem 5rem 2rem; }
-    .metric-box { background-color: #1A1C24; border: 1px solid #333; border-radius: 8px; padding: 15px; text-align: center; }
-    .metric-value {font-size: 26px; font-weight: bold; color: #00FF00;}
-    .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 10px; border-radius: 6px; text-align: center; margin-bottom: 20px;}
-    .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 10px; border-radius: 6px; text-align: center; margin-bottom: 20px;}
-    .footer-timer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #0E1117; color: #FFD700; text-align: center; padding: 10px; font-size: 16px; border-top: 1px solid #333; z-index: 9999; }
-    .stDataFrame { font-size: 14px; }
+    .main .block-container { max-width: 100%; padding: 1rem 1rem 5rem 1rem; }
+    
+    /* Caixas de Métricas */
+    .metric-box { 
+        background-color: #1A1C24; border: 1px solid #333; 
+        border-radius: 8px; padding: 15px; text-align: center; 
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .metric-title {font-size: 12px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 5px;}
+    .metric-value {font-size: 24px; font-weight: bold; color: #00FF00;}
+    
+    /* Status */
+    .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
+    .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
+    
+    /* Ajuste de Botões para não cortar texto */
+    .stButton button {
+        width: 100%; 
+        white-space: nowrap !important; 
+        font-size: 14px !important; 
+        font-weight: bold !important;
+        padding: 0.5rem 1rem !important;
+        height: auto !important;
+    }
+    
+    /* Timer Fixo */
+    .footer-timer { 
+        position: fixed; left: 0; bottom: 0; width: 100%; 
+        background-color: #0E1117; color: #FFD700; 
+        text-align: center; padding: 8px; font-size: 14px; 
+        border-top: 1px solid #333; z-index: 9999; 
+    }
+    .stDataFrame { font-size: 13px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -86,14 +113,14 @@ def atualizar_historico_ram_disk(lista_atualizada):
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
     if salvar_aba("Historico", df_final): st.session_state['historico_full'] = df_final
 
-def salvar_blacklist_nuvem(id_liga, pais, nome_liga):
+def salvar_blacklist(id_liga, pais, nome_liga):
     df = st.session_state['df_black']
     if str(id_liga) not in df['id'].values:
         novo = pd.DataFrame([{'id': str(id_liga), 'País': str(pais), 'Liga': str(nome_liga)}])
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Blacklist", final): st.session_state['df_black'] = final
 
-def salvar_safe_league_nuvem(id_liga, pais, nome_liga, tem_stats, tem_tabela):
+def salvar_safe_league(id_liga, pais, nome_liga, tem_stats, tem_tabela):
     id_str = str(id_liga); motivos = []
     if tem_stats: motivos.append("Chutes")
     if tem_tabela: motivos.append("Tabela")
@@ -109,7 +136,7 @@ def salvar_safe_league_nuvem(id_liga, pais, nome_liga, tem_stats, tem_tabela):
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
-def salvar_obs_nuvem(id_liga, pais, nome_liga, strikes):
+def salvar_strike(id_liga, pais, nome_liga, strikes):
     df = st.session_state['df_vip']
     hoje = get_time_br().strftime('%Y-%m-%d')
     id_str = str(id_liga)
@@ -126,7 +153,7 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA PREDITIVA ---
+# --- 4. INTELIGÊNCIA PREDIITIVA ---
 def buscar_probabilidade(estrategia, liga):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return None
@@ -160,6 +187,7 @@ def enviar_telegram(token, chat_ids, msg):
 def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
+    
     df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
     hoje = pd.to_datetime(get_time_br().date())
     
@@ -174,19 +202,35 @@ def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
     total = greens + reds
     winrate = (greens/total * 100) if total > 0 else 0
     
+    # --- GRÁFICO PARA TELEGRAM (MATPLOTLIB MELHORADO) ---
     plt.style.use('dark_background')
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(7, 4))
+    
+    # Cores personalizadas
+    colors = {'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}
     
     stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats_strat.empty:
         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
-        counts.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax)
-        ax.set_title(f'Performance {tipo} (WR: {winrate:.1f}%)', color='white')
-        plt.xticks(rotation=45, ha='right')
+        
+        # Plot manual para controlar cores
+        counts.plot(kind='bar', stacked=True, color=[colors.get(x, '#888') for x in counts.columns], ax=ax, width=0.6)
+        
+        # Estilo Limpo
+        ax.set_title(f'PERFORMANCE {tipo.upper()} (WR: {winrate:.1f}%)', color='white', fontsize=12, pad=15)
+        ax.set_xlabel('')
+        ax.tick_params(axis='x', rotation=45, labelsize=9, colors='#cccccc')
+        ax.tick_params(axis='y', colors='#cccccc')
+        ax.grid(axis='y', linestyle='--', alpha=0.2)
+        ax.legend(title='', frameon=False, loc='upper right')
+        
+        # Remove bordas
+        for spine in ax.spines.values(): spine.set_visible(False)
+        
         plt.tight_layout()
         
         buf = io.BytesIO()
-        plt.savefig(buf, format='png')
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#0E1117')
         buf.seek(0)
         
         msg = f"📊 <b>RELATÓRIO BI ({tipo})</b>\n\n🎯 Sinais: {total}\n✅ Greens: {greens}\n❌ Reds: {reds}\n💰 <b>Assertividade: {winrate:.1f}%</b>"
@@ -343,28 +387,34 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if tempo <= 10 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
     return SINAIS
 
-# AQUI ESTAVA O PROBLEMA: A FUNÇÃO ESTAVA FALTANDO. AGORA ELA EXISTE.
 def gerenciar_strikes(id_liga, pais, nome_liga):
-    df = st.session_state['df_vip']
+    df = st.session_state.get('df_vip', pd.DataFrame()) # Busca do Session State
     hoje = get_time_br().strftime('%Y-%m-%d')
     id_str = str(id_liga); strikes = 0; data_antiga = ""
-    if id_str in df['id'].values:
+    
+    # Verifica se a liga já tem histórico de strike
+    if not df.empty and id_str in df['id'].values:
         row = df[df['id'] == id_str].iloc[0]
         strikes = int(row['Strikes']); data_antiga = row['Data_Erro']
+        
     if data_antiga == hoje: return
     novo_strike = strikes + 1
-    salvar_obs_nuvem(id_liga, pais, nome_liga, novo_strike)
+    
+    salvar_strike(id_liga, pais, nome_liga, novo_strike)
     st.toast(f"⚠️ {nome_liga} Strike {novo_strike}")
-    if novo_strike >= 2: salvar_blacklist_nuvem(id_liga, pais, nome_liga); st.toast(f"🚫 {nome_liga} Banida")
+    
+    if novo_strike >= 2: 
+        salvar_blacklist(id_liga, pais, nome_liga)
+        st.toast(f"🚫 {nome_liga} Banida")
 
 # --- 7. SIDEBAR ---
 with st.sidebar:
-    st.title("❄️ Neves PRO (BI)")
+    st.title("❄️ Neves Analytics")
     with st.expander("⚙️ Configurações", expanded=True):
         API_KEY = st.text_input("Chave API:", type="password")
         TG_TOKEN = st.text_input("Token Telegram:", type="password")
         TG_CHAT = st.text_input("Chat IDs:")
-        INTERVALO = st.slider("Ciclo (s):", 60, 300, 120) 
+        INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
         c1, c2 = st.columns(2)
         if c1.button("🔄 Reenviar"): reenviar_sinais(TG_TOKEN, TG_CHAT)
         if c2.button("🧹 Cache"): st.cache_data.clear()
@@ -374,7 +424,7 @@ with st.sidebar:
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT, "Dia")
             st.toast("Relatório Enviado!")
             
-    verificar_reset_diario()
+    verificar_reset_diario() 
     with st.expander("📶 Consumo API", expanded=False):
         u = st.session_state['api_usage']
         perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
@@ -444,7 +494,7 @@ if ROBO_LIGADO:
 
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
-            salvar_safe_league_nuvem(lid, j['league']['country'], j['league']['name'], True, tem_tabela)
+            salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, tem_tabela)
             if status_short == 'HT' and gh == 0 and ga == 0:
                 try:
                     sh_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Total Shots'), 0) or 0
@@ -465,10 +515,8 @@ if ROBO_LIGADO:
                 if id_unico not in st.session_state['alertas_enviados']:
                     item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": sinal['tag'], "Resultado": "Pendente"}
                     if adicionar_historico(item):
-                        # AQUI ESTA A MAGIA DO HISTÓRICO
                         prob_msg = buscar_probabilidade(sinal['tag'], j['league']['name'])
                         str_hist = f"\n🔮 <b>Histórico: {prob_msg}</b>" if prob_msg else ""
-                        
                         msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 <b>{sinal['tag'].upper()}</b>\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>{str_hist}"
                         enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                         st.session_state['alertas_enviados'].add(id_unico)
@@ -504,7 +552,7 @@ if ROBO_LIGADO:
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT, "Dia")
             st.session_state[chave_relatorio] = True
 
-    # DISPLAY
+    # --- DISPLAY (CORRIGIDO E OTIMIZADO) ---
     dashboard_placeholder = st.empty()
     with dashboard_placeholder.container():
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
@@ -529,6 +577,8 @@ if ROBO_LIGADO:
         with abas[2]: 
             if not hist_hoje.empty: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
+        
+        # --- BI COM PLOTLY (INTERATIVO E BONITO) ---
         with abas[3]: 
             st.markdown("### 📊 Inteligência de Mercado")
             df_bi = st.session_state.get('historico_full', pd.DataFrame())
@@ -550,6 +600,17 @@ if ROBO_LIGADO:
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Sinais", tot_bi); m2.metric("Greens", greens_bi); m3.metric("Reds", reds_bi); m4.metric("Assertividade", f"{wr_bi:.1f}%")
                     st.divider()
+                    
+                    # Gráfico Interativo com Plotly
+                    stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                    if not stats_strat.empty:
+                        counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
+                        fig = px.bar(counts, x='Estrategia', y='Qtd', color='Resultado', 
+                                     color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'},
+                                     title="Performance por Estratégia", text='Qtd')
+                        fig.update_layout(xaxis_title=None, yaxis_title=None, template="plotly_dark")
+                        st.plotly_chart(fig, use_container_width=True)
+
                     cb1, cb2 = st.columns(2)
                     with cb1:
                         st.caption("🏆 Melhores Ligas")
@@ -558,9 +619,10 @@ if ROBO_LIGADO:
                         final = stats.merge(counts, left_on='Liga', right_on='Liga')
                         st.dataframe(final[final['Qtd'] >= 2].sort_values('Winrate', ascending=False).head(5), hide_index=True, use_container_width=True)
                     with cb2:
-                        st.caption("⚡ Melhores Estratégias")
+                        st.caption("⚡ Top Estratégias")
                         stats_s = df_show.groupby('Estrategia')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum() / len(x) * 100).reset_index(name='Winrate')
                         st.dataframe(stats_s.sort_values('Winrate', ascending=False), hide_index=True, use_container_width=True)
+        
         with abas[4]: st.dataframe(st.session_state['df_black'], use_container_width=True, hide_index=True)
         with abas[5]: st.dataframe(st.session_state['df_safe'], use_container_width=True, hide_index=True)
         with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()), use_container_width=True, hide_index=True)
@@ -572,5 +634,5 @@ if ROBO_LIGADO:
     st.rerun()
 
 else:
-    st.title("❄️ Neves Analytics PRO")
+    st.title("❄️ Neves Analytics")
     st.info("💡 Robô em espera. Configure na lateral.")
