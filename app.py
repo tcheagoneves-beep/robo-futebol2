@@ -151,28 +151,49 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA PREDIITIVA PONDERADA (ATUALIZADA) ---
+# --- 4. INTELIGÊNCIA PREDIITIVA PONDERADA (ATUALIZADA: MANDANTE + VISITANTE) ---
 def buscar_inteligencia(estrategia, liga, jogo):
-    """Calcula Média Ponderada (Time x5 + Liga x3 + Geral x1)"""
+    """Calcula Média Ponderada: (Mandante+Visitante)/2 [x5] + Liga [x3] + Geral [x1]"""
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
     
-    times = jogo.split(' x ')
-    time_casa = times[0].strip() if len(times) > 0 else ""
+    # 1. Identificar os dois times
+    try:
+        times = jogo.split(' x ')
+        time_casa = times[0].strip()
+        time_visitante = times[1].strip() if len(times) > 1 else ""
+    except:
+        return "\n🔮 <b>Prob: Erro Nome</b>"
     
     numerador = 0
     denominador = 0
     fontes = []
 
-    # 1. TIME (Peso 5)
-    f_time = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
-    if len(f_time) >= 3:
-        wr_time = (f_time['Resultado'].str.contains('GREEN').sum() / len(f_time)) * 100
-        numerador += wr_time * 5
-        denominador += 5
-        fontes.append("Time")
+    # --- FATOR 1: OS TIMES (Peso 5) ---
+    # Analisa o Mandante
+    f_casa = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
+    wr_casa = 0; tem_casa = False
+    if len(f_casa) >= 3:
+        wr_casa = (f_casa['Resultado'].str.contains('GREEN').sum() / len(f_casa)) * 100
+        tem_casa = True
+
+    # Analisa o Visitante
+    f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
+    wr_vis = 0; tem_vis = False
+    if len(f_vis) >= 3:
+        wr_vis = (f_vis['Resultado'].str.contains('GREEN').sum() / len(f_vis)) * 100
+        tem_vis = True
     
-    # 2. LIGA (Peso 3) - BAIXEI A REGUA PARA 3
+    # Combina as médias (Considera quem tiver dados)
+    if tem_casa or tem_vis:
+        divisao = 2 if (tem_casa and tem_vis) else 1
+        media_times = (wr_casa + wr_vis) / divisao
+        
+        numerador += media_times * 5
+        denominador += 5
+        fontes.append("Times")
+
+    # --- FATOR 2: A LIGA (Peso 3) ---
     f_liga = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
     if len(f_liga) >= 3:
         wr_liga = (f_liga['Resultado'].str.contains('GREEN').sum() / len(f_liga)) * 100
@@ -180,19 +201,19 @@ def buscar_inteligencia(estrategia, liga, jogo):
         denominador += 3
         fontes.append("Liga")
         
-    # 3. GERAL (Peso 1 - Base) - BAIXEI A REGUA PARA 1
+    # --- FATOR 3: GERAL (Peso 1) ---
     f_geral = df[df['Estrategia'] == estrategia]
     if len(f_geral) >= 1:
         wr_geral = (f_geral['Resultado'].str.contains('GREEN').sum() / len(f_geral)) * 100
         numerador += wr_geral * 1
         denominador += 1
         
+    # --- RESULTADO FINAL ---
     if denominador == 0: return "\n🔮 <b>Prob: Calculando...</b>"
     
     prob_final = numerador / denominador
     str_fontes = "+".join(fontes) if fontes else "Geral"
     
-    # Define emoji baseado na confiança
     emoji = "🔮"
     if prob_final >= 80: emoji = "🔥"
     elif prob_final <= 40: emoji = "⚠️"
