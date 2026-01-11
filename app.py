@@ -45,12 +45,13 @@ st.markdown("""
     
     .stDataFrame { font-size: 14px; }
     
-    /* Timer Discreto no Rodapé */
-    .footer-status {
+    /* Timer Estilo Antigo (Fixo no Rodapé) */
+    .footer-timer {
         position: fixed; left: 0; bottom: 0; width: 100%;
-        background-color: #0E1117; color: #666;
-        text-align: center; padding: 5px; font-size: 12px;
-        border-top: 1px solid #333; z-index: 9999;
+        background-color: #0E1117; color: #FFD700;
+        text-align: center; padding: 10px; font-size: 16px;
+        font-weight: bold; border-top: 1px solid #333;
+        z-index: 9999;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -172,14 +173,9 @@ def calcular_stats(df_raw):
 
 # --- 4. INTELIGÊNCIA E CACHE ---
 def verificar_reset_diario():
-    """Reseta o contador se virar o dia em UTC (API-Football Rules)"""
     hoje_utc = datetime.now(pytz.utc).date()
-    
-    # Inicializa data de controle se não existir
     if 'data_api_usage' not in st.session_state:
         st.session_state['data_api_usage'] = hoje_utc
-        
-    # Se a data salva for diferente da data UTC atual, reseta
     if st.session_state['data_api_usage'] != hoje_utc:
         st.session_state['api_usage']['used'] = 0
         st.session_state['data_api_usage'] = hoje_utc
@@ -187,15 +183,12 @@ def verificar_reset_diario():
     return False
 
 def update_api_usage(headers):
-    """Atualiza com base na resposta REAL do servidor"""
     if not headers: return
     try:
         limit = int(headers.get('x-ratelimit-requests-limit', 75000))
         remaining = int(headers.get('x-ratelimit-requests-remaining', 0))
         used = limit - remaining
-        # Atualiza sessão
         st.session_state['api_usage'] = {'used': used, 'limit': limit}
-        # Atualiza a data de controle para hoje UTC para não resetar de novo errado
         st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
     except: pass
 
@@ -205,7 +198,6 @@ def buscar_ranking(api_key, league_id, season):
         url = "https://v3.football.api-sports.io/standings"
         params = {"league": league_id, "season": season}
         resp = requests.get(url, headers={"x-apisports-key": api_key}, params=params)
-        # Não atualiza usage no cache para não confundir
         res = resp.json()
         ranking = {}
         if res.get('response'):
@@ -402,18 +394,32 @@ with st.sidebar:
                 if os.path.exists(f): os.remove(f)
             st.rerun()
             
-    # --- CONTADOR API ---
-    verificar_reset_diario() # Verifica antes de exibir
-    u = st.session_state['api_usage']
-    st.markdown("---")
-    st.markdown(f"**📶 Consumo API (Reset 00h UTC)**")
-    perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
-    st.progress(perc)
-    st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
-    # --------------------
+    # --- CONTADOR API (RETRÁTIL) ---
+    verificar_reset_diario()
+    with st.expander("📶 Consumo API", expanded=False):
+        u = st.session_state['api_usage']
+        perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
+        st.progress(perc)
+        st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
+        st.caption("Reseta às 00h UTC")
+    # -------------------------------
 
     with st.expander("✅ Estratégias", expanded=True):
-        st.info("Monitorando automaticamente...")
+        st.markdown("""
+        **Geral:**
+        ✔️ Porteira Aberta (<30min)
+        ✔️ Gol Relâmpago (5-15min)
+        ✔️ Blitz (Pressão)
+        ✔️ Janela de Ouro (70-75min)
+        ✔️ **Múltiplas HT (0x0 Explosivo)**
+        
+        **Tabela (Premium):**
+        ✔️ Massacre (Top vs Bot)
+        ✔️ Favorito Pressão
+        ✔️ Choque de Líderes
+        ✔️ Briga de Rua (Meio)
+        ✔️ Jogo Morno (Lay Over)
+        """)
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
 # --- 8. DASHBOARD ---
@@ -588,9 +594,11 @@ if ROBO_LIGADO:
     with t6: st.dataframe(st.session_state['df_safe'], use_container_width=True, hide_index=True)
     with t7: st.dataframe(st.session_state['df_vip'], use_container_width=True, hide_index=True)
 
-    # TIMER NÃO BLOQUEANTE
-    st.markdown(f'<div class="footer-status">Próxima varredura em {INTERVALO}s | Última: {datetime.now().strftime("%H:%M:%S")}</div>', unsafe_allow_html=True)
-    time.sleep(INTERVALO)
+    # TIMER VIVO (COM LOOP)
+    relogio = st.empty()
+    for i in range(INTERVALO, 0, -1):
+        relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
+        time.sleep(1)
     st.rerun()
 
 else:
