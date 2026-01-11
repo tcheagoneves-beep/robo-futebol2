@@ -6,7 +6,7 @@ import os
 from datetime import datetime, timedelta
 import pytz
 
-# --- 0. CONFIGURAÇÃO E CSS (VISUAL WIDE & LIMPO) ---
+# --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 st.cache_data.clear()
 
@@ -15,7 +15,7 @@ st.markdown("""
     .stApp {background-color: #0E1117; color: white;}
     .main .block-container { max-width: 100%; padding: 1rem 2rem 5rem 2rem; }
     
-    /* CARDS */
+    /* PLACAR */
     .metric-box {
         background-color: #1A1C24; border: 1px solid #333; 
         border-radius: 8px; padding: 15px; text-align: center;
@@ -32,10 +32,19 @@ st.markdown("""
         margin-bottom: 20px;
     }
     
-    /* BOTÕES */
+    .status-error {
+        background-color: #3B1010; color: #FF4B4B; 
+        border: 1px solid #FF4B4B; padding: 10px; 
+        text-align: center; border-radius: 6px; font-weight: bold;
+        margin-bottom: 20px;
+    }
+    
+    /* BOTÕES: Quebra de linha correta */
     .stButton button {
-        width: 100%; white-space: normal !important; word-wrap: break-word !important;
-        font-size: 13px !important; font-weight: bold !important; padding: 10px 5px !important;
+        width: 100%; height: auto !important;
+        white-space: pre-wrap !important; /* Permite quebra de linha suave */
+        font-size: 13px !important; font-weight: bold !important;
+        padding: 10px 5px !important; line-height: 1.4 !important;
     }
     
     /* TIMER */
@@ -60,9 +69,9 @@ FILES = {
     'report': 'neves_status_relatorio.txt'
 }
 
-# --- 2. FUNÇÕES DE DADOS ---
+# --- 2. DADOS E UTILITÁRIOS ---
 def get_time_br():
-    """Retorna horário oficial de Brasília"""
+    """Retorna data/hora de Brasília (offset aware)"""
     return datetime.now(pytz.timezone('America/Sao_Paulo'))
 
 def load_safe(path, cols):
@@ -79,7 +88,6 @@ def carregar_tudo():
     st.session_state['df_vip'] = load_safe(FILES['vip'], ['id', 'País', 'Liga', 'Data_Erro', 'Strikes'])
     st.session_state['df_safe'] = load_safe(FILES['safe'], ['id', 'País', 'Liga'])
     
-    # Carrega Histórico
     df = load_safe(FILES['hist'], ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado'])
     hoje = get_time_br().strftime('%Y-%m-%d')
     if not df.empty and 'Data' in df.columns:
@@ -98,16 +106,13 @@ def salvar_blacklist(id_liga, pais, nome_liga):
 
 def salvar_safe_league(id_liga, pais, nome_liga):
     id_str = str(id_liga)
-    # Verifica se já existe na memória para não duplicar IO
-    if id_str in st.session_state['df_safe']['id'].values:
-        return
-
+    if id_str in st.session_state['df_safe']['id'].values: return
     novo = pd.DataFrame([{'id': id_str, 'País': str(pais), 'Liga': str(nome_liga)}])
     try:
         df = st.session_state['df_safe']
         final = pd.concat([df, novo], ignore_index=True)
         final.to_csv(FILES['safe'], index=False)
-        st.session_state['df_safe'] = final # Atualiza memória imediatamente
+        st.session_state['df_safe'] = final
     except: pass
 
 def salvar_strike(id_liga, pais, nome_liga, strikes):
@@ -134,7 +139,15 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. TELEGRAM ---
+# --- 4. FILTRO INTELIGENTE (ECONOMIA) ---
+def deve_buscar_stats(tempo, gh, ga):
+    if 5 <= tempo <= 15: return True
+    if tempo <= 30 and (gh + ga) >= 2: return True
+    if 70 <= tempo <= 75 and abs(gh - ga) <= 1: return True
+    if tempo <= 60 and abs(gh - ga) <= 1: return True
+    return False
+
+# --- 5. TELEGRAM ---
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
@@ -164,58 +177,44 @@ def processar_resultado(sinal, jogo_api, token, chats):
     return False
 
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
-    """Verifica Live e Encerrados, com suporte a sinais antigos (sem ID)"""
     atualizou = False
     hist = st.session_state['historico_sinais']
     pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
+    
     if not pendentes: return
 
-    # IDs dos jogos ao vivo
     ids_live = [j['fixture']['id'] for j in jogos_live]
     
-    # Se precisar, busca jogos encerrados do dia
-    jogos_ft_cache = []
-    
     for s in pendentes:
-        # Tenta pegar ID (seguro contra erro)
         try: fid = int(float(s.get('FID', 0)))
         except: fid = 0
         
         jogo_encontrado = None
         
-        # 1. Tenta pelo ID no Live
         if fid > 0 and fid in ids_live:
             jogo_encontrado = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
         
-        # 2. Se não achou e tem ID, busca na API individualmente (Pode ter acabado)
-        if not jogo_encontrado and fid > 0:
+        elif fid > 0:
             try:
                 res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
                 if res['response']: jogo_encontrado = res['response'][0]
             except: pass
             
-        # 3. MODO LEGADO: Se não tem ID (sinal velho), busca por NOME nos encerrados
         if not jogo_encontrado and fid == 0:
-            if not jogos_ft_cache: # Carrega cache de FT só se precisar
-                try:
-                    p = {"date": get_time_br().strftime('%Y-%m-%d'), "status": "FT-AET-PEN", "timezone": "America/Sao_Paulo"}
-                    jogos_ft_cache = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params=p).json().get('response', [])
-                except: pass
-            
-            # Compara nome do time da casa (Ex: "Groningen" in "Groningen vs...")
-            time_casa = s['Jogo'].split(' x ')[0].strip()
-            jogo_encontrado = next((j for j in jogos_ft_cache if time_casa in j['teams']['home']['name']), None)
+            try:
+                p = {"date": get_time_br().strftime('%Y-%m-%d'), "status": "FT-AET-PEN", "timezone": "America/Sao_Paulo"}
+                jogos_ft = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params=p).json().get('response', [])
+                time_casa = s['Jogo'].split(' x ')[0].strip()
+                jogo_encontrado = next((j for j in jogos_ft if time_casa in j['teams']['home']['name']), None)
+            except: pass
 
-        # Se achou o jogo, processa
         if jogo_encontrado:
             if processar_resultado(s, jogo_encontrado, token, chats):
                 atualizou = True
     
     if atualizou:
-        # Salva tudo no disco
         df_all = load_safe(FILES['hist'], ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado'])
         for s in hist:
-            # Tenta atualizar por FID ou por Jogo
             if s.get('FID') and int(float(s['FID'])) > 0:
                 mask = df_all['FID'].astype(str).str.split('.').str[0] == str(s['FID']).split('.')[0]
             else:
@@ -246,7 +245,7 @@ def relatorio_final(token, chats):
     enviar_telegram(token, chats, msg)
     with open(FILES['report'], 'w') as f: f.write(hoje)
 
-# --- 5. CORE ---
+# --- 6. CORE ---
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 carregar_tudo()
@@ -317,12 +316,12 @@ with st.sidebar:
         API_KEY = st.text_input("Chave API:", type="password")
         TG_TOKEN = st.text_input("Token Telegram:", type="password")
         TG_CHAT = st.text_input("Chat IDs:")
-        INTERVALO = st.slider("Ciclo (s):", 30, 300, 60)
+        INTERVALO = st.slider("Ciclo (s):", 60, 300, 60)
         c1, c2 = st.columns(2)
         if c1.button("🔄 Reenviar\nSinais"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if c2.button("🗑️ Limpar\nDados"):
-            for f in FILES.values(): 
-                if os.path.exists(f): os.remove(f)
+        if c2.button("🗑️ Limpar\nBlacklist"):
+            if os.path.exists(FILES['black']): os.remove(FILES['black'])
+            st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
             st.rerun()
     with st.expander("📘 Manual", expanded=False):
         st.write("🟣 **Porteira:** 2 gols < 30min")
@@ -336,14 +335,29 @@ main = st.empty()
 
 if ROBO_LIGADO:
     carregar_tudo()
+    api_error = False
+    
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         res = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10).json()
-        jogos_live = res.get('response', [])
-    except: jogos_live = []
+        
+        # VERIFICAÇÃO DE API ESTOURADA
+        if "errors" in res and res['errors']:
+            # Se for erro de rate limit, não zera a lista, apenas avisa
+            if isinstance(res['errors'], dict) and 'rateLimit' in str(res['errors']):
+                api_error = True
+            elif isinstance(res['errors'], list) and res['errors']:
+                api_error = True
+            jogos_live = []
+        else:
+            jogos_live = res.get('response', [])
+    except: 
+        jogos_live = []
+        api_error = True
 
-    # VERIFICAÇÃO HÍBRIDA (ID + NOME)
-    check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
+    # Se a API estiver ok, processa
+    if not api_error:
+        check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
 
     radar = []
     ids_black = st.session_state['df_black']['id'].values
@@ -360,19 +374,25 @@ if ROBO_LIGADO:
         
         if tempo > 80 or tempo < 2: continue
         
-        try:
-            stats = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}).json().get('response', [])
-        except: stats = []
+        gh = j['goals']['home'] or 0
+        ga = j['goals']['away'] or 0
         
-        sinal = processar(j, stats, tempo, placar)
-        
-        if not sinal and not stats and tempo >= 45: gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
-        
-        # SALVA LIGA SEGURA (Correção do contador zerado)
-        if stats:
-            salvar_safe_league(lid, j['league']['country'], j['league']['name'])
-        
+        stats = []
+        sinal = None
         status_vis = "👁️"
+        
+        # Filtro de Economia
+        if deve_buscar_stats(tempo, gh, ga):
+            try:
+                stats = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}).json().get('response', [])
+                sinal = processar(j, stats, tempo, placar)
+            except: pass
+        else:
+            status_vis = "💤"
+
+        if not sinal and not stats and tempo >= 45: gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
+        if stats: salvar_safe_league(lid, j['league']['country'], j['league']['name'])
+        
         if sinal:
             status_vis = "✅ " + sinal['tag']
             if fid not in st.session_state['alertas_enviados']:
@@ -386,31 +406,44 @@ if ROBO_LIGADO:
 
         radar.append({"Liga": j['league']['name'], "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
-    # Agenda (Corrigida para mostrar jogos que AINDA VÃO acontecer hoje)
+    # Agenda (FILTRADA CORRETAMENTE POR DATA E HORA)
     agenda = []
-    try:
-        prox = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"date": get_time_br().strftime('%Y-%m-%d'), "timezone": "America/Sao_Paulo"}).json().get('response', [])
-        # Filtra jogos com status NS (Not Started) ou TBD
-        for p in prox:
-            if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD']:
-                agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
-    except: pass
+    if not api_error:
+        try:
+            hoje_str = get_time_br().strftime('%Y-%m-%d')
+            prox = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"date": hoje_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
+            
+            agora_dt = get_time_br()
+            
+            for p in prox:
+                # 1. Filtra jogos não iniciados
+                if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD']:
+                    # 2. Converte string ISO para objeto datetime (Filtro de verdade)
+                    # Ex: 2026-01-10T21:00:00-03:00
+                    game_dt = datetime.fromisoformat(p['fixture']['date'])
+                    
+                    # 3. Só mostra se for Hoje E Futuro
+                    if game_dt.date() == agora_dt.date() and game_dt > agora_dt:
+                        agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
+        except: pass
 
-    if not radar and not agenda:
+    if not radar and not agenda and not api_error:
         if not os.path.exists(FILES['report']) or open(FILES['report']).read() != get_time_br().strftime('%Y-%m-%d'):
             relatorio_final(TG_TOKEN, TG_CHAT)
 
     # --- RENDERIZAÇÃO ---
     with main.container():
-        st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
+        if api_error:
+            st.markdown('<div class="status-error">🚨 API LIMITADA (100% USED) - AGUARDE RENOVAÇÃO</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
         hist_hoje = [x for x in st.session_state['historico_sinais'] if x['Data'] == get_time_br().strftime('%Y-%m-%d')]
         df_full = pd.DataFrame(st.session_state['historico_sinais'])
         if not df_full.empty:
-            df_hoje = df_full[df_full['Data'] == get_time_br().strftime('%Y-%m-%d')]
-            t_hj, g_hj, r_hj, w_hj = calcular_stats(df_hoje)
+            df_hoje_stats = df_full[df_full['Data'] == get_time_br().strftime('%Y-%m-%d')]
+            t_hj, g_hj, r_hj, w_hj = calcular_stats(df_hoje_stats)
         else:
-            df_hoje = pd.DataFrame()
             t_hj, g_hj, r_hj, w_hj = 0, 0, 0, 0.0
 
         c1, c2, c3 = st.columns(3)
@@ -428,7 +461,7 @@ if ROBO_LIGADO:
         
         with t1:
             if radar: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
-            else: st.info("Buscando jogos...")
+            else: st.info("Buscando jogos..." if not api_error else "API Pausada.")
         with t2:
             if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Sem jogos futuros hoje.")
