@@ -443,6 +443,7 @@ if ROBO_LIGADO:
     carregar_tudo()
     api_error = False
     
+    # 1. BUSCA JOGOS AO VIVO
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         res = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10).json()
@@ -456,6 +457,7 @@ if ROBO_LIGADO:
         jogos_live = []
         api_error = True
 
+    # 2. VERIFICA RESULTADOS PENDENTES (GREEN/RED)
     if not api_error: check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
 
     radar = []
@@ -463,6 +465,7 @@ if ROBO_LIGADO:
     candidatos_multipla = []
     ids_no_radar = [] 
 
+    # 3. PROCESSAMENTO DOS JOGOS
     for j in jogos_live:
         lid = str(j['league']['id'])
         if lid in ids_black: continue
@@ -482,6 +485,7 @@ if ROBO_LIGADO:
         lista_sinais = []
         status_vis = "👁️"
         
+        # Lógica de Ranking
         rank_h, rank_a = None, None
         tem_tabela = False
         if j['league']['id'] in LIGAS_TABELA:
@@ -491,17 +495,10 @@ if ROBO_LIGADO:
             rank_a = ranking.get(away)
             if rank_h and rank_a: tem_tabela = True
 
-        # --- BLOCO OTIMIZADO DE GESTÃO DE API ---
-        
-        # 1. Define intervalo inteligente baseado no momento do jogo
-        tempo_espera = 180 # Padrão: 3 minutos (economiza muito)
-        
-        # Aumenta frequência na Janela de Ouro (Crítico: janela de apenas 5 min)
-        if 69 <= tempo <= 76: 
-            tempo_espera = 60 
-        # Aumenta frequência no início (Gol Relâmpago)
-        elif tempo <= 15: 
-            tempo_espera = 90 
+        # --- GESTÃO DE API INTELIGENTE ---
+        tempo_espera = 180 # Padrão: 3 minutos
+        if 69 <= tempo <= 76: tempo_espera = 60 # Janela de Ouro: 1 min
+        elif tempo <= 15: tempo_espera = 90 # Início: 1.5 min
             
         ultimo_check = st.session_state['controle_stats'].get(fid, datetime.min)
         agora_dt = datetime.now()
@@ -515,37 +512,30 @@ if ROBO_LIGADO:
         if deve_buscar_stats(tempo, gh, ga, status_short):
             if pode_buscar_api:
                 try:
-                    # BUSCA NOVA NA API
                     stats_req = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}, timeout=5).json().get('response', [])
                     if stats_req:
                         stats = stats_req
-                        # Atualiza timestamp e cache
                         st.session_state['controle_stats'][fid] = agora_dt
                         st.session_state[chave_memoria_stats] = stats
-                    else:
-                        stats = []
-                except: 
-                    stats = []
+                    else: stats = []
+                except: stats = []
             else:
-                # USA O CACHE (Não gasta API, mas mantém o robô "vendo" o jogo)
+                # Usa memória se estiver no tempo de espera
                 stats = st.session_state.get(chave_memoria_stats, [])
-        else:
-            stats = [] 
-            
-        # -----------------------------------------
+        else: stats = [] 
+        # --------------------------------
 
-        if stats: # Só processa se tem dados (novos ou cacheados)
+        if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
             salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, tem_tabela)
             
-            # MÚLTIPLAS HT
+            # Validação de Múltiplas HT
             if status_short == 'HT' and gh == 0 and ga == 0:
                 try:
                     sh_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Total Shots'), 0) or 0
                     sh_a = next((x['value'] for x in stats[1]['statistics'] if x['type']=='Total Shots'), 0) or 0
                     sog_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Shots on Goal'), 0) or 0
                     sog_a = next((x['value'] for x in stats[1]['statistics'] if x['type']=='Shots on Goal'), 0) or 0
-                    
                     if (sh_h + sh_a) > 12 and (sog_h + sog_a) > 6:
                         total_sog = sog_h + sog_a
                         if total_sog > 0:
@@ -553,26 +543,22 @@ if ROBO_LIGADO:
                             elif (sog_a / total_sog) >= 0.65: indicacao = f"Gol do {away}"
                             else: indicacao = "Over 0.5 FT"
                         else: indicacao = "Over 0.5 FT"
-                        candidatos_multipla.append({
-                            'fid': fid,
-                            'jogo': f"{home} x {away}",
-                            'stats': f"{sh_h+sh_a} Chutes ({sog_h+sog_a} Gol)",
-                            'indica': indicacao
-                        })
+                        candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{sh_h+sh_a} Chutes", 'indica': indicacao})
                 except: pass
         else:
             status_vis = "💤"
 
+        # Lógica de Strike (Dados ausentes)
         if not lista_sinais and not stats and tempo >= 45 and status_short != 'HT': 
             gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
         
+        # Envio de Sinais
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
             for sinal in lista_sinais:
                 id_unico = f"{fid}_{sinal['tag']}"
                 if id_unico not in st.session_state['alertas_enviados']:
                     item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": sinal['tag'], "Resultado": "Pendente"}
-                    
                     if adicionar_historico(item):
                         msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 <b>{sinal['tag'].upper()}</b>\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>"
                         enviar_telegram(TG_TOKEN, TG_CHAT, msg)
@@ -581,36 +567,50 @@ if ROBO_LIGADO:
 
         radar.append({"Liga": j['league']['name'], "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
+    # Envio de Múltiplas
     if candidatos_multipla:
-        novos_multipla = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
-        if novos_multipla:
-            msg_multi = "<b>🚀 OPORTUNIDADE DE MÚLTIPLA (HT) 🚀</b>\n<i>Jogos 0x0 no Intervalo com Alta Pressão</i>\n"
-            for c in candidatos_multipla:
-                msg_multi += f"\n⚽ <b>{c['jogo']}</b>\n📊 {c['stats']}\n🎯 <b>{c['indica']}</b>\n"
+        novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
+        if novos:
+            msg = "<b>🚀 OPORTUNIDADE DE MÚLTIPLA (HT) 🚀</b>\n"
+            for c in novos:
+                msg += f"\n⚽ {c['jogo']} ({c['stats']})"
                 st.session_state['multiplas_enviadas'].add(c['fid'])
-            msg_multi += "\n⚠️ <i>Sugerimos combinar estes jogos!</i>"
-            enviar_telegram(TG_TOKEN, TG_CHAT, msg_multi)
-            st.toast("Múltipla Detectada!")
+            enviar_telegram(TG_TOKEN, TG_CHAT, msg)
 
-    # AGENDA FILTRADA (Só Futuros do Dia) - COM CACHE
+    # 4. AGENDA (CACHEADA)
     agenda = []
     if not api_error:
         hoje_br = get_time_br().strftime('%Y-%m-%d')
         prox = buscar_agenda_cached(API_KEY, hoje_br)
         agora = get_time_br()
-        
         for p in prox:
             try:
                 pid = p['fixture']['id']
                 if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and pid not in ids_no_radar:
-                    game_dt = datetime.fromisoformat(p['fixture']['date'])
-                    if game_dt > agora:
+                    if datetime.fromisoformat(p['fixture']['date']) > agora:
                         agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
             except: pass
 
-    if not radar and not agenda and not api_error:
-        if not os.path.exists(FILES['report']) or open(FILES['report']).read() != get_time_br().strftime('%Y-%m-%d'):
+    # --- CORREÇÃO DO RELATÓRIO FINAL ---
+    # Gatilho: Sem jogos ao vivo E (é tarde da noite OU lista de agenda acabou)
+    hora_atual = get_time_br().hour
+    
+    # Se não tem nada no Radar E (Já passou das 22h OU Agenda vazia) E sem erro de API
+    if not radar and not api_error and (hora_atual >= 22 or not agenda):
+        arquivo_hoje = get_time_br().strftime('%Y-%m-%d')
+        
+        # Verifica se já não enviou hoje lendo o arquivo de controle
+        ja_enviou = False
+        if os.path.exists(FILES['report']):
+            with open(FILES['report'], 'r') as f:
+                if f.read().strip() == arquivo_hoje:
+                    ja_enviou = True
+        
+        if not ja_enviou:
             relatorio_final(TG_TOKEN, TG_CHAT)
+            st.toast("Relatório Diário Enviado!")
+
+    # -----------------------------------
 
     with main.container():
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
