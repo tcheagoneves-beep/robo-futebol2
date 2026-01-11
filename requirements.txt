@@ -4,3 +4,4 @@ requests
 pytz
 st-gsheets-connection
 matplotlib
+plotly
