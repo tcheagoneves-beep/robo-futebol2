@@ -197,7 +197,7 @@ def buscar_ranking(api_key, league_id, season):
         return ranking
     except: return {}
 
-# NOVA FUNÇÃO: Cache para a Agenda do Dia (Economiza 1 req/minuto)
+# Cache para a Agenda do Dia (Economiza API)
 @st.cache_data(ttl=3600) 
 def buscar_agenda_cached(api_key, date_str):
     try:
@@ -303,7 +303,7 @@ def relatorio_final(token, chats):
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
-if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {} # NOVO: Controle de Cooldown
+if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {} 
 carregar_tudo()
 
 def momentum(fid, sog_h, sog_a):
@@ -491,66 +491,78 @@ if ROBO_LIGADO:
             rank_a = ranking.get(away)
             if rank_h and rank_a: tem_tabela = True
 
+        # --- BLOCO OTIMIZADO DE GESTÃO DE API ---
+        
+        # 1. Define intervalo inteligente baseado no momento do jogo
+        tempo_espera = 180 # Padrão: 3 minutos (economiza muito)
+        
+        # Aumenta frequência na Janela de Ouro (Crítico: janela de apenas 5 min)
+        if 69 <= tempo <= 76: 
+            tempo_espera = 60 
+        # Aumenta frequência no início (Gol Relâmpago)
+        elif tempo <= 15: 
+            tempo_espera = 90 
+            
+        ultimo_check = st.session_state['controle_stats'].get(fid, datetime.min)
+        agora_dt = datetime.now()
+        segundos_desde_ultimo = (agora_dt - ultimo_check).total_seconds()
+        
+        pode_buscar_api = segundos_desde_ultimo > tempo_espera
+        
+        # Chave para guardar a última estatística válida na memória
+        chave_memoria_stats = f"stats_cache_{fid}"
+
         if deve_buscar_stats(tempo, gh, ga, status_short):
-            # --- NOVO BLOCO DE COOLDOWN PARA STATS ---
-            ultimo_check = st.session_state['controle_stats'].get(fid, datetime.min)
-            agora_dt = datetime.now()
-            
-            # Regra: Espera 3 min (180s) ou 2 min (120s) se for < 15 min de jogo
-            tempo_espera = 180 
-            if tempo <= 15: tempo_espera = 120
-            
-            pode_buscar = (agora_dt - ultimo_check).total_seconds() > tempo_espera
-
-            if pode_buscar:
+            if pode_buscar_api:
                 try:
-                    stats_req = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}).json().get('response', [])
-                    stats = stats_req
-                    st.session_state['controle_stats'][fid] = agora_dt # Atualiza hora do ultimo check
-                except: stats = []
+                    # BUSCA NOVA NA API
+                    stats_req = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}, timeout=5).json().get('response', [])
+                    if stats_req:
+                        stats = stats_req
+                        # Atualiza timestamp e cache
+                        st.session_state['controle_stats'][fid] = agora_dt
+                        st.session_state[chave_memoria_stats] = stats
+                    else:
+                        stats = []
+                except: 
+                    stats = []
             else:
-                stats = [] # Pula para economizar API, processar só no proximo ciclo permitido
+                # USA O CACHE (Não gasta API, mas mantém o robô "vendo" o jogo)
+                stats = st.session_state.get(chave_memoria_stats, [])
+        else:
+            stats = [] 
             
-            # -----------------------------------------
+        # -----------------------------------------
 
-            if stats: # Só processa se buscou e veio dado
-                lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
-                salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, tem_tabela)
-                
-                # MÚLTIPLAS HT
-                if status_short == 'HT' and gh == 0 and ga == 0:
-                    try:
-                        sh_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Total Shots'), 0) or 0
-                        sh_a = next((x['value'] for x in stats[1]['statistics'] if x['type']=='Total Shots'), 0) or 0
-                        sog_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Shots on Goal'), 0) or 0
-                        sog_a = next((x['value'] for x in stats[1]['statistics'] if x['type']=='Shots on Goal'), 0) or 0
-                        
-                        if (sh_h + sh_a) > 12 and (sog_h + sog_a) > 6:
-                            total_sog = sog_h + sog_a
-                            if total_sog > 0:
-                                if (sog_h / total_sog) >= 0.65: indicacao = f"Gol do {home}"
-                                elif (sog_a / total_sog) >= 0.65: indicacao = f"Gol do {away}"
-                                else: indicacao = "Over 0.5 FT"
+        if stats: # Só processa se tem dados (novos ou cacheados)
+            lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
+            salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, tem_tabela)
+            
+            # MÚLTIPLAS HT
+            if status_short == 'HT' and gh == 0 and ga == 0:
+                try:
+                    sh_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Total Shots'), 0) or 0
+                    sh_a = next((x['value'] for x in stats[1]['statistics'] if x['type']=='Total Shots'), 0) or 0
+                    sog_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Shots on Goal'), 0) or 0
+                    sog_a = next((x['value'] for x in stats[1]['statistics'] if x['type']=='Shots on Goal'), 0) or 0
+                    
+                    if (sh_h + sh_a) > 12 and (sog_h + sog_a) > 6:
+                        total_sog = sog_h + sog_a
+                        if total_sog > 0:
+                            if (sog_h / total_sog) >= 0.65: indicacao = f"Gol do {home}"
+                            elif (sog_a / total_sog) >= 0.65: indicacao = f"Gol do {away}"
                             else: indicacao = "Over 0.5 FT"
-                            candidatos_multipla.append({
-                                'fid': fid,
-                                'jogo': f"{home} x {away}",
-                                'stats': f"{sh_h+sh_a} Chutes ({sog_h+sog_a} Gol)",
-                                'indica': indicacao
-                            })
-                    except: pass
+                        else: indicacao = "Over 0.5 FT"
+                        candidatos_multipla.append({
+                            'fid': fid,
+                            'jogo': f"{home} x {away}",
+                            'stats': f"{sh_h+sh_a} Chutes ({sog_h+sog_a} Gol)",
+                            'indica': indicacao
+                        })
+                except: pass
         else:
             status_vis = "💤"
 
-        # LÓGICA CORRIGIDA DE STRIKE: Falta de dados após 45 min
-        # Se stats veio vazia (mesmo após tentar buscar) e jogo ta avançado
-        if not stats and tempo >= 45 and status_short != 'HT' and deve_buscar_stats(tempo, gh, ga, status_short):
-             # Verifica se tentou buscar agora (pode_buscar=True) e falhou, ou se ja falhou antes
-             # Simplificação: Se deve buscar e não tem stats no radar, considera falha de qualidade
-             pass # Mantive logica original mas aqui entra o gerenciar_strikes se quiser rigoroso
-             # Nota: O código original chamava gerenciar_strikes aqui se lista_sinais vazia e sem stats. 
-             # Vou manter a chamada abaixo que é a sua original validada:
-        
         if not lista_sinais and not stats and tempo >= 45 and status_short != 'HT': 
             gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
         
@@ -580,11 +592,10 @@ if ROBO_LIGADO:
             enviar_telegram(TG_TOKEN, TG_CHAT, msg_multi)
             st.toast("Múltipla Detectada!")
 
-    # AGENDA FILTRADA (Só Futuros do Dia) - COM CACHE AGORA
+    # AGENDA FILTRADA (Só Futuros do Dia) - COM CACHE
     agenda = []
     if not api_error:
         hoje_br = get_time_br().strftime('%Y-%m-%d')
-        # AQUI MUDOU: Usa a função cacheada
         prox = buscar_agenda_cached(API_KEY, hoje_br)
         agora = get_time_br()
         
