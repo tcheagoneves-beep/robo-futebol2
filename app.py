@@ -33,7 +33,7 @@ st.markdown("""
     .stButton button {
         width: 100%; 
         white-space: normal !important; 
-        height: auto !important;       
+        height: auto !important;        
         min-height: 45px;              
         font-size: 14px !important; 
         font-weight: bold !important;
@@ -65,7 +65,7 @@ def clean_fid(x):
     try: return str(int(float(x))) 
     except: return '0'
 
-# --- 3. BANCO DE DADOS (NUVEM) ---
+# --- 3. BANCO DE DADOS (NUVEM & RAM DISK) ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
@@ -151,11 +151,11 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA PREDIITIVA PONDERADA (NOVO!) ---
+# --- 4. INTELIGÊNCIA PREDIITIVA PONDERADA (ATUALIZADA) ---
 def buscar_inteligencia(estrategia, liga, jogo):
     """Calcula Média Ponderada (Time x5 + Liga x3 + Geral x1)"""
     df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return ""
+    if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
     
     times = jogo.split(' x ')
     time_casa = times[0].strip() if len(times) > 0 else ""
@@ -172,22 +172,22 @@ def buscar_inteligencia(estrategia, liga, jogo):
         denominador += 5
         fontes.append("Time")
     
-    # 2. LIGA (Peso 3)
+    # 2. LIGA (Peso 3) - BAIXEI A REGUA PARA 3
     f_liga = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
-    if len(f_liga) >= 5:
+    if len(f_liga) >= 3:
         wr_liga = (f_liga['Resultado'].str.contains('GREEN').sum() / len(f_liga)) * 100
         numerador += wr_liga * 3
         denominador += 3
         fontes.append("Liga")
         
-    # 3. GERAL (Peso 1 - Base)
+    # 3. GERAL (Peso 1 - Base) - BAIXEI A REGUA PARA 1
     f_geral = df[df['Estrategia'] == estrategia]
-    if len(f_geral) >= 10:
+    if len(f_geral) >= 1:
         wr_geral = (f_geral['Resultado'].str.contains('GREEN').sum() / len(f_geral)) * 100
         numerador += wr_geral * 1
         denominador += 1
         
-    if denominador == 0: return ""
+    if denominador == 0: return "\n🔮 <b>Prob: Calculando...</b>"
     
     prob_final = numerador / denominador
     str_fontes = "+".join(fontes) if fontes else "Geral"
@@ -305,7 +305,6 @@ def reenviar_sinais(token, chats):
     if not hist: return st.toast("Sem sinais.")
     st.toast("Reenviando...")
     for s in reversed(hist):
-        # AQUI TAMBÉM CALCULA A PONDERADA
         prob = buscar_inteligencia(s['Estrategia'], s['Liga'], s['Jogo'])
         msg = f"🔄 <b>REENVIO</b>\n\n🚨 {s['Estrategia']}\n⚽ {s['Jogo']}\n⚠️ Placar: {s.get('Placar_Sinal','?')}{prob}"
         enviar_telegram(token, chats, msg); time.sleep(0.5)
