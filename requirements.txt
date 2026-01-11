@@ -1,4 +1,6 @@
 streamlit
 pandas
 requests
-plotly
+pytz
+st-gsheets-connection
+matplotlib
