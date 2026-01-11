@@ -491,15 +491,32 @@ if ROBO_LIGADO:
 
         t1, t2, t3, t4, t5, t6, t7 = st.tabs(["📡 Radar", "📅 Agenda", "📜 Histórico", "📈 Estatísticas", "🚫 Blacklist", "🛡️ Seguras", "⚠️ Obs"])
         
-        with t1: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True) if radar else st.info("Buscando jogos...")
-        with t2: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True) if agenda else st.caption("Sem jogos.")
-        with t3: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True) if not hist_hoje.empty else st.caption("Vazio.")
+        with t1:
+            if radar:
+                st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
+            else:
+                st.info("Buscando jogos...")
+        
+        with t2:
+            if agenda:
+                st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Sem jogos.")
+        
+        with t3:
+            if not hist_hoje.empty:
+                st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
+            else:
+                st.caption("Vazio.")
+        
         with t4:
             df_full = st.session_state['historico_full']
             if not df_full.empty:
                 t_all, g_all, r_all, w_all = calcular_stats(df_full)
                 st.markdown(f"**Geral:** {w_all:.1f}% ({g_all}G - {r_all}R)")
-            else: st.caption("Sem dados.")
+            else:
+                st.caption("Sem dados.")
+        
         with t5: st.dataframe(st.session_state['df_black'], use_container_width=True, hide_index=True)
         with t6: st.dataframe(st.session_state['df_safe'], use_container_width=True, hide_index=True)
         with t7: st.dataframe(st.session_state['df_vip'], use_container_width=True, hide_index=True)
