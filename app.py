@@ -86,14 +86,14 @@ def atualizar_historico_ram_disk(lista_atualizada):
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
     if salvar_aba("Historico", df_final): st.session_state['historico_full'] = df_final
 
-def salvar_blacklist(id_liga, pais, nome_liga):
+def salvar_blacklist_nuvem(id_liga, pais, nome_liga):
     df = st.session_state['df_black']
     if str(id_liga) not in df['id'].values:
         novo = pd.DataFrame([{'id': str(id_liga), 'País': str(pais), 'Liga': str(nome_liga)}])
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Blacklist", final): st.session_state['df_black'] = final
 
-def salvar_safe_league(id_liga, pais, nome_liga, tem_stats, tem_tabela):
+def salvar_safe_league_nuvem(id_liga, pais, nome_liga, tem_stats, tem_tabela):
     id_str = str(id_liga); motivos = []
     if tem_stats: motivos.append("Chutes")
     if tem_tabela: motivos.append("Tabela")
@@ -109,7 +109,7 @@ def salvar_safe_league(id_liga, pais, nome_liga, tem_stats, tem_tabela):
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
-def salvar_strike(id_liga, pais, nome_liga, strikes):
+def salvar_obs_nuvem(id_liga, pais, nome_liga, strikes):
     df = st.session_state['df_vip']
     hoje = get_time_br().strftime('%Y-%m-%d')
     id_str = str(id_liga)
@@ -126,18 +126,13 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA PREDIITIVA (NOVO) ---
+# --- 4. INTELIGÊNCIA PREDITIVA ---
 def buscar_probabilidade(estrategia, liga):
-    """Calcula a chance de acerto baseada no histórico salvo"""
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return None
-    
-    # Filtra histórico
     filtro = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
     total = len(filtro)
-    
-    if total < 3: return None # Pouca amostragem
-    
+    if total < 3: return None 
     greens = filtro['Resultado'].str.contains('GREEN').sum()
     winrate = (greens / total) * 100
     return f"{winrate:.0f}% ({greens}/{total})"
@@ -165,18 +160,15 @@ def enviar_telegram(token, chat_ids, msg):
 def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
-    
-    # Filtro de Data
     df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
     hoje = pd.to_datetime(get_time_br().date())
     
     if tipo == "Dia": df_show = df[df['Data'] == hoje]
     elif tipo == "Semana": df_show = df[df['Data'] >= (hoje - timedelta(days=7))]
-    else: df_show = df # Geral
+    else: df_show = df 
     
     if df_show.empty: return
 
-    # Gera Gráfico
     greens = df_show['Resultado'].str.contains('GREEN').sum()
     reds = df_show['Resultado'].str.contains('RED').sum()
     total = greens + reds
@@ -185,7 +177,6 @@ def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(6, 4))
     
-    # Dados para gráfico
     stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats_strat.empty:
         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
@@ -194,12 +185,11 @@ def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
         
-        # Buffer
         buf = io.BytesIO()
         plt.savefig(buf, format='png')
         buf.seek(0)
         
-        msg = f"📊 <b>RELATÓRIO DE PERFORMANCE ({tipo})</b>\n\n🎯 Sinais: {total}\n✅ Greens: {greens}\n❌ Reds: {reds}\n💰 <b>Assertividade: {winrate:.1f}%</b>"
+        msg = f"📊 <b>RELATÓRIO BI ({tipo})</b>\n\n🎯 Sinais: {total}\n✅ Greens: {greens}\n❌ Reds: {reds}\n💰 <b>Assertividade: {winrate:.1f}%</b>"
         
         ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
         for cid in ids:
@@ -353,6 +343,20 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if tempo <= 10 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
     return SINAIS
 
+# AQUI ESTAVA O PROBLEMA: A FUNÇÃO ESTAVA FALTANDO. AGORA ELA EXISTE.
+def gerenciar_strikes(id_liga, pais, nome_liga):
+    df = st.session_state['df_vip']
+    hoje = get_time_br().strftime('%Y-%m-%d')
+    id_str = str(id_liga); strikes = 0; data_antiga = ""
+    if id_str in df['id'].values:
+        row = df[df['id'] == id_str].iloc[0]
+        strikes = int(row['Strikes']); data_antiga = row['Data_Erro']
+    if data_antiga == hoje: return
+    novo_strike = strikes + 1
+    salvar_obs_nuvem(id_liga, pais, nome_liga, novo_strike)
+    st.toast(f"⚠️ {nome_liga} Strike {novo_strike}")
+    if novo_strike >= 2: salvar_blacklist_nuvem(id_liga, pais, nome_liga); st.toast(f"🚫 {nome_liga} Banida")
+
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves PRO (BI)")
@@ -440,7 +444,7 @@ if ROBO_LIGADO:
 
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
-            salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, tem_tabela)
+            salvar_safe_league_nuvem(lid, j['league']['country'], j['league']['name'], True, tem_tabela)
             if status_short == 'HT' and gh == 0 and ga == 0:
                 try:
                     sh_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Total Shots'), 0) or 0
