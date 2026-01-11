@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import time
 import os
+import threading
 from datetime import datetime, timedelta
 import pytz
 
@@ -222,13 +223,24 @@ def deve_buscar_stats(tempo, gh, ga, status):
     if status == 'HT' and gh == 0 and ga == 0: return True
     return False
 
-# --- 5. TELEGRAM ---
+# --- 5. TELEGRAM (ASSÍNCRONO - NOVO) ---
+def _worker_telegram(token, chat_id, msg):
+    """Função worker executada em thread separada para não travar o loop"""
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
+        requests.post(url, data=data, timeout=5)
+    except Exception as e:
+        print(f"Erro envio Telegram: {e}")
+
 def enviar_telegram(token, chat_ids, msg):
+    """Dispara a thread de envio"""
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
     for cid in ids:
-        try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": cid, "text": msg, "parse_mode": "HTML"}, timeout=3)
-        except: pass
+        t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
+        t.daemon = True
+        t.start()
 
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0
@@ -283,7 +295,7 @@ def reenviar_sinais(token, chats):
     st.toast("Reenviando...")
     for s in reversed(hist):
         msg = f"🔄 <b>REENVIO DE SINAL</b>\n\n🚨 <b>{s['Estrategia']}</b>\n⚽ {s['Jogo']}\n⚠️ Placar Sinal: {s.get('Placar_Sinal','?')}"
-        enviar_telegram(token, chats, msg); time.sleep(1)
+        enviar_telegram(token, chats, msg); time.sleep(0.5)
 
 def relatorio_final(token, chats):
     hoje = get_time_br().strftime('%Y-%m-%d')
