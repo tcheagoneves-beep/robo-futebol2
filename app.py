@@ -151,7 +151,7 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA PREDIITIVA PONDERADA (ATUALIZADA: MANDANTE + VISITANTE) ---
+# --- 4. INTELIGÊNCIA PREDIITIVA PONDERADA ---
 def buscar_inteligencia(estrategia, liga, jogo):
     """Calcula Média Ponderada: (Mandante+Visitante)/2 [x5] + Liga [x3] + Geral [x1]"""
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -413,14 +413,16 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     
     if tempo <= 30 and (gh+ga) >= 2: SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols", "stats": f"{gh}x{ga}"})
     
-    # --- AQUI ESTÁ O AJUSTE DA TRAVA DE PLACAR (Gol Relâmpago só com 0x0) ---
+    # --- TRAVA DE PLACAR ---
     if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1 and (gh + ga) == 0: 
         SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sog_h+sog_a}"})
     
     if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols", "stats": f"Total: {sh_h+sh_a}"})
     if tempo <= 60:
-        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Gol Mandante", "stats": f"Pressão: {rh}"})
-        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Gol Visitante", "stats": f"Pressão: {ra}"})
+        # --- BLITZ: MANDA ENTRAR EM OVER GOLS ---
+        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols", "stats": f"Pressão: {rh}"})
+        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols", "stats": f"Pressão: {ra}"})
+        
     if rank_home and rank_away:
         is_top_home = rank_home <= 4; is_top_away = rank_away <= 4
         is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11
@@ -434,7 +436,10 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sh_h+sh_a}"})
         if is_mid_home and is_mid_away:
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sh_h+sh_a}"})
-            if tempo <= 10 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
+            
+            # --- JOGO MORNO ATUALIZADO (15 min e 0 chutes) ---
+            if tempo <= 15 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
+            
     return SINAIS
 
 def gerenciar_strikes(id_liga, pais, nome_liga):
@@ -479,8 +484,7 @@ with st.sidebar:
 if ROBO_LIGADO:
     carregar_tudo()
 
-    # --- NOVO BLOCO: FILTRO DE LIMPEZA AUTOMÁTICA ---
-    # Só mantém na tela os sinais que tiverem a DATA DE HOJE
+    # --- FILTRO DE LIMPEZA AUTOMÁTICA ---
     hoje_real = get_time_br().strftime('%Y-%m-%d')
     st.session_state['historico_sinais'] = [
         s for s in st.session_state['historico_sinais'] 
