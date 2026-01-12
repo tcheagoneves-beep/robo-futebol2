@@ -413,7 +413,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     
     if tempo <= 30 and (gh+ga) >= 2: SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols", "stats": f"{gh}x{ga}"})
     
-    # --- AQUI ESTÁ O AJUSTE DA TRAVA DE PLACAR ---
+    # --- AQUI ESTÁ O AJUSTE DA TRAVA DE PLACAR (Gol Relâmpago só com 0x0) ---
     if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1 and (gh + ga) == 0: 
         SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sog_h+sog_a}"})
     
@@ -478,6 +478,16 @@ with st.sidebar:
 # --- 8. DASHBOARD ---
 if ROBO_LIGADO:
     carregar_tudo()
+
+    # --- NOVO BLOCO: FILTRO DE LIMPEZA AUTOMÁTICA ---
+    # Só mantém na tela os sinais que tiverem a DATA DE HOJE
+    hoje_real = get_time_br().strftime('%Y-%m-%d')
+    st.session_state['historico_sinais'] = [
+        s for s in st.session_state['historico_sinais'] 
+        if s['Data'] == hoje_real
+    ]
+    # --- FIM DO BLOCO ---
+
     api_error = False
     
     try:
