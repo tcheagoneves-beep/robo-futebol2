@@ -248,6 +248,72 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
+# --- RADAR MATINAL (REIS DO GREEN + ESTRATÉGIA) ---
+def verificar_alerta_matinal(token, chat_ids, api_key):
+    # Envia entre 08:00 e 12:00 uma vez por dia
+    agora = get_time_br()
+    hoje_str = agora.strftime('%Y-%m-%d')
+    chave = f'alerta_matinal_{hoje_str}'
+    
+    if chave in st.session_state: return # Já enviou hoje
+    if not (8 <= agora.hour < 12): return # Fora do horário
+
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return
+    
+    # 1. Identifica Top Times Lucrativos
+    df_green = df[df['Resultado'].str.contains('GREEN', na=False)]
+    times_lucrativos = []
+    for jogo in df_green['Jogo']:
+        try:
+            partes = jogo.split(' x ')
+            times_lucrativos.append(partes[0].split('(')[0].strip())
+            times_lucrativos.append(partes[1].split('(')[0].strip())
+        except: pass
+        
+    if not times_lucrativos: return
+    top_times = pd.Series(times_lucrativos).value_counts().head(5)
+    lista_top = top_times.index.tolist()
+    
+    # 2. Agenda Hoje
+    jogos_hoje = buscar_agenda_cached(api_key, hoje_str)
+    if not jogos_hoje: return
+    
+    # 3. Match e Melhor Estratégia
+    matches = []
+    for jogo in jogos_hoje:
+        try:
+            t1 = jogo['teams']['home']['name']
+            t2 = jogo['teams']['away']['name']
+            hora = jogo['fixture']['date'][11:16]
+            liga = jogo['league']['name']
+            pais = jogo['league']['country']
+            
+            time_foco = None
+            if t1 in lista_top: time_foco = t1
+            elif t2 in lista_top: time_foco = t2
+            
+            if time_foco:
+                greens = top_times[time_foco]
+                
+                # Busca estratégia favorita
+                df_time = df_green[df_green['Jogo'].str.contains(time_foco, na=False)]
+                best_strat = "Geral"
+                if not df_time.empty:
+                    best_strat = df_time['Estrategia'].value_counts().idxmax()
+                
+                motivo = f"🔥 Motivo: O {time_foco} vem de {greens} Greens acumulados! (Forte em: <b>{best_strat}</b>)"
+                matches.append(f"⏰ {hora} | {pais} {liga}\n⚽ {t1} 🆚 {t2}\n{motivo}")
+        except: pass
+            
+    if matches:
+        msg_final = "🌅 <b>BOM DIA! RADAR DE OPORTUNIDADES</b>\nHoje tem jogo dos seus times mais lucrativos:\n\n"
+        msg_final += "\n\n".join(matches)
+        msg_final += "\n\n⚠️ Fique atento aos sinais durante esses jogos! O Robô já está monitorando. 🚀"
+        enviar_telegram(token, chat_ids, msg_final)
+        
+    st.session_state[chave] = True 
+
 def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
@@ -306,7 +372,6 @@ def enviar_relatorio_bi(token, chat_ids):
 ♾️ <b>TOTAL GERAL</b>
 🎯 {t_a} Sinais | ✅ {g_a} | ❌ {r_a}
 💰 Assertividade: <b>{w_a:.1f}%</b>"""
-        
         ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
         for cid in ids:
             buf.seek(0)
@@ -545,7 +610,9 @@ if ROBO_LIGADO:
         else: jogos_live = res.get('response', [])
     except: jogos_live = []; api_error = True
 
-    if not api_error: check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
+    if not api_error: 
+        check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
+        verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) # <--- SEU RADAR ATIVADO
 
     radar = []; ids_black = st.session_state['df_black']['id'].values
     candidatos_multipla = []; ids_no_radar = [] 
@@ -567,8 +634,6 @@ if ROBO_LIGADO:
             ranking = buscar_ranking(API_KEY, j['league']['id'], season)
             rank_h = ranking.get(home); rank_a = ranking.get(away)
             if rank_h and rank_a: tem_tabela = True
-            
-            # (Rank removido do nome por solicitação, mas mantido na lógica interna acima)
 
         tempo_espera = 180 
         if 69 <= tempo <= 76: tempo_espera = 60 
