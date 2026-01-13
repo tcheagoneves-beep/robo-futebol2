@@ -151,32 +151,30 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA PREDIITIVA PONDERADA ---
+# --- 4. INTELIGÊNCIA PREDIITIVA (PONDERADA + STREAK) ---
 def buscar_inteligencia(estrategia, liga, jogo):
-    """Calcula Média Ponderada: (Mandante+Visitante)/2 [x5] + Liga [x3] + Geral [x1]"""
+    """Calcula Média Ponderada + Analisa Sequência (Streak)"""
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
     
-    # 1. Identificar os dois times
     try:
         times = jogo.split(' x ')
-        time_casa = times[0].split('(')[0].strip() # Remove rank se houver
+        time_casa = times[0].split('(')[0].strip()
         time_visitante = times[1].split('(')[0].strip()
     except:
         return "\n🔮 <b>Prob: Erro Nome</b>"
     
-    numerador = 0
-    denominador = 0
-    fontes = []
+    numerador = 0; denominador = 0; fontes = []
 
-    # --- FATOR 1: OS TIMES (Peso 5) ---
+    # Histórico dos times
     f_casa = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
+    f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
+    
     wr_casa = 0; tem_casa = False
     if len(f_casa) >= 3:
         wr_casa = (f_casa['Resultado'].str.contains('GREEN').sum() / len(f_casa)) * 100
         tem_casa = True
 
-    f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
     wr_vis = 0; tem_vis = False
     if len(f_vis) >= 3:
         wr_vis = (f_vis['Resultado'].str.contains('GREEN').sum() / len(f_vis)) * 100
@@ -187,9 +185,9 @@ def buscar_inteligencia(estrategia, liga, jogo):
         media_times = (wr_casa + wr_vis) / divisao
         numerador += media_times * 5
         denominador += 5
-        fontes.append("Times")
+        fontes.append("Time")
 
-    # --- FATOR 2: A LIGA (Peso 3) ---
+    # Histórico da Liga
     f_liga = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
     if len(f_liga) >= 3:
         wr_liga = (f_liga['Resultado'].str.contains('GREEN').sum() / len(f_liga)) * 100
@@ -197,24 +195,45 @@ def buscar_inteligencia(estrategia, liga, jogo):
         denominador += 3
         fontes.append("Liga")
         
-    # --- FATOR 3: GERAL (Peso 1) ---
+    # Histórico Geral
     f_geral = df[df['Estrategia'] == estrategia]
     if len(f_geral) >= 1:
         wr_geral = (f_geral['Resultado'].str.contains('GREEN').sum() / len(f_geral)) * 100
         numerador += wr_geral * 1
         denominador += 1
         
-    # --- RESULTADO FINAL ---
     if denominador == 0: return "\n🔮 <b>Prob: Calculando...</b>"
-    
     prob_final = numerador / denominador
     str_fontes = "+".join(fontes) if fontes else "Geral"
     
+    # --- CÁLCULO DE MOMENTUM (STREAK) ---
+    # Junta os dois times e vê a sequência recente
+    f_times = pd.concat([f_casa, f_vis]).sort_values(by='Data', ascending=False)
+    streak_msg = ""
+    
+    if not f_times.empty:
+        last_results = f_times['Resultado'].head(5).tolist()
+        streak_count = 0
+        tipo_streak = None
+        for res in last_results:
+            if "GREEN" in res:
+                if tipo_streak == "RED": break
+                tipo_streak = "GREEN"
+                streak_count += 1
+            elif "RED" in res:
+                if tipo_streak == "GREEN": break
+                tipo_streak = "RED"
+                streak_count += 1
+        
+        if streak_count >= 2:
+            if tipo_streak == "GREEN": streak_msg = f" | 🔥 Vem de {streak_count} Greens!"
+            else: streak_msg = f" | ❄️ Vem de {streak_count} Reds..."
+
     emoji = "🔮"
     if prob_final >= 80: emoji = "🔥"
     elif prob_final <= 40: emoji = "⚠️"
         
-    return f"\n{emoji} <b>Prob. Híbrida: {prob_final:.0f}%</b> ({str_fontes})"
+    return f"\n{emoji} <b>Prob: {prob_final:.0f}% ({str_fontes}){streak_msg}</b>"
 
 # --- 5. TELEGRAM E RELATÓRIOS ---
 def _worker_telegram(token, chat_id, msg):
@@ -240,15 +259,13 @@ def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
-    # Prepara dados
     df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
     hoje = pd.to_datetime(get_time_br().date())
     
-    # Filtros de Tempo
+    # Filtros de Tempo (Dia, Semana, Mês, Total)
     mask_dia = df['Data'] == hoje
     mask_sem = df['Data'] >= (hoje - timedelta(days=7))
     mask_mes = df['Data'] >= (hoje - timedelta(days=30))
-    # mask_ano seria df completo para este contexto
     
     def calc_metrics(d):
         g = d['Resultado'].str.contains('GREEN').sum()
@@ -257,13 +274,12 @@ def enviar_relatorio_bi(token, chat_ids):
         wr = (g/tot * 100) if tot > 0 else 0
         return tot, g, r, wr
 
-    # Cálculos
     t_d, g_d, r_d, w_d = calc_metrics(df[mask_dia])
     t_s, g_s, r_s, w_s = calc_metrics(df[mask_sem])
     t_m, g_m, r_m, w_m = calc_metrics(df[mask_mes])
-    t_a, g_a, r_a, w_a = calc_metrics(df) # Geral/Ano
+    t_a, g_a, r_a, w_a = calc_metrics(df)
 
-    # Gera Gráfico (Mensal para tendência)
+    # Gráfico (Tendência 30 Dias)
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
     colors = {'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}
@@ -284,7 +300,6 @@ def enviar_relatorio_bi(token, chat_ids):
         plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#0E1117')
         buf.seek(0)
         
-        # Mensagem Formatada
         msg = f"""📊 <b>RELATÓRIO BI (ACUMULADO)</b>
 
 📆 <b>HOJE</b>
@@ -316,7 +331,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
-    # --- LÓGICA CORRIGIDA: UNDER 1.5 HT (JOGO MORNO) ---
+    # --- JOGO MORNO (UNDER 1.5) ---
     if sinal['Estrategia'] == "❄️ Jogo Morno":
         if (gh + ga) >= 2:
             sinal['Resultado'] = '❌ RED'
@@ -328,7 +343,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
             enviar_telegram(token, chats, msg); return True
         return False
 
-    # --- LÓGICA PADRÃO: OVER GOLS (TODAS AS OUTRAS) ---
+    # --- GERAL (OVER GOLS) ---
     if (gh+ga) > (ph+pa):
         sinal['Resultado'] = '✅ GREEN'
         msg = f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar Atual: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}"
@@ -444,7 +459,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         
-        # --- ATUALIZAÇÃO 1: PONTARIA (🎯) ---
+        # --- ESTATÍSTICA DE PONTARIA ---
         tot_chutes = sh_h + sh_a
         tot_gol = sog_h + sog_a
         txt_stats = f"{tot_chutes} Chutes (🎯 {tot_gol} no Gol)"
@@ -535,6 +550,7 @@ with st.sidebar:
 if ROBO_LIGADO:
     carregar_tudo()
 
+    # --- FILTRO DE LIMPEZA DIÁRIA ---
     hoje_real = get_time_br().strftime('%Y-%m-%d')
     st.session_state['historico_sinais'] = [
         s for s in st.session_state['historico_sinais'] 
@@ -574,7 +590,7 @@ if ROBO_LIGADO:
             rank_h = ranking.get(home); rank_a = ranking.get(away)
             if rank_h and rank_a: tem_tabela = True
             
-            # --- ATUALIZAÇÃO 2: RANKING NO NOME ---
+            # --- RANKING NO NOME ---
             if rank_h: home = f"{home} ({rank_h}º)"
             if rank_a: away = f"{away} ({rank_a}º)"
 
