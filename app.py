@@ -160,8 +160,8 @@ def buscar_inteligencia(estrategia, liga, jogo):
     # 1. Identificar os dois times
     try:
         times = jogo.split(' x ')
-        time_casa = times[0].strip()
-        time_visitante = times[1].strip() if len(times) > 1 else ""
+        time_casa = times[0].split('(')[0].strip() # Remove rank se houver
+        time_visitante = times[1].split('(')[0].strip()
     except:
         return "\n🔮 <b>Prob: Erro Nome</b>"
     
@@ -170,25 +170,21 @@ def buscar_inteligencia(estrategia, liga, jogo):
     fontes = []
 
     # --- FATOR 1: OS TIMES (Peso 5) ---
-    # Analisa o Mandante
     f_casa = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
     wr_casa = 0; tem_casa = False
     if len(f_casa) >= 3:
         wr_casa = (f_casa['Resultado'].str.contains('GREEN').sum() / len(f_casa)) * 100
         tem_casa = True
 
-    # Analisa o Visitante
     f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
     wr_vis = 0; tem_vis = False
     if len(f_vis) >= 3:
         wr_vis = (f_vis['Resultado'].str.contains('GREEN').sum() / len(f_vis)) * 100
         tem_vis = True
     
-    # Combina as médias (Considera quem tiver dados)
     if tem_casa or tem_vis:
         divisao = 2 if (tem_casa and tem_vis) else 1
         media_times = (wr_casa + wr_vis) / divisao
-        
         numerador += media_times * 5
         denominador += 5
         fontes.append("Times")
@@ -240,33 +236,43 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
-def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
+def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
+    # Prepara dados
     df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
     hoje = pd.to_datetime(get_time_br().date())
     
-    if tipo == "Dia": df_show = df[df['Data'] == hoje]
-    elif tipo == "Semana": df_show = df[df['Data'] >= (hoje - timedelta(days=7))]
-    else: df_show = df 
+    # Filtros de Tempo
+    mask_dia = df['Data'] == hoje
+    mask_sem = df['Data'] >= (hoje - timedelta(days=7))
+    mask_mes = df['Data'] >= (hoje - timedelta(days=30))
+    # mask_ano seria df completo para este contexto
     
-    if df_show.empty: return
+    def calc_metrics(d):
+        g = d['Resultado'].str.contains('GREEN').sum()
+        r = d['Resultado'].str.contains('RED').sum()
+        tot = g + r
+        wr = (g/tot * 100) if tot > 0 else 0
+        return tot, g, r, wr
 
-    greens = df_show['Resultado'].str.contains('GREEN').sum()
-    reds = df_show['Resultado'].str.contains('RED').sum()
-    total = greens + reds
-    winrate = (greens/total * 100) if total > 0 else 0
-    
+    # Cálculos
+    t_d, g_d, r_d, w_d = calc_metrics(df[mask_dia])
+    t_s, g_s, r_s, w_s = calc_metrics(df[mask_sem])
+    t_m, g_m, r_m, w_m = calc_metrics(df[mask_mes])
+    t_a, g_a, r_a, w_a = calc_metrics(df) # Geral/Ano
+
+    # Gera Gráfico (Mensal para tendência)
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
     colors = {'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}
     
-    stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+    stats_strat = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats_strat.empty:
         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
         counts.plot(kind='bar', stacked=True, color=[colors.get(x, '#888') for x in counts.columns], ax=ax, width=0.6)
-        ax.set_title(f'PERFORMANCE {tipo.upper()} (WR: {winrate:.1f}%)', color='white', fontsize=12, pad=15)
+        ax.set_title(f'PERFORMANCE 30 DIAS (WR: {w_m:.1f}%)', color='white', fontsize=12, pad=15)
         ax.set_xlabel('')
         ax.tick_params(axis='x', rotation=45, labelsize=9, colors='#cccccc')
         ax.grid(axis='y', linestyle='--', alpha=0.2)
@@ -278,7 +284,24 @@ def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
         plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#0E1117')
         buf.seek(0)
         
-        msg = f"📊 <b>RELATÓRIO BI ({tipo})</b>\n\n🎯 Sinais: {total}\n✅ Greens: {greens}\n❌ Reds: {reds}\n💰 <b>Assertividade: {winrate:.1f}%</b>"
+        # Mensagem Formatada
+        msg = f"""📊 <b>RELATÓRIO BI (ACUMULADO)</b>
+
+📆 <b>HOJE</b>
+🎯 {t_d} Sinais | ✅ {g_d} | ❌ {r_d}
+💰 Assertividade: <b>{w_d:.1f}%</b>
+
+📅 <b>7 DIAS</b>
+🎯 {t_s} Sinais | ✅ {g_s} | ❌ {r_s}
+💰 Assertividade: <b>{w_s:.1f}%</b>
+
+🗓️ <b>30 DIAS</b>
+🎯 {t_m} Sinais | ✅ {g_m} | ❌ {r_m}
+💰 Assertividade: <b>{w_m:.1f}%</b>
+
+♾️ <b>TOTAL GERAL</b>
+🎯 {t_a} Sinais | ✅ {g_a} | ❌ {r_a}
+💰 Assertividade: <b>{w_a:.1f}%</b>"""
         
         ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
         for cid in ids:
@@ -293,7 +316,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
-    # --- LÓGICA ESPECÍFICA PARA JOGO MORNO (UNDER 1.5 HT) ---
+    # --- LÓGICA CORRIGIDA: UNDER 1.5 HT (JOGO MORNO) ---
     if sinal['Estrategia'] == "❄️ Jogo Morno":
         if (gh + ga) >= 2:
             sinal['Resultado'] = '❌ RED'
@@ -305,7 +328,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
             enviar_telegram(token, chats, msg); return True
         return False
 
-    # --- LÓGICA PADRÃO (OVER GOLS) ---
+    # --- LÓGICA PADRÃO: OVER GOLS (TODAS AS OUTRAS) ---
     if (gh+ga) > (ph+pa):
         sinal['Resultado'] = '✅ GREEN'
         msg = f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar Atual: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}"
@@ -420,20 +443,27 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             v = next((x['value'] for x in l if x['type']==t), 0); return v if v is not None else 0
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
+        
+        # --- ATUALIZAÇÃO 1: PONTARIA (🎯) ---
+        tot_chutes = sh_h + sh_a
+        tot_gol = sog_h + sog_a
+        txt_stats = f"{tot_chutes} Chutes (🎯 {tot_gol} no Gol)"
+        
     except: return []
     fid = j['fixture']['id']; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
     rh, ra = momentum(fid, sog_h, sog_a)
     SINAIS = []
     
-    if tempo <= 30 and (gh+ga) >= 2: SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols", "stats": f"{gh}x{ga}"})
+    if tempo <= 30 and (gh+ga) >= 2: 
+        SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols", "stats": f"Placar: {gh}x{ga}"})
     
-    # --- TRAVA DE PLACAR ---
     if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1 and (gh + ga) == 0: 
-        SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sog_h+sog_a}"})
+        SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": txt_stats})
     
-    if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols", "stats": f"Total: {sh_h+sh_a}"})
+    if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: 
+        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols", "stats": txt_stats})
+        
     if tempo <= 60:
-        # --- BLITZ: MANDA ENTRAR EM OVER GOLS ---
         if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols", "stats": f"Pressão: {rh}"})
         if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols", "stats": f"Pressão: {ra}"})
         
@@ -441,20 +471,25 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         is_top_home = rank_home <= 4; is_top_away = rank_away <= 4
         is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11
         is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
+        
         if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
-            if tempo <= 5 and (sh_h + sh_a) >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT", "stats": f"Rank: {rank_home}x{rank_away}"})
+            if tempo <= 5 and (sh_h + sh_a) >= 1: 
+                SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT", "stats": f"Rank: {rank_home}x{rank_away}"})
+        
         if 5 <= tempo <= 15:
-            # --- CORREÇÃO AQUI: FAVORITO AGORA É OVER GOLS ---
             if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols", "stats": f"Pressão: {rh}"})
             if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols", "stats": f"Pressão: {ra}"})
         
         if is_top_home and is_top_away and tempo <= 7:
-            if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sh_h+sh_a}"})
+            if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: 
+                SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT", "stats": txt_stats})
+        
         if is_mid_home and is_mid_away:
-            if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": f"Chutes: {sh_h+sh_a}"})
+            if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
+                SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": txt_stats})
             
-            # --- JOGO MORNO ATUALIZADO (15 min e 0 chutes) ---
-            if tempo <= 15 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
+            if tempo <= 15 and (sh_h + sh_a) == 0: 
+                SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
             
     return SINAIS
 
@@ -485,7 +520,7 @@ with st.sidebar:
         
         st.write("---")
         if st.button("📊 Enviar Relatório BI"):
-            enviar_relatorio_bi(TG_TOKEN, TG_CHAT, "Dia")
+            enviar_relatorio_bi(TG_TOKEN, TG_CHAT)
             st.toast("Relatório Enviado!")
             
     verificar_reset_diario()
@@ -500,16 +535,13 @@ with st.sidebar:
 if ROBO_LIGADO:
     carregar_tudo()
 
-    # --- FILTRO DE LIMPEZA AUTOMÁTICA ---
     hoje_real = get_time_br().strftime('%Y-%m-%d')
     st.session_state['historico_sinais'] = [
         s for s in st.session_state['historico_sinais'] 
         if s['Data'] == hoje_real
     ]
-    # --- FIM DO BLOCO ---
 
     api_error = False
-    
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         resp = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
@@ -541,6 +573,10 @@ if ROBO_LIGADO:
             ranking = buscar_ranking(API_KEY, j['league']['id'], season)
             rank_h = ranking.get(home); rank_a = ranking.get(away)
             if rank_h and rank_a: tem_tabela = True
+            
+            # --- ATUALIZAÇÃO 2: RANKING NO NOME ---
+            if rank_h: home = f"{home} ({rank_h}º)"
+            if rank_a: away = f"{away} ({rank_a}º)"
 
         tempo_espera = 180 
         if 69 <= tempo <= 76: tempo_espera = 60 
@@ -623,7 +659,7 @@ if ROBO_LIGADO:
         arquivo_hoje = get_time_br().strftime('%Y-%m-%d')
         chave_relatorio = f"relatorio_enviado_{arquivo_hoje}"
         if chave_relatorio not in st.session_state:
-            enviar_relatorio_bi(TG_TOKEN, TG_CHAT, "Dia")
+            enviar_relatorio_bi(TG_TOKEN, TG_CHAT)
             st.session_state[chave_relatorio] = True
 
     # DISPLAY
