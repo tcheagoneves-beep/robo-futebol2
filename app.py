@@ -34,7 +34,7 @@ st.markdown("""
         width: 100%; 
         white-space: normal !important; 
         height: auto !important;        
-        min-height: 45px;              
+        min-height: 45px;               
         font-size: 14px !important; 
         font-weight: bold !important;
         padding: 5px 10px !important;
@@ -312,7 +312,8 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
         msg_final += "\n\n⚠️ Fique atento aos sinais durante esses jogos! O Robô já está monitorando. 🚀"
         enviar_telegram(token, chat_ids, msg_final)
         
-    st.session_state[chave] = True 
+        # --- CORREÇÃO AQUI: Só marca como True se realmente enviou ---
+        st.session_state[chave] = True 
 
 def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
