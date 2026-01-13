@@ -312,8 +312,7 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
         msg_final += "\n\n⚠️ Fique atento aos sinais durante esses jogos! O Robô já está monitorando. 🚀"
         enviar_telegram(token, chat_ids, msg_final)
         
-        # Só marca se realmente encontrou e enviou
-        st.session_state[chave] = True 
+    st.session_state[chave] = True 
 
 def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -550,8 +549,11 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if is_mid_home and is_mid_away:
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
                 SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": txt_stats})
-            if tempo <= 15 and (sh_h + sh_a) == 0: 
+            
+            # --- CORREÇÃO FEITA AQUI: SÓ DISPARA ENTRE 15 e 16 MINUTOS ---
+            if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: 
                 SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
+                
     return SINAIS
 
 def gerenciar_strikes(id_liga, pais, nome_liga):
@@ -617,10 +619,9 @@ if ROBO_LIGADO:
         verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) 
 
     radar = []; ids_black = st.session_state['df_black']['id'].values
+    
     # --- NOVAS VARIÁVEIS PARA OS ÍCONES ---
     ids_safe = st.session_state['df_safe']['id'].values
-    
-    # Tratamento seguro para df_vip (pode não existir na primeira execução)
     df_vip_temp = st.session_state.get('df_vip', pd.DataFrame())
     ids_obs = df_vip_temp['id'].values if not df_vip_temp.empty and 'id' in df_vip_temp.columns else []
     
@@ -705,7 +706,6 @@ if ROBO_LIGADO:
                         st.session_state['alertas_enviados'].add(id_unico)
                         st.toast(f"Sinal: {sinal['tag']}")
         
-        # --- AQUI É ONDE USAMOS O NOME COM ÍCONE ---
         radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
     if candidatos_multipla:
@@ -757,7 +757,7 @@ if ROBO_LIGADO:
             if radar: 
                 df_radar = pd.DataFrame(radar).astype(str)
                 # --- FORÇA A ORDEM DAS COLUNAS AQUI ---
-                df_radar = df_radar[['Liga', 'Jogo', 'Tempo', 'Status']]
+                df_radar = df_radar[['Liga', 'Jogo', 'Tempo', 'Status']] 
                 st.dataframe(df_radar, use_container_width=True, hide_index=True)
             else: st.info("Buscando jogos...")
         with abas[1]: 
