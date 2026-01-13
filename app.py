@@ -568,8 +568,7 @@ if ROBO_LIGADO:
             rank_h = ranking.get(home); rank_a = ranking.get(away)
             if rank_h and rank_a: tem_tabela = True
             
-            if rank_h: home = f"{home} ({rank_h}º)"
-            if rank_a: away = f"{away} ({rank_a}º)"
+            # (Rank removido do nome por solicitação, mas mantido na lógica interna acima)
 
         tempo_espera = 180 
         if 69 <= tempo <= 76: tempo_espera = 60 
