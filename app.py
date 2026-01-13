@@ -312,7 +312,7 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
         msg_final += "\n\n⚠️ Fique atento aos sinais durante esses jogos! O Robô já está monitorando. 🚀"
         enviar_telegram(token, chat_ids, msg_final)
         
-        # --- CORREÇÃO: Só marca enviado se houver matches ---
+        # Só marca se realmente encontrou e enviou
         st.session_state[chave] = True 
 
 def enviar_relatorio_bi(token, chat_ids):
@@ -436,6 +436,7 @@ def reenviar_sinais(token, chats):
         enviar_telegram(token, chats, msg); time.sleep(0.5)
 
 # --- 6. CORE ---
+# Inicialização das variáveis de sessão
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
@@ -753,7 +754,11 @@ if ROBO_LIGADO:
         abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"📜 Histórico ({len(hist_hoje)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({len(st.session_state['df_safe'])})", f"⚠️ Obs ({len(st.session_state.get('df_vip', []))})"])
         
         with abas[0]: 
-            if radar: st.dataframe(pd.DataFrame(radar).astype(str), use_container_width=True, hide_index=True)
+            if radar: 
+                df_radar = pd.DataFrame(radar).astype(str)
+                # --- FORÇA A ORDEM DAS COLUNAS AQUI ---
+                df_radar = df_radar[['Liga', 'Jogo', 'Tempo', 'Status']]
+                st.dataframe(df_radar, use_container_width=True, hide_index=True)
             else: st.info("Buscando jogos...")
         with abas[1]: 
             if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
