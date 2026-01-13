@@ -288,14 +288,28 @@ def enviar_relatorio_bi(token, chat_ids, tipo="Dia"):
 
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0; ga = jogo_api['goals']['away'] or 0
+    status = jogo_api['fixture']['status']['short']
     if "Múltipla" in sinal['Estrategia']: return False
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
+
+    # --- LÓGICA ESPECÍFICA PARA JOGO MORNO (UNDER 1.5 HT) ---
+    if sinal['Estrategia'] == "❄️ Jogo Morno":
+        if (gh + ga) >= 2:
+            sinal['Resultado'] = '❌ RED'
+            msg = f"❌ <b>RED | FUROU O UNDER</b>\n\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {sinal['Estrategia']}"
+            enviar_telegram(token, chats, msg); return True
+        if status == 'HT' and (gh + ga) <= 1:
+            sinal['Resultado'] = '✅ GREEN'
+            msg = f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📉 Placar HT: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']} (Bateu Under 1.5)"
+            enviar_telegram(token, chats, msg); return True
+        return False
+
+    # --- LÓGICA PADRÃO (OVER GOLS) ---
     if (gh+ga) > (ph+pa):
         sinal['Resultado'] = '✅ GREEN'
         msg = f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar Atual: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}"
         enviar_telegram(token, chats, msg); return True
-    status = jogo_api['fixture']['status']['short']
     if status in ['FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
         msg = f"❌ <b>RED | ENCERRADO</b>\n\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {sinal['Estrategia']}"
