@@ -498,7 +498,7 @@ def momentum(fid, sog_h, sog_a):
 def deve_buscar_stats(tempo, gh, ga, status):
     if 5 <= tempo <= 15: return True
     if tempo <= 30 and (gh + ga) >= 2: return True
-    if 70 <= tempo <= 85 and abs(gh - ga) <= 1: return True # Aumentei aqui para 85 para pegar a Golden
+    if 70 <= tempo <= 85 and abs(gh - ga) <= 1: return True
     if tempo <= 60 and abs(gh - ga) <= 1: return True
     if status == 'HT' and gh == 0 and ga == 0: return True
     return False
@@ -550,12 +550,9 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
                 SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": txt_stats})
             
-            # --- Jogo Morno: Apenas entre 15 e 16 minutos ---
             if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: 
                 SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
 
-    # --- LÓGICA DO SINAL DE OURO (GOLDEN BET) ---
-    # Critério: 75-85min + Placar Apertado + Pressão Extrema
     if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
         if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8:
              SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit)", "stats": "🔥 Pressão Máxima"})
@@ -705,7 +702,6 @@ if ROBO_LIGADO:
                     if adicionar_historico(item):
                         prob_msg = buscar_inteligencia(sinal['tag'], j['league']['name'], f"{home} x {away}")
                         
-                        # --- CABEÇALHO DIFERENCIADO PARA O SINAL DE OURO ---
                         header_msg = "🚨 SINAL ENCONTRADO 🚨"
                         if "GOLDEN" in sinal['tag']:
                             header_msg = "💎 SINAL DE OURO 💎"
@@ -737,7 +733,6 @@ if ROBO_LIGADO:
                         agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": p['league']['name'], "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
             except: pass
 
-    # RELATORIO AUTOMÁTICO 23:59
     hora_atual = get_time_br().hour
     if hora_atual >= 23:
         arquivo_hoje = get_time_br().strftime('%Y-%m-%d')
@@ -746,7 +741,6 @@ if ROBO_LIGADO:
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT)
             st.session_state[chave_relatorio] = True
 
-    # DISPLAY
     dashboard_placeholder = st.empty()
     with dashboard_placeholder.container():
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
@@ -775,7 +769,6 @@ if ROBO_LIGADO:
             if not hist_hoje.empty: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
-        # --- AQUI ESTÁ A NOVA SEÇÃO DE BI ---
         with abas[3]: 
             st.markdown("### 📊 Inteligência de Mercado")
             df_bi = st.session_state.get('historico_full', pd.DataFrame())
@@ -798,7 +791,6 @@ if ROBO_LIGADO:
                     m1.metric("Sinais", tot_bi); m2.metric("Greens", greens_bi); m3.metric("Reds", reds_bi); m4.metric("Assertividade", f"{wr_bi:.1f}%")
                     st.divider()
                     
-                    # GRÁFICO 1: Performance por Estratégia
                     stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                     if not stats_strat.empty:
                         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
@@ -808,10 +800,8 @@ if ROBO_LIGADO:
                         fig.update_layout(xaxis_title=None, yaxis_title=None, template="plotly_dark")
                         st.plotly_chart(fig, use_container_width=True)
 
-                    # --- NOVA SEÇÃO: RAIO-X POR JOGO (VOLUME) ---
                     st.markdown("### ⚽ Raio-X por Jogo (Volume de Sinais)")
                     
-                    # Calcula quantos sinais cada jogo teve
                     sinais_por_jogo = df_show['Jogo'].value_counts()
                     media_sinais = sinais_por_jogo.mean()
                     max_sinais = sinais_por_jogo.max()
@@ -821,9 +811,12 @@ if ROBO_LIGADO:
                     c_vol2.metric("Média Sinais/Jogo", f"{media_sinais:.1f}")
                     c_vol3.metric("Máx Sinais num Jogo", max_sinais)
                     
-                    # Gráfico de Distribuição (Quantos jogos tiveram 1, 2, 3 sinais...)
-                    distribuicao = sinais_por_jogo.value_counts().sort_index().reset_index()
-                    distribuicao.columns = ['Qtd Sinais', 'Qtd Jogos']
+                    distribuicao = (
+                        sinais_por_jogo.value_counts()
+                        .sort_index()
+                        .rename_axis('Qtd Sinais')
+                        .reset_index(name='Qtd Jogos')
+                    )
                     
                     fig_vol = px.bar(distribuicao, x='Qtd Sinais', y='Qtd Jogos', 
                                      title="Distribuição: Quantos sinais por partida?",
@@ -832,10 +825,8 @@ if ROBO_LIGADO:
                     fig_vol.update_layout(template="plotly_dark", xaxis_title="Número de Sinais", yaxis_title="Quantidade de Jogos")
                     st.plotly_chart(fig_vol, use_container_width=True)
                     
-                    # Tabela detalhada dos jogos com mais volume
                     st.caption("📋 Detalhe dos Jogos com Mais Sinais")
                     
-                    # Agrupa para mostrar Greens/Reds por jogo
                     detalhe_jogo = df_show.groupby('Jogo')['Resultado'].value_counts().unstack(fill_value=0)
                     detalhe_jogo['Total'] = detalhe_jogo.sum(axis=1)
                     if '✅ GREEN' not in detalhe_jogo.columns: detalhe_jogo['✅ GREEN'] = 0
@@ -845,7 +836,6 @@ if ROBO_LIGADO:
                     st.dataframe(detalhe_final.head(10), use_container_width=True)
                     
                     st.divider()
-                    # --------------------------------------------
 
                     cb1, cb2 = st.columns(2)
                     with cb1:
