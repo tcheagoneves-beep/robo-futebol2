@@ -242,7 +242,6 @@ def update_api_usage(headers):
         st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
     except: pass
 
-# --- FUNÇÕES QUE FALTAVAM (RESTAURADAS AQUI) ---
 @st.cache_data(ttl=86400)
 def buscar_ranking(api_key, league_id, season):
     try:
@@ -261,7 +260,6 @@ def buscar_agenda_cached(api_key, date_str):
         url = "https://v3.football.api-sports.io/fixtures"
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
-# -----------------------------------------------
 
 # --- 4. INTELIGÊNCIA ---
 def buscar_inteligencia(estrategia, liga, jogo):
@@ -412,34 +410,56 @@ def enviar_relatorio_bi(token, chat_ids):
     if df.empty: return
     try:
         df['Data_DT'] = pd.to_datetime(df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip(), errors='coerce')
+        # Mantém a limpeza para o gráfico e métricas funcionarem corretamente
         df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
     except: return
     
     hoje = pd.to_datetime(get_time_br().date())
-    m_d = df['Data_DT'] == hoje
-    m_s = df['Data_DT'] >= (hoje - timedelta(days=7))
-    m_m = df['Data_DT'] >= (hoje - timedelta(days=30))
+    mask_dia = df['Data_DT'] == hoje
+    mask_sem = df['Data_DT'] >= (hoje - timedelta(days=7))
+    mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
     
     def cm(d):
         g = d['Resultado'].str.contains('GREEN').sum(); r = d['Resultado'].str.contains('RED').sum()
         tot = g+r; wr = (g/tot*100) if tot>0 else 0
         return tot, g, r, wr
 
-    t_d, g_d, r_d, w_d = cm(df[m_d]); t_s, g_s, r_s, w_s = cm(df[m_s])
-    t_m, g_m, r_m, w_m = cm(df[m_m]); t_a, g_a, r_a, w_a = cm(df)
+    t_d, g_d, r_d, w_d = cm(df[mask_dia])
+    t_s, g_s, r_s, w_s = cm(df[mask_sem])
+    t_m, g_m, r_m, w_m = cm(df[mask_mes])
+    t_a, g_a, r_a, w_a = cm(df)
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
-    stats = df[m_m][df[m_m]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+    stats = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats.empty:
         c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
         c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
-        ax.set_title(f'PERFORMANCE 30 DIAS (WR: {w_m:.1f}%)', color='white')
-        ax.set_xlabel(''); ax.tick_params(axis='x', rotation=45, colors='#ccc')
-        ax.legend(title='', frameon=False)
+        ax.set_title(f'PERFORMANCE 30 DIAS (WR: {w_m:.1f}%)', color='white', fontsize=12, pad=15)
+        ax.set_xlabel(''); ax.tick_params(axis='x', rotation=45, labelsize=9, colors='#cccccc')
+        ax.grid(axis='y', linestyle='--', alpha=0.2)
+        ax.legend(title='', frameon=False, loc='upper right')
+        for spine in ax.spines.values(): spine.set_visible(False)
         plt.tight_layout()
-        buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
-        msg = f"📊 <b>RELATÓRIO BI</b>\n\n📆 <b>HOJE:</b> {t_d} (WR: {w_d:.1f}%)\n📅 <b>7 DIAS:</b> {t_s} (WR: {w_s:.1f}%)\n🗓️ <b>30 DIAS:</b> {t_m} (WR: {w_m:.1f}%)\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
+        buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, bbox_inches='tight', facecolor='#0E1117'); buf.seek(0)
+        
+        msg = f"""📊 <b>RELATÓRIO BI (ACUMULADO)</b>
+
+📆 <b>HOJE</b>
+🎯 {t_d} Sinais | ✅ {g_d} | ❌ {r_d}
+💰 Assertividade: <b>{w_d:.1f}%</b>
+
+📅 <b>7 DIAS</b>
+🎯 {t_s} Sinais | ✅ {g_s} | ❌ {r_s}
+💰 Assertividade: <b>{w_s:.1f}%</b>
+
+🗓️ <b>30 DIAS</b>
+🎯 {t_m} Sinais | ✅ {g_m} | ❌ {r_m}
+💰 Assertividade: <b>{w_m:.1f}%</b>
+
+♾️ <b>TOTAL GERAL</b>
+🎯 {t_a} Sinais | ✅ {g_a} | ❌ {r_a}
+💰 Assertividade: <b>{w_a:.1f}%</b>"""
         ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
         for cid in ids:
             buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
@@ -809,7 +829,8 @@ if st.session_state.ROBO_LIGADO:
                     elif dias == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (h_bi - timedelta(days=7))]
                     elif dias == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (h_bi - timedelta(days=30))]
                     else: df_show = df_bi
-                else: df_show = df_bi
+                else:
+                    df_show = df_bi
                 
                 if not df_show.empty:
                     gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum()
@@ -823,6 +844,51 @@ if st.session_state.ROBO_LIGADO:
                         cts = st_s.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
                         fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Performance por Estratégia", text='Qtd')
                         fig.update_layout(template="plotly_dark"); st.plotly_chart(fig, use_container_width=True)
+
+                    # --- RESTAURAÇÃO DO VISUAL COMPLETO DO BI ---
+                    st.markdown("### ⚽ Raio-X por Jogo (Volume de Sinais)")
+                    sinais_por_jogo = df_show['Jogo'].value_counts()
+                    c_vol1, c_vol2, c_vol3 = st.columns(3)
+                    c_vol1.metric("Jogos Únicos", len(sinais_por_jogo))
+                    c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
+                    c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
+                    
+                    distribuicao = sinais_por_jogo.value_counts().sort_index().reset_index()
+                    distribuicao.columns = ['Qtd Sinais', 'Qtd Jogos']
+                    fig_vol = px.bar(distribuicao, x='Qtd Sinais', y='Qtd Jogos', text='Qtd Jogos', title="Distribuição: Quantos sinais por partida?", color_discrete_sequence=['#FFD700'])
+                    fig_vol.update_layout(template="plotly_dark"); st.plotly_chart(fig_vol, use_container_width=True)
+                    
+                    st.caption("📋 Detalhe dos Jogos com Mais Sinais")
+                    detalhe = df_show.groupby('Jogo')['Resultado'].value_counts().unstack(fill_value=0)
+                    detalhe['Total'] = detalhe.sum(axis=1)
+                    if '✅ GREEN' not in detalhe: detalhe['✅ GREEN'] = 0
+                    if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
+                    st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
+                    
+                    st.divider()
+                    cb1, cb2 = st.columns(2)
+                    with cb1:
+                        st.caption("🏆 Melhores Ligas")
+                        stats_l = df_show.groupby('Liga')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)*100).reset_index(name='Winrate')
+                        cnt_l = df_show['Liga'].value_counts().reset_index(name='Qtd')
+                        final_l = stats_l.merge(cnt_l, left_on='Liga', right_on='Liga')
+                        st.dataframe(final_l[final_l['Qtd']>=2].sort_values('Winrate', ascending=False).head(5).style.format({'Winrate': '{:.1f}%'}), hide_index=True, use_container_width=True)
+                    with cb2:
+                        st.caption("⚡ Top Estratégias")
+                        stats_e = df_show.groupby('Estrategia')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)*100).reset_index(name='Winrate')
+                        st.dataframe(stats_e.sort_values('Winrate', ascending=False).style.format({'Winrate': '{:.1f}%'}), hide_index=True, use_container_width=True)
+                    
+                    st.divider()
+                    st.markdown("### 👑 Reis do Green (Times que mais lucram)")
+                    df_g = df_show[df_show['Resultado'].str.contains('GREEN')]
+                    lst_t = []
+                    for j in df_g['Jogo']:
+                        try: p = j.split(' x '); lst_t.extend([p[0].strip(), p[1].strip()])
+                        except: pass
+                    if lst_t:
+                        top_r = pd.Series(lst_t).value_counts().reset_index()
+                        top_r.columns = ['Time', 'Qtd Green']
+                        st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
 
         with abas[4]: st.dataframe(st.session_state['df_black'], use_container_width=True, hide_index=True)
         with abas[5]: st.dataframe(st.session_state['df_safe'], use_container_width=True, hide_index=True)
