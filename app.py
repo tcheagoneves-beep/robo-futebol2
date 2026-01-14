@@ -428,7 +428,7 @@ def enviar_relatorio_bi(token, chat_ids):
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
-    stats = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+    stats = df[m_m][df[m_m]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats.empty:
         c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
         c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
@@ -440,23 +440,7 @@ def enviar_relatorio_bi(token, chat_ids):
         plt.tight_layout()
         buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
         
-        msg = f"""📊 <b>RELATÓRIO BI (ACUMULADO)</b>
-
-📆 <b>HOJE</b>
-🎯 {t_d} Sinais | ✅ {g_d} | ❌ {r_d}
-💰 Assertividade: <b>{w_d:.1f}%</b>
-
-📅 <b>7 DIAS</b>
-🎯 {t_s} Sinais | ✅ {g_s} | ❌ {r_s}
-💰 Assertividade: <b>{w_s:.1f}%</b>
-
-🗓️ <b>30 DIAS</b>
-🎯 {t_m} Sinais | ✅ {g_m} | ❌ {r_m}
-💰 Assertividade: <b>{w_m:.1f}%</b>
-
-♾️ <b>TOTAL GERAL</b>
-🎯 {t_a} Sinais | ✅ {g_a} | ❌ {r_a}
-💰 Assertividade: <b>{w_a:.1f}%</b>"""
+        msg = f"📊 <b>RELATÓRIO BI</b>\n\n📆 <b>HOJE:</b> {t_d} (WR: {w_d:.1f}%)\n📅 <b>7 DIAS:</b> {t_s} (WR: {w_s:.1f}%)\n🗓️ <b>30 DIAS:</b> {t_m} (WR: {w_m:.1f}%)\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
         ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
         for cid in ids:
             buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
@@ -693,7 +677,7 @@ if st.session_state.ROBO_LIGADO:
             
         ids_no_radar.append(fid)
         tempo = j['fixture']['status']['elapsed'] or 0
-        st_short = j['fixture']['status']['short']
+        status_short = j['fixture']['status']['short']
         
         home = j['teams']['home']['name']
         away = j['teams']['away']['name']
@@ -711,7 +695,7 @@ if st.session_state.ROBO_LIGADO:
         t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
         ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
         
-        if deve_buscar_stats(tempo, gh, ga, st_short):
+        if deve_buscar_stats(tempo, gh, ga, status_short):
             if (datetime.now() - ult_chk).total_seconds() > t_esp:
                 try:
                     r_st = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}, timeout=5)
@@ -724,7 +708,7 @@ if st.session_state.ROBO_LIGADO:
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
             salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, (rank_h is not None))
-            if st_short == 'HT' and gh == 0 and ga == 0:
+            if status_short == 'HT' and gh == 0 and ga == 0:
                 try:
                     s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
                     v1 = next((x['value'] for x in s1 if x['type']=='Total Shots'), 0) or 0
@@ -736,7 +720,7 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         else: status_vis = "💤"
 
-        if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT': gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
+        if not lista_sinais and not stats and tempo >= 45 and status_short != 'HT': gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
         
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
@@ -841,7 +825,6 @@ if st.session_state.ROBO_LIGADO:
                         fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Performance por Estratégia", text='Qtd')
                         fig.update_layout(template="plotly_dark"); st.plotly_chart(fig, use_container_width=True)
 
-                    # --- RESTAURAÇÃO DO VISUAL COMPLETO DO BI ---
                     st.markdown("### ⚽ Raio-X por Jogo (Volume de Sinais)")
                     sinais_por_jogo = df_show['Jogo'].value_counts()
                     c_vol1, c_vol2, c_vol3 = st.columns(3)
@@ -849,11 +832,10 @@ if st.session_state.ROBO_LIGADO:
                     c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
                     c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
                     
-                    # Correção da linha problemática do reset_index
                     vc = sinais_por_jogo.sort_index()
-                    distribuicao = pd.DataFrame({'Qtd Sinais': vc.index, 'Qtd Jogos': vc.values})
+                    distribuicao_freq = pd.DataFrame({'Qtd Sinais': vc.index, 'Qtd Jogos': vc.values})
                     
-                    fig_vol = px.bar(distribuicao, x='Qtd Sinais', y='Qtd Jogos', text='Qtd Jogos', title="Distribuição: Quantos sinais por partida?", color_discrete_sequence=['#FFD700'])
+                    fig_vol = px.bar(distribuicao_freq, x='Qtd Sinais', y='Qtd Jogos', text='Qtd Jogos', title="Distribuição: Quantos sinais por partida?", color_discrete_sequence=['#FFD700'])
                     fig_vol.update_layout(template="plotly_dark"); st.plotly_chart(fig_vol, use_container_width=True)
                     
                     st.caption("📋 Detalhe dos Jogos com Mais Sinais")
