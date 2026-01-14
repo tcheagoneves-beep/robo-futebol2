@@ -677,7 +677,7 @@ if st.session_state.ROBO_LIGADO:
             
         ids_no_radar.append(fid)
         tempo = j['fixture']['status']['elapsed'] or 0
-        st_short = j['fixture']['status']['short']
+        status_short = j['fixture']['status']['short']
         
         home = j['teams']['home']['name']
         away = j['teams']['away']['name']
@@ -695,7 +695,7 @@ if st.session_state.ROBO_LIGADO:
         t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
         ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
         
-        if deve_buscar_stats(tempo, gh, ga, st_short):
+        if deve_buscar_stats(tempo, gh, ga, status_short):
             if (datetime.now() - ult_chk).total_seconds() > t_esp:
                 try:
                     r_st = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}, timeout=5)
@@ -708,7 +708,7 @@ if st.session_state.ROBO_LIGADO:
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
             salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, (rank_h is not None))
-            if st_short == 'HT' and gh == 0 and ga == 0:
+            if status_short == 'HT' and gh == 0 and ga == 0:
                 try:
                     s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
                     v1 = next((x['value'] for x in s1 if x['type']=='Total Shots'), 0) or 0
@@ -720,7 +720,7 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         else: status_vis = "💤"
 
-        if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT': gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
+        if not lista_sinais and not stats and tempo >= 45 and status_short != 'HT': gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
         
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
@@ -832,13 +832,10 @@ if st.session_state.ROBO_LIGADO:
                     c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
                     c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
                     
-                    # --- CORREÇÃO DO GRÁFICO DE FREQUÊNCIA (SEM NOME DE TIMES NO EIXO X) ---
-                    # Conta a frequência (quantos jogos tiveram 1 sinal, quantos tiveram 2, etc.)
-                    freq = sinais_por_jogo.value_counts().sort_index().reset_index()
-                    freq.columns = ['Qtd Sinais', 'Qtd Jogos']
+                    vc = sinais_por_jogo.sort_index()
+                    distribuicao_freq = pd.DataFrame({'Qtd Sinais': vc.index, 'Qtd Jogos': vc.values})
                     
-                    # Usa essa tabela agregada para plotar, garantindo que o eixo X seja numérico (1, 2, 3...)
-                    fig_vol = px.bar(freq, x='Qtd Sinais', y='Qtd Jogos', 
+                    fig_vol = px.bar(distribuicao_freq, x='Qtd Sinais', y='Qtd Jogos', 
                                      text='Qtd Jogos', 
                                      title="Distribuição: Quantos sinais por partida?", 
                                      color_discrete_sequence=['#FFD700'])
