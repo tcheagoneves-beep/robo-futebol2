@@ -794,3 +794,22 @@ if st.session_state.ROBO_LIGADO:
                     tt = gr+rd; ww = (gr/tt*100) if tt>0 else 0
                     m1, m2, m3, m4 = st.columns(4)
                     m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
+                    st.divider()
+                    
+                    st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                    if not st_s.empty:
+                        cts = st_s.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
+                        fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Performance por Estratégia", text='Qtd')
+                        fig.update_layout(template="plotly_dark"); st.plotly_chart(fig, use_container_width=True)
+
+        with abas[4]: st.dataframe(st.session_state['df_black'], use_container_width=True, hide_index=True)
+        with abas[5]: st.dataframe(st.session_state['df_safe'], use_container_width=True, hide_index=True)
+        with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()), use_container_width=True, hide_index=True)
+
+    relogio = st.empty()
+    for i in range(INTERVALO, 0, -1):
+        relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True); time.sleep(1)
+    st.rerun()
+else:
+    st.title("❄️ Neves Analytics")
+    st.info("💡 Robô em espera. Configure na lateral.")
