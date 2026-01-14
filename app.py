@@ -498,7 +498,7 @@ def momentum(fid, sog_h, sog_a):
 def deve_buscar_stats(tempo, gh, ga, status):
     if 5 <= tempo <= 15: return True
     if tempo <= 30 and (gh + ga) >= 2: return True
-    if 70 <= tempo <= 75 and abs(gh - ga) <= 1: return True
+    if 70 <= tempo <= 85 and abs(gh - ga) <= 1: return True # Aumentei aqui para 85 para pegar a Golden
     if tempo <= 60 and abs(gh - ga) <= 1: return True
     if status == 'HT' and gh == 0 and ga == 0: return True
     return False
@@ -550,9 +550,15 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
                 SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": txt_stats})
             
-            # --- CORREÇÃO FEITA AQUI: SÓ DISPARA ENTRE 15 e 16 MINUTOS ---
+            # --- Jogo Morno: Apenas entre 15 e 16 minutos ---
             if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: 
                 SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
+
+    # --- LÓGICA DO SINAL DE OURO (GOLDEN BET) ---
+    # Critério: 75-85min + Placar Apertado + Pressão Extrema
+    if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
+        if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8:
+             SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit)", "stats": "🔥 Pressão Máxima"})
                 
     return SINAIS
 
@@ -619,9 +625,8 @@ if ROBO_LIGADO:
         verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) 
 
     radar = []; ids_black = st.session_state['df_black']['id'].values
-    
-    # --- NOVAS VARIÁVEIS PARA OS ÍCONES ---
     ids_safe = st.session_state['df_safe']['id'].values
+    
     df_vip_temp = st.session_state.get('df_vip', pd.DataFrame())
     ids_obs = df_vip_temp['id'].values if not df_vip_temp.empty and 'id' in df_vip_temp.columns else []
     
@@ -631,12 +636,11 @@ if ROBO_LIGADO:
         lid = str(j['league']['id']); fid = j['fixture']['id']
         if lid in ids_black: continue
         
-        # --- LÓGICA VISUAL DA LIGA ---
         nome_liga_show = j['league']['name']
         if lid in ids_safe:
-            nome_liga_show += " 🛡️"  # Ícone para Segura/Validada
+            nome_liga_show += " 🛡️"
         elif lid in ids_obs:
-            nome_liga_show += " ⚠️"  # Ícone para Observação/Strike
+            nome_liga_show += " ⚠️"
             
         ids_no_radar.append(fid)
         tempo = j['fixture']['status']['elapsed'] or 0
@@ -701,7 +705,12 @@ if ROBO_LIGADO:
                     if adicionar_historico(item):
                         prob_msg = buscar_inteligencia(sinal['tag'], j['league']['name'], f"{home} x {away}")
                         
-                        msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 <b>{sinal['tag'].upper()}</b>\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>{prob_msg}"
+                        # --- CABEÇALHO DIFERENCIADO PARA O SINAL DE OURO ---
+                        header_msg = "🚨 SINAL ENCONTRADO 🚨"
+                        if "GOLDEN" in sinal['tag']:
+                            header_msg = "💎 SINAL DE OURO 💎"
+                            
+                        msg = f"<b>{header_msg}</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 <b>{sinal['tag'].upper()}</b>\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>{prob_msg}"
                         enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                         st.session_state['alertas_enviados'].add(id_unico)
                         st.toast(f"Sinal: {sinal['tag']}")
@@ -756,7 +765,6 @@ if ROBO_LIGADO:
         with abas[0]: 
             if radar: 
                 df_radar = pd.DataFrame(radar).astype(str)
-                # --- FORÇA A ORDEM DAS COLUNAS AQUI ---
                 df_radar = df_radar[['Liga', 'Jogo', 'Tempo', 'Status']] 
                 st.dataframe(df_radar, use_container_width=True, hide_index=True)
             else: st.info("Buscando jogos...")
@@ -767,6 +775,7 @@ if ROBO_LIGADO:
             if not hist_hoje.empty: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
+        # --- AQUI ESTÁ A NOVA SEÇÃO DE BI ---
         with abas[3]: 
             st.markdown("### 📊 Inteligência de Mercado")
             df_bi = st.session_state.get('historico_full', pd.DataFrame())
@@ -789,6 +798,7 @@ if ROBO_LIGADO:
                     m1.metric("Sinais", tot_bi); m2.metric("Greens", greens_bi); m3.metric("Reds", reds_bi); m4.metric("Assertividade", f"{wr_bi:.1f}%")
                     st.divider()
                     
+                    # GRÁFICO 1: Performance por Estratégia
                     stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                     if not stats_strat.empty:
                         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
@@ -797,6 +807,45 @@ if ROBO_LIGADO:
                                      title="Performance por Estratégia", text='Qtd')
                         fig.update_layout(xaxis_title=None, yaxis_title=None, template="plotly_dark")
                         st.plotly_chart(fig, use_container_width=True)
+
+                    # --- NOVA SEÇÃO: RAIO-X POR JOGO (VOLUME) ---
+                    st.markdown("### ⚽ Raio-X por Jogo (Volume de Sinais)")
+                    
+                    # Calcula quantos sinais cada jogo teve
+                    sinais_por_jogo = df_show['Jogo'].value_counts()
+                    media_sinais = sinais_por_jogo.mean()
+                    max_sinais = sinais_por_jogo.max()
+                    
+                    c_vol1, c_vol2, c_vol3 = st.columns(3)
+                    c_vol1.metric("Jogos Únicos", len(sinais_por_jogo))
+                    c_vol2.metric("Média Sinais/Jogo", f"{media_sinais:.1f}")
+                    c_vol3.metric("Máx Sinais num Jogo", max_sinais)
+                    
+                    # Gráfico de Distribuição (Quantos jogos tiveram 1, 2, 3 sinais...)
+                    distribuicao = sinais_por_jogo.value_counts().sort_index().reset_index()
+                    distribuicao.columns = ['Qtd Sinais', 'Qtd Jogos']
+                    
+                    fig_vol = px.bar(distribuicao, x='Qtd Sinais', y='Qtd Jogos', 
+                                     title="Distribuição: Quantos sinais por partida?",
+                                     text='Qtd Jogos',
+                                     color_discrete_sequence=['#FFD700'])
+                    fig_vol.update_layout(template="plotly_dark", xaxis_title="Número de Sinais", yaxis_title="Quantidade de Jogos")
+                    st.plotly_chart(fig_vol, use_container_width=True)
+                    
+                    # Tabela detalhada dos jogos com mais volume
+                    st.caption("📋 Detalhe dos Jogos com Mais Sinais")
+                    
+                    # Agrupa para mostrar Greens/Reds por jogo
+                    detalhe_jogo = df_show.groupby('Jogo')['Resultado'].value_counts().unstack(fill_value=0)
+                    detalhe_jogo['Total'] = detalhe_jogo.sum(axis=1)
+                    if '✅ GREEN' not in detalhe_jogo.columns: detalhe_jogo['✅ GREEN'] = 0
+                    if '❌ RED' not in detalhe_jogo.columns: detalhe_jogo['❌ RED'] = 0
+                    
+                    detalhe_final = detalhe_jogo[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False)
+                    st.dataframe(detalhe_final.head(10), use_container_width=True)
+                    
+                    st.divider()
+                    # --------------------------------------------
 
                     cb1, cb2 = st.columns(2)
                     with cb1:
