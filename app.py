@@ -445,32 +445,59 @@ def enviar_relatorio_bi(token, chat_ids):
             buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
         plt.close(fig)
 
+# --- PROCESSAMENTO DE RESULTADOS (COM CORREÇÃO PARA HT) ---
 def processar_resultado(sinal, jogo_api, token, chats):
-    gh = jogo_api['goals']['home'] or 0; ga = jogo_api['goals']['away'] or 0
+    gh = jogo_api['goals']['home'] or 0
+    ga = jogo_api['goals']['away'] or 0
     st_short = jogo_api['fixture']['status']['short']
+    
+    # Lista de estratégias que SÓ valem para o 1º Tempo
+    STRATS_ONLY_HT = [
+        "Gol Relâmpago", 
+        "Massacre", 
+        "Choque Líderes", 
+        "Briga de Rua", 
+        "Jogo Morno"
+    ]
+
     if "Múltipla" in sinal['Estrategia']: return False
+    
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
+    # --- LÓGICA ESPECÍFICA: JOGO MORNO (Under) ---
     if sinal['Estrategia'] == "❄️ Jogo Morno":
         if (gh + ga) >= 2:
             sinal['Resultado'] = '❌ RED'
             enviar_telegram(token, chats, f"❌ <b>RED | FUROU O UNDER</b>\n\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
             return True
-        if st_short == 'HT' and (gh + ga) <= 1:
-            sinal['Resultado'] = '✅ GREEN'
-            enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📉 Placar HT: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']} (Bateu Under 1.5)")
-            return True
+        if st_short in ['HT', '2H', 'FT'] and (gh + ga) <= 1:
+            if sinal['Resultado'] == 'Pendente':
+                sinal['Resultado'] = '✅ GREEN'
+                enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📉 Placar: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']} (Bateu Under 1.5 HT)")
+                return True
         return False
 
+    # --- VERIFICAÇÃO DE GREEN (Geral) ---
     if (gh+ga) > (ph+pa):
         sinal['Resultado'] = '✅ GREEN'
         enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar Atual: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
         return True
+
+    # --- NOVA LÓGICA: MATAR ESTRATÉGIAS HT NO 2º TEMPO ---
+    eh_estrategia_ht = any(nome in sinal['Estrategia'] for nome in STRATS_ONLY_HT)
+    
+    if eh_estrategia_ht and st_short in ['2H', 'FT', 'AET', 'PEN', 'ABD']:
+        sinal['Resultado'] = '❌ RED'
+        enviar_telegram(token, chats, f"❌ <b>RED | FIM DO 1º TEMPO</b>\n\n⚽ {sinal['Jogo']}\n📉 Placar HT: {gh}x{ga}\n🎯 {sinal['Estrategia']} (Não bateu no HT)")
+        return True
+
+    # --- VERIFICAÇÃO DE RED FINAL ---
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
         enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
         return True
+        
     return False
 
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
@@ -492,16 +519,14 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             if processar_resultado(s, jogo_encontrado, token, chats): atualizou = True
     if atualizou: atualizar_historico_ram_disk(hist)
 
-# --- NOVA FUNÇÃO ANTI-VAR (Correção de Gol Anulado) ---
+# --- FUNÇÃO ANTI-VAR (Correção de Gol Anulado) ---
 def verificar_var_rollback(jogos_live, token, chats):
     hist = st.session_state['historico_sinais']
-    # Filtra apenas os que já deram Green
     greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
     if not greens: return
 
     atualizou = False
     for s in greens:
-        # Se for Jogo Morno, gol anulado ajuda (mantém o under), então ignora
         if "Morno" in s['Estrategia']: continue
 
         fid = int(clean_fid(s.get('FID', 0)))
@@ -513,12 +538,9 @@ def verificar_var_rollback(jogos_live, token, chats):
             
             try:
                 ph, pa = map(int, s['Placar_Sinal'].split('x'))
-                # LÓGICA ANTI-VAR:
-                # Se a soma de gols atual for MENOR ou IGUAL à soma do placar do sinal,
-                # significa que o gol que deu o Green foi anulado.
                 if (gh + ga) <= (ph + pa):
                     s['Resultado'] = 'Pendente'
-                    s['Placar_Sinal'] = f"{gh}x{ga}" # Atualiza placar para o real
+                    s['Placar_Sinal'] = f"{gh}x{ga}" 
                     atualizou = True
                     
                     msg = (f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n\n"
@@ -622,7 +644,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
                 SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats})
             
-            # ❄️ Jogo Morno (CORRIGIDO: >= 10, conforme solicitado)
+            # ❄️ Jogo Morno (>= 10)
             is_bot_home_morno = rank_home >= 10
             is_bot_away_morno = rank_away >= 10
             if is_bot_home_morno and is_bot_away_morno:
@@ -698,9 +720,8 @@ if st.session_state.ROBO_LIGADO:
 
     if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
     else: 
-        # --- VERIFICAÇÕES DE RESULTADO E VAR ---
         check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
-        verificar_var_rollback(jogos_live, TG_TOKEN, TG_CHAT) # <--- NOVA CHAMADA AQUI
+        verificar_var_rollback(jogos_live, TG_TOKEN, TG_CHAT)
         verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) 
 
     radar = []; alvos = st.session_state.get('alvos_do_dia', {})
