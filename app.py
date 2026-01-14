@@ -248,7 +248,7 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
-# --- RADAR MATINAL (REIS DO GREEN + ESTRATÉGIA) ---
+# --- RADAR MATINAL INTELIGENTE (FILTRO DE LUCRATIVIDADE) ---
 def verificar_alerta_matinal(token, chat_ids, api_key):
     # Envia entre 08:00 e 12:00 uma vez por dia
     agora = get_time_br()
@@ -261,7 +261,7 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
-    # 1. Identifica Top Times Lucrativos
+    # 1. Identifica Top Times Lucrativos (Geral)
     df_green = df[df['Resultado'].str.contains('GREEN', na=False)]
     times_lucrativos = []
     for jogo in df_green['Jogo']:
@@ -279,6 +279,10 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     jogos_hoje = buscar_agenda_cached(api_key, hoje_str)
     if not jogos_hoje: return
     
+    # --- MEMÓRIA DE ALVOS (HEADSHOT) ---
+    # Se não existir, cria a lista de alvos para o dia
+    if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
+
     # 3. Match e Melhor Estratégia
     matches = []
     for jogo in jogos_hoje:
@@ -294,22 +298,37 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             elif t2 in lista_top: time_foco = t2
             
             if time_foco:
-                greens = top_times[time_foco]
+                greens_total = top_times[time_foco]
                 
-                # Busca estratégia favorita
-                df_time = df_green[df_green['Jogo'].str.contains(time_foco, na=False)]
-                best_strat = "Geral"
-                if not df_time.empty:
-                    best_strat = df_time['Estrategia'].value_counts().idxmax()
+                # Busca melhor estratégia
+                df_time_all = df[df['Jogo'].str.contains(time_foco, na=False)]
+                melhor_strat = "Geral"
+                melhor_wr = 0
                 
-                motivo = f"🔥 Motivo: O {time_foco} vem de {greens} Greens acumulados! (Forte em: <b>{best_strat}</b>)"
+                if not df_time_all.empty:
+                    strats = df_time_all.groupby('Estrategia')
+                    for nome_strat, dados in strats:
+                        if len(dados) >= 2:
+                            g = dados['Resultado'].str.contains('GREEN').sum()
+                            wr = (g / len(dados)) * 100
+                            if wr > melhor_wr:
+                                melhor_wr = wr
+                                melhor_strat = nome_strat
+                
+                if melhor_wr > 60:
+                    motivo = f"🔥 <b>Oportunidade Sniper:</b> O {time_foco} tem histórico de <b>{melhor_wr:.0f}% de acerto</b> na estratégia <b>{melhor_strat}</b>!"
+                    # SALVA NA MEMÓRIA PARA O HEADSHOT MAIS TARDE
+                    st.session_state['alvos_do_dia'][time_foco] = melhor_strat
+                else:
+                    motivo = f"💰 <b>Volume:</b> O {time_foco} é uma máquina de Greens ({greens_total} acumulados). Fique atento a qualquer sinal!"
+
                 matches.append(f"⏰ {hora} | {pais} {liga}\n⚽ {t1} 🆚 {t2}\n{motivo}")
         except: pass
             
     if matches:
-        msg_final = "🌅 <b>BOM DIA! RADAR DE OPORTUNIDADES</b>\nHoje tem jogo dos seus times mais lucrativos:\n\n"
+        msg_final = "🌅 <b>BOM DIA! RADAR DE OPORTUNIDADES</b>\n\n"
         msg_final += "\n\n".join(matches)
-        msg_final += "\n\n⚠️ Fique atento aos sinais durante esses jogos! O Robô já está monitorando. 🚀"
+        msg_final += "\n\n⚠️ <i>Dica: Se o robô mandar o sinal sugerido acima, a chance de Green é estatisticamente maior!</i> 🚀"
         enviar_telegram(token, chat_ids, msg_final)
         
     st.session_state[chave] = True 
@@ -442,6 +461,7 @@ if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_env
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {} 
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
+if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 
 carregar_tudo()
 
@@ -451,6 +471,8 @@ def verificar_reset_diario():
     if st.session_state['data_api_usage'] != hoje_utc:
         st.session_state['api_usage']['used'] = 0
         st.session_state['data_api_usage'] = hoje_utc
+        # Reseta os alvos do dia também para não misturar
+        st.session_state['alvos_do_dia'] = {}
         return True
     return False
 
@@ -627,6 +649,9 @@ if ROBO_LIGADO:
     df_vip_temp = st.session_state.get('df_vip', pd.DataFrame())
     ids_obs = df_vip_temp['id'].values if not df_vip_temp.empty and 'id' in df_vip_temp.columns else []
     
+    # Carrega os alvos do dia (Headshots)
+    alvos = st.session_state.get('alvos_do_dia', {})
+    
     candidatos_multipla = []; ids_no_radar = [] 
 
     for j in jogos_live:
@@ -702,11 +727,23 @@ if ROBO_LIGADO:
                     if adicionar_historico(item):
                         prob_msg = buscar_inteligencia(sinal['tag'], j['league']['name'], f"{home} x {away}")
                         
-                        header_msg = "🚨 SINAL ENCONTRADO 🚨"
-                        if "GOLDEN" in sinal['tag']:
+                        # --- VERIFICA SE É HEADSHOT (PREVISTO DE MANHÃ) ---
+                        eh_headshot = False
+                        if home in alvos and alvos[home] == sinal['tag']: eh_headshot = True
+                        if away in alvos and alvos[away] == sinal['tag']: eh_headshot = True
+                        
+                        # Define cabeçalho
+                        if eh_headshot:
+                            header_msg = "🎯 HEADSHOT | PREVISÃO CONFIRMADA 🎯"
+                            tag_extra = f"\n🔥 {sinal['tag'].upper()} *(Validado pelo Relatório Matinal)*"
+                        elif "GOLDEN" in sinal['tag']:
                             header_msg = "💎 SINAL DE OURO 💎"
+                            tag_extra = f"\n🔥 {sinal['tag'].upper()}"
+                        else:
+                            header_msg = "🚨 SINAL ENCONTRADO 🚨"
+                            tag_extra = f"\n🔥 {sinal['tag'].upper()}"
                             
-                        msg = f"<b>{header_msg}</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 <b>{sinal['tag'].upper()}</b>\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>{prob_msg}"
+                        msg = f"<b>{header_msg}</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n{tag_extra}\n⚠️ <b>AÇÃO:</b> {sinal['ordem']}\n\n📊 <i>Dados: {sinal['stats']}</i>{prob_msg}"
                         enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                         st.session_state['alertas_enviados'].add(id_unico)
                         st.toast(f"Sinal: {sinal['tag']}")
@@ -841,12 +878,15 @@ if ROBO_LIGADO:
                     with cb1:
                         st.caption("🏆 Melhores Ligas")
                         stats = df_show.groupby('Liga')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum() / len(x) * 100).reset_index(name='Winrate')
+                        stats['Winrate'] = stats['Winrate'].round(2)
+                        
                         counts = df_show['Liga'].value_counts().reset_index(name='Qtd')
                         final = stats.merge(counts, left_on='Liga', right_on='Liga')
                         st.dataframe(final[final['Qtd'] >= 2].sort_values('Winrate', ascending=False).head(5), hide_index=True, use_container_width=True)
                     with cb2:
                         st.caption("⚡ Top Estratégias")
                         stats_s = df_show.groupby('Estrategia')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum() / len(x) * 100).reset_index(name='Winrate')
+                        stats_s['Winrate'] = stats_s['Winrate'].round(2)
                         st.dataframe(stats_s.sort_values('Winrate', ascending=False), hide_index=True, use_container_width=True)
                     
                     st.divider()
