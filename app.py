@@ -42,19 +42,27 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* CSS APRIMORADO PARA BOTÕES */
+    /* CSS CORRIGIDO PARA BOTÕES LADO A LADO */
+    div[data-testid="column"] {
+        padding: 0px 2px !important; /* Aproxima as colunas */
+    }
+    
     .stButton button {
         width: 100%;
-        min-height: 50px !important; 
-        font-size: 24px !important;  
-        font-weight: bold !important;
+        height: 50px !important; /* Altura fixa maior */
+        font-size: 24px !important; 
         padding: 0px !important;
-        display: flex !important;
-        justify-content: center !important;
-        align-items: center !important;
         border-radius: 8px !important;
-        margin-top: 5px;
-        margin-bottom: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background-color: #262730;
+        border: 1px solid #4e4e4e;
+        color: white;
+    }
+    .stButton button:hover {
+        border-color: #00FF00;
+        color: #00FF00;
     }
     
     .footer-timer { 
@@ -196,11 +204,9 @@ def salvar_safe_league(id_liga, pais, nome_liga, tem_stats, tem_tabela):
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
-# --- NOVA FUNÇÃO: ZERA STRIKES SE A LIGA DER SINAL DE VIDA ---
 def resetar_strikes(id_liga):
     df = st.session_state.get('df_vip', pd.DataFrame())
     id_norm = normalizar_id(id_liga)
-    # Se a liga estiver na lista de Obs (strikes), remove ela de lá
     if not df.empty and id_norm in df['id'].values:
         df_new = df[df['id'] != id_norm]
         if salvar_aba("Obs", df_new): 
@@ -817,7 +823,6 @@ if st.session_state.ROBO_LIGADO:
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
             salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, (rank_h is not None))
-            # ZERA STRIKES: Se a API mandou stats, a liga está saudável!
             resetar_strikes(lid)
             
             if st_short == 'HT' and gh == 0 and ga == 0:
@@ -832,7 +837,6 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         else: status_vis = "💤"
 
-        # LOGICA DE STRIKE APENAS SE FALTAR DADOS DE CHUTES (STATS)
         if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT':
             gerenciar_strikes(lid, j['league']['country'], j['league']['name'], fid)
         
@@ -922,7 +926,10 @@ if st.session_state.ROBO_LIGADO:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
                 h_bi = pd.to_datetime(get_time_br().date())
                 
-                if 'Data_DT' in df_bi.columns:
+                # CORREÇÃO CRÍTICA DO BI
+                if dias == "Tudo":
+                    df_show = df_bi
+                elif 'Data_DT' in df_bi.columns:
                     if dias == "Hoje": df_show = df_bi[df_bi['Data_DT'] == h_bi]
                     elif dias == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (h_bi - timedelta(days=7))]
                     elif dias == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (h_bi - timedelta(days=30))]
@@ -995,7 +1002,13 @@ if st.session_state.ROBO_LIGADO:
                         top_r.columns = ['Time', 'Qtd Green']
                         st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
 
-        with abas[4]: st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
+        with abas[4]: 
+            if st.button("🗑️ Limpar Blacklist"):
+                st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
+                salvar_aba("Blacklist", st.session_state['df_black'])
+                st.rerun()
+            st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
+            
         with abas[5]: st.dataframe(st.session_state['df_safe'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
         with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()).drop(columns=['id', 'Jogos_Erro'], errors='ignore'), use_container_width=True, hide_index=True)
 
