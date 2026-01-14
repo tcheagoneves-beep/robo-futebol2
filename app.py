@@ -18,6 +18,10 @@ st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄�
 if 'ROBO_LIGADO' not in st.session_state:
     st.session_state.ROBO_LIGADO = False
 
+# CONTROLE DE CACHE DO BANCO DE DADOS (Para não travar as abas)
+if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
+DB_CACHE_TIME = 60  # Tempo em segundos para ler a planilha novamente
+
 # INICIALIZAÇÃO DE VARIÁVEIS DE CONTROLE DE API
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
@@ -81,7 +85,7 @@ def normalizar_id(val):
     except:
         return str(val).strip()
 
-# --- 3. BANCO DE DADOS ---
+# --- 3. BANCO DE DADOS (COM CACHE INTELIGENTE) ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
@@ -97,26 +101,30 @@ def salvar_aba(nome_aba, df_para_salvar):
     try: conn.update(worksheet=nome_aba, data=df_para_salvar); return True
     except: return False
 
-def carregar_tudo():
-    if 'df_black' not in st.session_state: 
+def carregar_tudo(force=False):
+    # Lógica de Cache: Só lê do Google se passou o tempo limite ou se for forçado
+    now = time.time()
+    if not force and 'df_black' in st.session_state:
+        if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
+            return # Usa a memória local (Rápido)
+
+    # Se passou do tempo ou forçado, lê do Google
+    if 'df_black' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
         df = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
         if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_black'] = df
-    else: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
 
-    if 'df_safe' not in st.session_state: 
+    if 'df_safe' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
         df = carregar_aba("Seguras", COLS_SAFE)
         if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_safe'] = df
-    else: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
 
-    if 'df_vip' not in st.session_state: 
+    if 'df_vip' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
         df = carregar_aba("Obs", COLS_OBS)
         if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_vip'] = df
-    else: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
     
-    if 'historico_full' not in st.session_state:
+    if 'historico_full' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME:
         df = carregar_aba("Historico", COLS_HIST)
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
@@ -127,6 +135,8 @@ def carregar_tudo():
             st.session_state['historico_full'] = df
             hoje = get_time_br().strftime('%Y-%m-%d')
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
+            
+            # Recarrega alertas enviados para não duplicar se reiniciar
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             df_hoje = df[df['Data'] == hoje]
             for _, row in df_hoje.iterrows():
@@ -135,6 +145,8 @@ def carregar_tudo():
         else:
             st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
             st.session_state['historico_sinais'] = []
+
+    st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
     df_antigo = st.session_state.get('historico_full', pd.DataFrame(columns=COLS_HIST))
@@ -445,7 +457,7 @@ def enviar_relatorio_bi(token, chat_ids):
             buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
         plt.close(fig)
 
-# --- PROCESSAMENTO DE RESULTADOS (COM CORREÇÃO PARA HT) ---
+# --- PROCESSAMENTO DE RESULTADOS (HT/FT + JOGO MORNO FIX) ---
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0
     ga = jogo_api['goals']['away'] or 0
@@ -484,7 +496,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
         enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar Atual: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
         return True
 
-    # --- NOVA LÓGICA: MATAR ESTRATÉGIAS HT NO 2º TEMPO ---
+    # --- GUILHOTINA HT: MATAR ESTRATÉGIAS NO 2º TEMPO ---
     eh_estrategia_ht = any(nome in sinal['Estrategia'] for nome in STRATS_ONLY_HT)
     
     if eh_estrategia_ht and st_short in ['2H', 'FT', 'AET', 'PEN', 'ABD']:
@@ -679,7 +691,10 @@ with st.sidebar:
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
         c1, c2 = st.columns(2)
         if c1.button("🔄 Reenviar"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if c2.button("🧹 Cache"): st.cache_data.clear()
+        if c2.button("🧹 Cache"): 
+            st.cache_data.clear()
+            carregar_tudo(force=True)
+            st.session_state['last_db_update'] = 0
         st.write("---")
         if st.button("📊 Enviar Relatório BI"):
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
@@ -703,7 +718,7 @@ if st.session_state.ROBO_LIGADO:
     ids_obs = [normalizar_id(x) for x in st.session_state['df_vip']['id'].values]
 
     hoje_real = get_time_br().strftime('%Y-%m-%d')
-    st.session_state['historico_sinais'] = [s for s in st.session_state['historico_sinais'] if s['Data'] == hoje_real]
+    st.session_state['historico_sinais'] = [s for s in st.session_state['historico_sinais'] if s.get('Data') == hoje_real]
 
     api_error = False
     try:
@@ -848,8 +863,9 @@ if st.session_state.ROBO_LIGADO:
             else: st.caption("Sem jogos futuros hoje.")
         with abas[2]: 
             if not hist_hj.empty: 
-                # FILTRO VISUAL: Remove colunas técnicas
-                cols_view = [c for c in hist_hj.columns if c not in ['FID', 'HomeID', 'AwayID']]
+                # FILTRO VISUAL COMPLETO: Esconde colunas técnicas
+                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT']
+                cols_view = [c for c in hist_hj.columns if c not in colunas_esconder]
                 st.dataframe(hist_hj[cols_view].astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
@@ -859,6 +875,7 @@ if st.session_state.ROBO_LIGADO:
             if df_bi.empty: st.warning("Sem dados históricos.")
             else:
                 try:
+                    df_bi = df_bi.copy()
                     df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
                     df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
                     df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
