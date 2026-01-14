@@ -206,8 +206,18 @@ def buscar_inteligencia(estrategia, liga, jogo):
     prob_final = numerador / denominador
     str_fontes = "+".join(fontes) if fontes else "Geral"
     
-    # --- CÁLCULO DE MOMENTUM (STREAK) ---
-    f_times = pd.concat([f_casa, f_vis]).sort_values(by='Data', ascending=False)
+    # --- CÁLCULO DE MOMENTUM (STREAK) - CORREÇÃO DE ERRO DE ORDENAÇÃO ---
+    f_times = pd.concat([f_casa, f_vis])
+    
+    # Tenta converter a data para datetime para ordenar corretamente e evitar TypeError
+    if not f_times.empty:
+        try:
+            f_times['Data_Temp'] = pd.to_datetime(f_times['Data'], errors='coerce')
+            f_times = f_times.sort_values(by='Data_Temp', ascending=False)
+        except:
+            # Se falhar, tenta ordenar string mesmo
+            f_times = f_times.sort_values(by='Data', ascending=False)
+
     streak_msg = ""
     if not f_times.empty:
         last_results = f_times['Resultado'].head(5).tolist()
@@ -806,6 +816,7 @@ if ROBO_LIGADO:
             if not hist_hoje.empty: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
+        # --- AQUI ESTÁ A NOVA SEÇÃO DE BI ---
         with abas[3]: 
             st.markdown("### 📊 Inteligência de Mercado")
             df_bi = st.session_state.get('historico_full', pd.DataFrame())
@@ -828,6 +839,7 @@ if ROBO_LIGADO:
                     m1.metric("Sinais", tot_bi); m2.metric("Greens", greens_bi); m3.metric("Reds", reds_bi); m4.metric("Assertividade", f"{wr_bi:.1f}%")
                     st.divider()
                     
+                    # GRÁFICO 1: Performance por Estratégia
                     stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                     if not stats_strat.empty:
                         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
