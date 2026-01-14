@@ -42,15 +42,12 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* CSS CORRIGIDO PARA BOTÕES LADO A LADO */
-    div[data-testid="column"] {
-        padding: 0px 2px !important; /* Aproxima as colunas */
-    }
-    
+    /* CSS PARA O BOTÃO DE CACHE (GRANDE E SEGURO) */
     .stButton button {
         width: 100%;
-        height: 50px !important; /* Altura fixa maior */
-        font-size: 24px !important; 
+        height: 50px !important;
+        font-size: 18px !important;
+        font-weight: bold !important;
         padding: 0px !important;
         border-radius: 8px !important;
         display: flex;
@@ -158,10 +155,15 @@ def carregar_tudo(force=False):
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
+    # Proteção: Recarrega o banco antes de salvar para evitar sobrescrever com vazio
+    if 'historico_full' not in st.session_state or st.session_state['historico_full'].empty:
+        carregar_tudo(force=True)
+        
     df_antigo = st.session_state.get('historico_full', pd.DataFrame(columns=COLS_HIST))
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_antigo], ignore_index=True)
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
+    
     if salvar_aba("Historico", df_final):
         st.session_state['historico_full'] = df_final
         st.session_state['historico_sinais'].insert(0, item)
@@ -720,20 +722,11 @@ with st.sidebar:
         TG_CHAT = st.text_input("Chat IDs:")
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
         
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🧹", help="Limpar Cache"): 
-                st.cache_data.clear()
-                carregar_tudo(force=True)
-                st.session_state['last_db_update'] = 0
-        with c2:
-            if st.button("🚫", help="Limpar Blacklist"):
-                st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
-                salvar_aba("Blacklist", st.session_state['df_black'])
-                st.cache_data.clear()
-                st.toast("Blacklist Limpa!")
-                time.sleep(1)
-                st.rerun()
+        if st.button("🧹 Limpar Cache"): 
+            st.cache_data.clear()
+            carregar_tudo(force=True)
+            st.session_state['last_db_update'] = 0
+            st.toast("Cache Limpo!")
 
         st.write("---")
         if st.button("📊 Enviar Relatório BI"):
@@ -926,7 +919,7 @@ if st.session_state.ROBO_LIGADO:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
                 h_bi = pd.to_datetime(get_time_br().date())
                 
-                # CORREÇÃO CRÍTICA DO BI
+                # CORREÇÃO CRÍTICA DO BI (RESTAURADA)
                 if dias == "Tudo":
                     df_show = df_bi
                 elif 'Data_DT' in df_bi.columns:
@@ -1002,13 +995,7 @@ if st.session_state.ROBO_LIGADO:
                         top_r.columns = ['Time', 'Qtd Green']
                         st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
 
-        with abas[4]: 
-            if st.button("🗑️ Limpar Blacklist"):
-                st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
-                salvar_aba("Blacklist", st.session_state['df_black'])
-                st.rerun()
-            st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
-            
+        with abas[4]: st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
         with abas[5]: st.dataframe(st.session_state['df_safe'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
         with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()).drop(columns=['id', 'Jogos_Erro'], errors='ignore'), use_container_width=True, hide_index=True)
 
