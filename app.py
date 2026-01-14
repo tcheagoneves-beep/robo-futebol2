@@ -54,7 +54,7 @@ st.markdown("""
 # --- 1. CONEXÃO NUVEM ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado']
+COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo'] 
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes']
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
@@ -69,6 +69,11 @@ def clean_fid(x):
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
+        if not df.empty:
+            for col in colunas_esperadas:
+                if col not in df.columns:
+                    df[col] = ""
+        
         if df.empty or len(df.columns) < len(colunas_esperadas): return pd.DataFrame(columns=colunas_esperadas)
         return df.fillna("").astype(str)
     except: return pd.DataFrame(columns=colunas_esperadas)
@@ -87,11 +92,8 @@ def carregar_tudo():
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
             
-            # --- LIMPEZA DE FORMATO E DUPLICATAS ---
             try:
-                # Remove horário da data (limpeza de string)
                 df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-                # Remove duplicatas lógicas (mantém o último sinal enviado)
                 df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
             except: pass
             
@@ -100,7 +102,6 @@ def carregar_tudo():
             hoje = get_time_br().strftime('%Y-%m-%d')
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
             
-            # Blindagem de memória contra reenvio
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             
             df_hoje = df[df['Data'] == hoje]
@@ -179,7 +180,6 @@ def calcular_stats(df_raw):
 
 # --- 4. INTELIGÊNCIA PREDIITIVA (PONDERADA + STREAK) ---
 def buscar_inteligencia(estrategia, liga, jogo):
-    """Calcula Média Ponderada + Analisa Sequência (Streak)"""
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
     
@@ -192,7 +192,6 @@ def buscar_inteligencia(estrategia, liga, jogo):
     
     numerador = 0; denominador = 0; fontes = []
 
-    # Histórico dos times
     f_casa = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
     f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
     
@@ -213,7 +212,6 @@ def buscar_inteligencia(estrategia, liga, jogo):
         denominador += 5
         fontes.append("Time")
 
-    # Histórico da Liga
     f_liga = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
     if len(f_liga) >= 3:
         wr_liga = (f_liga['Resultado'].str.contains('GREEN').sum() / len(f_liga)) * 100
@@ -221,7 +219,6 @@ def buscar_inteligencia(estrategia, liga, jogo):
         denominador += 3
         fontes.append("Liga")
         
-    # Histórico Geral
     f_geral = df[df['Estrategia'] == estrategia]
     if len(f_geral) >= 1:
         wr_geral = (f_geral['Resultado'].str.contains('GREEN').sum() / len(f_geral)) * 100
@@ -232,7 +229,6 @@ def buscar_inteligencia(estrategia, liga, jogo):
     prob_final = numerador / denominador
     str_fontes = "+".join(fontes) if fontes else "Geral"
     
-    # --- CÁLCULO DE MOMENTUM (STREAK) ---
     f_times = pd.concat([f_casa, f_vis])
     if not f_times.empty:
         try:
@@ -281,7 +277,7 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
-# --- RADAR MATINAL INTELIGENTE (FILTRO DE LUCRATIVIDADE) ---
+# --- RADAR MATINAL INTELIGENTE (FILTRO DE LUCRATIVIDADE + ID) ---
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     hoje_str = agora.strftime('%Y-%m-%d')
@@ -293,18 +289,39 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
+    # 1. Mapeia os times lucrativos usando ID quando disponível
+    stats_ids = {} # {'ID_TIME': {'greens': 0, 'nome': 'Time'}}
+    
     df_green = df[df['Resultado'].str.contains('GREEN', na=False)]
-    times_lucrativos = []
-    for jogo in df_green['Jogo']:
+    
+    for index, row in df_green.iterrows():
         try:
-            partes = jogo.split(' x ')
-            times_lucrativos.append(partes[0].split('(')[0].strip())
-            times_lucrativos.append(partes[1].split('(')[0].strip())
+            # Tenta pegar ID primeiro (novo padrão)
+            id_h = str(row.get('HomeID', '')).strip()
+            id_a = str(row.get('AwayID', '')).strip()
+            
+            # Se não tiver ID (legado), usa o Nome
+            nomes = row['Jogo'].split(' x ')
+            nome_h = nomes[0].split('(')[0].strip()
+            nome_a = nomes[1].split('(')[0].strip()
+            
+            # Processa Casa
+            chave_h = id_h if id_h and id_h != 'nan' else nome_h
+            if chave_h not in stats_ids: stats_ids[chave_h] = {'greens': 0, 'nome': nome_h}
+            stats_ids[chave_h]['greens'] += 1
+            
+            # Processa Visitante
+            chave_a = id_a if id_a and id_a != 'nan' else nome_a
+            if chave_a not in stats_ids: stats_ids[chave_a] = {'greens': 0, 'nome': nome_a}
+            stats_ids[chave_a]['greens'] += 1
+            
         except: pass
         
-    if not times_lucrativos: return
-    top_times = pd.Series(times_lucrativos).value_counts().head(5)
-    lista_top = top_times.index.tolist()
+    if not stats_ids: return
+    
+    # Top 10 mais lucrativos
+    top_times_list = sorted(stats_ids.items(), key=lambda x: x[1]['greens'], reverse=True)[:10]
+    ids_top = [x[0] for x in top_times_list] # Lista de IDs ou Nomes
     
     jogos_hoje = buscar_agenda_cached(api_key, hoje_str)
     if not jogos_hoje: return
@@ -314,19 +331,40 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     matches = []
     for jogo in jogos_hoje:
         try:
-            t1 = jogo['teams']['home']['name']
-            t2 = jogo['teams']['away']['name']
+            t1_name = jogo['teams']['home']['name']
+            t1_id = str(jogo['teams']['home']['id'])
+            
+            t2_name = jogo['teams']['away']['name']
+            t2_id = str(jogo['teams']['away']['id'])
+            
             hora = jogo['fixture']['date'][11:16]
             liga = jogo['league']['name']
             pais = jogo['league']['country']
             
             time_foco = None
-            if t1 in lista_top: time_foco = t1
-            elif t2 in lista_top: time_foco = t2
+            foco_id = None
             
-            if time_foco:
-                greens_total = top_times[time_foco]
-                df_time_all = df[df['Jogo'].str.contains(time_foco, na=False)]
+            # Verifica por ID (Prioridade) ou Nome
+            if t1_id in ids_top:
+                time_foco = t1_name; foco_id = t1_id
+            elif t1_name in ids_top:
+                time_foco = t1_name; foco_id = t1_name
+            elif t2_id in ids_top:
+                time_foco = t2_name; foco_id = t2_id
+            elif t2_name in ids_top:
+                time_foco = t2_name; foco_id = t2_name
+            
+            if time_foco and foco_id:
+                greens_total = stats_ids[foco_id]['greens']
+                
+                # Busca melhor estratégia baseada no ID ou Nome
+                if foco_id.isdigit():
+                    # Filtra por ID nas colunas novas
+                    df_time_all = df[(df['HomeID'] == foco_id) | (df['AwayID'] == foco_id)]
+                else:
+                    # Filtra por nome (legado)
+                    df_time_all = df[df['Jogo'].str.contains(time_foco, na=False)]
+                
                 melhor_strat = "Geral"
                 melhor_wr = 0
                 
@@ -346,7 +384,7 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
                 else:
                     motivo = f"💰 <b>Volume:</b> O {time_foco} é uma máquina de Greens ({greens_total} acumulados). Fique atento a qualquer sinal!"
 
-                matches.append(f"⏰ {hora} | {pais} {liga}\n⚽ {t1} 🆚 {t2}\n{motivo}")
+                matches.append(f"⏰ {hora} | {pais} {liga}\n⚽ {t1_name} 🆚 {t2_name}\n{motivo}")
         except: pass
             
     if matches:
@@ -361,11 +399,9 @@ def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
-    # --- FAXINA SEGURA PARA O BI ---
     try:
         df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
         df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
-        # Não remove NaT para não sumir do total
         df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
     except: return
     
@@ -385,7 +421,7 @@ def enviar_relatorio_bi(token, chat_ids):
     t_d, g_d, r_d, w_d = calc_metrics(df[mask_dia])
     t_s, g_s, r_s, w_s = calc_metrics(df[mask_sem])
     t_m, g_m, r_m, w_m = calc_metrics(df[mask_mes])
-    t_a, g_a, r_a, w_a = calc_metrics(df) # Total geral conta tudo
+    t_a, g_a, r_a, w_a = calc_metrics(df)
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -770,7 +806,22 @@ if ROBO_LIGADO:
             for sinal in lista_sinais:
                 id_unico = f"{fid}_{sinal['tag']}"
                 if id_unico not in st.session_state['alertas_enviados']:
-                    item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": sinal['tag'], "Resultado": "Pendente"}
+                    
+                    # --- AQUI: SALVA ID SE FOR LIGA SEGURA, SENÃO VAZIO ---
+                    item = {
+                        "FID": fid, 
+                        "Data": get_time_br().strftime('%Y-%m-%d'), 
+                        "Hora": get_time_br().strftime('%H:%M'), 
+                        "Liga": j['league']['name'], 
+                        "Jogo": f"{home} x {away}", 
+                        "Placar_Sinal": placar, 
+                        "Estrategia": sinal['tag'], 
+                        "Resultado": "Pendente",
+                        "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "",
+                        "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else ""
+                    }
+                    # ------------------------------------------------------
+                    
                     if adicionar_historico(item):
                         prob_msg = buscar_inteligencia(sinal['tag'], j['league']['name'], f"{home} x {away}")
                         
