@@ -84,32 +84,25 @@ def carregar_tudo():
     
     if 'historico_full' not in st.session_state:
         df = carregar_aba("Historico", COLS_HIST)
-        if not df.empty:
-            if 'FID' in df.columns: df['FID'] = df['FID'].apply(clean_fid)
+        if not df.empty and 'Data' in df.columns:
+            df['FID'] = df['FID'].apply(clean_fid)
             
-            # --- FAXINA GERAL NOS DADOS ---
-            if 'Data' in df.columns:
-                # 1. Tenta converter tudo para data real (ignora erros)
-                df['Data_Temp'] = pd.to_datetime(df['Data'], errors='coerce')
-                
-                # 2. Remove linhas onde a data é inválida ou VAZIA (NaT)
-                # Isso resolve o problema das linhas vazias na sua imagem
-                df = df.dropna(subset=['Data_Temp'])
-                
-                # 3. Reescreve a coluna Data como string limpa YYYY-MM-DD
-                df['Data'] = df['Data_Temp'].dt.strftime('%Y-%m-%d')
-                
-                # 4. Remove duplicatas de lógica
-                df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-                
-                # Limpa coluna temporária
-                df = df.drop(columns=['Data_Temp'])
+            # --- FIX SEGURO: LIMPEZA SUAVE DE DATA ---
+            # Remove apenas o horário se existir, mas NÃO EXCLUI A LINHA se der erro
+            # Garante que tudo seja string primeiro
+            df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
+            
+            # Remove duplicatas (FID + Estratégia iguais), mantendo o último
+            df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
             
             st.session_state['historico_full'] = df
             
             hoje = get_time_br().strftime('%Y-%m-%d')
+            
+            # Cria lista de hoje baseada na string exata
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
             
+            # Blindagem de memória
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             
             df_hoje = df[df['Data'] == hoje]
@@ -125,6 +118,8 @@ def adicionar_historico(item):
     df_antigo = st.session_state.get('historico_full', pd.DataFrame(columns=COLS_HIST))
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_antigo], ignore_index=True)
+    
+    # Limpa duplicatas ao salvar
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
     
     if salvar_aba("Historico", df_final):
@@ -137,7 +132,12 @@ def atualizar_historico_ram_disk(lista_atualizada):
     df_hoje = pd.DataFrame(lista_atualizada)
     df_disk = st.session_state['historico_full']
     hoje = get_time_br().strftime('%Y-%m-%d')
-    if not df_disk.empty: df_disk = df_disk[df_disk['Data'] != hoje]
+    
+    if not df_disk.empty and 'Data' in df_disk.columns:
+         # Garante formato string limpo para comparação
+         df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
+         df_disk = df_disk[df_disk['Data'] != hoje]
+    
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
     
@@ -368,21 +368,24 @@ def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
-    # --- FAXINA PARA O BI ---
+    # --- FAXINA SEGURA PARA O BI ---
     try:
-        # Garante data em formato datetime para os cálculos
-        df['Data_Temp'] = pd.to_datetime(df['Data'], errors='coerce')
-        # Remove sem data (NaT)
-        df = df.dropna(subset=['Data_Temp'])
+        # Garante que a coluna é string e limpa o "00:00:00" e espaços
+        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+        # Converte para datetime real para fazer as contas
+        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
+        
+        # Limpa duplicatas antes de calcular
         df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
     except: return
-    # ------------------------
+    # -------------------------------
     
     hoje = pd.to_datetime(get_time_br().date())
     
-    mask_dia = df['Data_Temp'] == hoje
-    mask_sem = df['Data_Temp'] >= (hoje - timedelta(days=7))
-    mask_mes = df['Data_Temp'] >= (hoje - timedelta(days=30))
+    # Filtros baseados na Data Convertida
+    mask_dia = df['Data_DT'] == hoje
+    mask_sem = df['Data_DT'] >= (hoje - timedelta(days=7))
+    mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
     
     def calc_metrics(d):
         g = d['Resultado'].str.contains('GREEN').sum()
@@ -394,7 +397,7 @@ def enviar_relatorio_bi(token, chat_ids):
     t_d, g_d, r_d, w_d = calc_metrics(df[mask_dia])
     t_s, g_s, r_s, w_s = calc_metrics(df[mask_sem])
     t_m, g_m, r_m, w_m = calc_metrics(df[mask_mes])
-    t_a, g_a, r_a, w_a = calc_metrics(df)
+    t_a, g_a, r_a, w_a = calc_metrics(df) # Total considera tudo, mesmo sem data válida se falhar a conversão
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -849,23 +852,24 @@ if ROBO_LIGADO:
             else:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
                 
-                # --- CORREÇÃO BI: Normaliza datas antes de filtrar ---
+                # --- FAXINA SEGURA PARA O BI ---
                 try:
-                    df_bi['Data_Str'] = df_bi['Data'].astype(str).apply(lambda x: x.split(' ')[0].strip())
+                    df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
                     df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
-                    
-                    # FILTRO CRÍTICO: REMOVE DADOS SEM DATA (O "LIXO" DA PLANILHA)
-                    df_bi = df_bi.dropna(subset=['Data_DT'])
-                    
                     df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
                 except: pass
-                # ---------------------------------------------------
+                # -------------------------------
                 
                 hoje_bi = pd.to_datetime(get_time_br().date())
-                if dias == "Hoje": df_show = df_bi[df_bi['Data_DT'] == hoje_bi]
-                elif dias == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje_bi - timedelta(days=7))]
-                elif dias == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje_bi - timedelta(days=30))]
-                else: df_show = df_bi
+                
+                # Se der erro na data, ignora filtro de tempo mas considera no total
+                if 'Data_DT' in df_bi.columns:
+                    if dias == "Hoje": df_show = df_bi[df_bi['Data_DT'] == hoje_bi]
+                    elif dias == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje_bi - timedelta(days=7))]
+                    elif dias == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje_bi - timedelta(days=30))]
+                    else: df_show = df_bi
+                else:
+                    df_show = df_bi
                 
                 if not df_show.empty:
                     greens_bi = df_show['Resultado'].str.contains('GREEN').sum()
