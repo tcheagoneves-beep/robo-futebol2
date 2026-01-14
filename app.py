@@ -86,20 +86,24 @@ def carregar_tudo():
         df = carregar_aba("Historico", COLS_HIST)
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
+            
+            # --- CORREÇÃO DE DUPLICIDADE: REMOVE REPETIDOS ---
+            # Se houver duas linhas com mesmo FID e mesma Estratégia, mantém a última (mais recente)
+            df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+            # -------------------------------------------------
+
             st.session_state['historico_full'] = df
             
             hoje = get_time_br().strftime('%Y-%m-%d')
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
             
-            # --- BLINDAGEM CONTRA DUPLICIDADE (Carrega o que já foi enviado hoje) ---
+            # Blindagem de memória para não reenviar o que já foi hoje
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             
             df_hoje = df[df['Data'] == hoje]
             for _, row in df_hoje.iterrows():
-                # Reconstrói o ID único: FID_Estrategia
                 id_blindagem = f"{row['FID']}_{row['Estrategia']}"
                 st.session_state['alertas_enviados'].add(id_blindagem)
-            # -----------------------------------------------------------------------
             
         else:
             st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
@@ -109,6 +113,10 @@ def adicionar_historico(item):
     df_antigo = st.session_state.get('historico_full', pd.DataFrame(columns=COLS_HIST))
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_antigo], ignore_index=True)
+    
+    # Remove duplicatas antes de salvar para garantir integridade
+    df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
+    
     if salvar_aba("Historico", df_final):
         st.session_state['historico_full'] = df_final
         st.session_state['historico_sinais'].insert(0, item)
@@ -121,6 +129,9 @@ def atualizar_historico_ram_disk(lista_atualizada):
     hoje = get_time_br().strftime('%Y-%m-%d')
     if not df_disk.empty: df_disk = df_disk[df_disk['Data'] != hoje]
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
+    # Garante limpeza na atualização também
+    df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
+    
     if salvar_aba("Historico", df_final): st.session_state['historico_full'] = df_final
 
 def salvar_blacklist(id_liga, pais, nome_liga):
@@ -280,7 +291,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
-    # 1. Identifica Top Times Lucrativos
     df_green = df[df['Resultado'].str.contains('GREEN', na=False)]
     times_lucrativos = []
     for jogo in df_green['Jogo']:
@@ -294,14 +304,11 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     top_times = pd.Series(times_lucrativos).value_counts().head(5)
     lista_top = top_times.index.tolist()
     
-    # 2. Agenda Hoje
     jogos_hoje = buscar_agenda_cached(api_key, hoje_str)
     if not jogos_hoje: return
     
-    # --- MEMÓRIA DE ALVOS (HEADSHOT) ---
     if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 
-    # 3. Match e Melhor Estratégia
     matches = []
     for jogo in jogos_hoje:
         try:
@@ -317,8 +324,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             
             if time_foco:
                 greens_total = top_times[time_foco]
-                
-                # Busca melhor estratégia
                 df_time_all = df[df['Jogo'].str.contains(time_foco, na=False)]
                 melhor_strat = "Geral"
                 melhor_wr = 0
@@ -860,7 +865,6 @@ if ROBO_LIGADO:
                     c_vol2.metric("Média Sinais/Jogo", f"{media_sinais:.1f}")
                     c_vol3.metric("Máx Sinais num Jogo", max_sinais)
                     
-                    # --- CORREÇÃO DO ERRO DE PANDAS AQUI (renomeando e resetando) ---
                     distribuicao = (
                         sinais_por_jogo.value_counts()
                         .sort_index()
