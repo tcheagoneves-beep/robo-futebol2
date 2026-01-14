@@ -242,6 +242,27 @@ def update_api_usage(headers):
         st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
     except: pass
 
+# --- FUNÇÕES QUE FALTAVAM (RESTAURADAS AQUI) ---
+@st.cache_data(ttl=86400)
+def buscar_ranking(api_key, league_id, season):
+    try:
+        url = "https://v3.football.api-sports.io/standings"
+        params = {"league": league_id, "season": season}
+        res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
+        ranking = {}
+        if res.get('response'):
+            for team in res['response'][0]['league']['standings'][0]: ranking[team['team']['name']] = team['rank']
+        return ranking
+    except: return {}
+
+@st.cache_data(ttl=3600) 
+def buscar_agenda_cached(api_key, date_str):
+    try:
+        url = "https://v3.football.api-sports.io/fixtures"
+        return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
+    except: return []
+# -----------------------------------------------
+
 # --- 4. INTELIGÊNCIA ---
 def buscar_inteligencia(estrategia, liga, jogo):
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -321,6 +342,7 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
+# --- RADAR MATINAL ---
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     hoje_str = agora.strftime('%Y-%m-%d')
@@ -654,7 +676,7 @@ if st.session_state.ROBO_LIGADO:
             
         ids_no_radar.append(fid)
         tempo = j['fixture']['status']['elapsed'] or 0
-        status_short = j['fixture']['status']['short']
+        st_short = j['fixture']['status']['short']
         
         # DEFINIÇÃO DE VARIÁVEIS SEGURA E EXPLÍCITA
         home = j['teams']['home']['name']
@@ -673,7 +695,7 @@ if st.session_state.ROBO_LIGADO:
         t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
         ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
         
-        if deve_buscar_stats(tempo, gh, ga, status_short):
+        if deve_buscar_stats(tempo, gh, ga, st_short):
             if (datetime.now() - ult_chk).total_seconds() > t_esp:
                 try:
                     r_st = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}, timeout=5)
@@ -686,7 +708,7 @@ if st.session_state.ROBO_LIGADO:
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
             salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, (rank_h is not None))
-            if status_short == 'HT' and gh == 0 and ga == 0:
+            if st_short == 'HT' and gh == 0 and ga == 0:
                 try:
                     s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
                     v1 = next((x['value'] for x in s1 if x['type']=='Total Shots'), 0) or 0
@@ -698,7 +720,7 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         else: status_vis = "💤"
 
-        if not lista_sinais and not stats and tempo >= 45 and status_short != 'HT': gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
+        if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT': gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
         
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
