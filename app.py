@@ -14,6 +14,11 @@ from streamlit_gsheets import GSheetsConnection
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄️")
 
+# INICIALIZAÇÃO SEGURA DA VARIÁVEL
+if 'ROBO_LIGADO' not in st.session_state:
+    st.session_state.ROBO_LIGADO = False
+ROBO_LIGADO = False 
+
 st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
@@ -474,20 +479,20 @@ with st.sidebar:
         if st.button("📊 Enviar Relatório BI"):
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
             
-    # Variável de controle do robô ligada ao session_state para não resetar
-    st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
-    
     with st.expander("📶 Consumo API", expanded=False):
         u = st.session_state['api_usage']
         perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
         st.progress(perc)
         st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
+        
+    st.write("---")
+    st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
 
 # --- 8. DASHBOARD ---
 if st.session_state.ROBO_LIGADO:
     carregar_tudo()
     
-    # Listas de referência normalizadas
+    # LISTAS DE REFERÊNCIA NORMALIZADAS PARA USO NO DASHBOARD
     ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
     ids_safe = [normalizar_id(x) for x in st.session_state['df_safe']['id'].values]
     ids_obs = [normalizar_id(x) for x in st.session_state['df_vip']['id'].values]
