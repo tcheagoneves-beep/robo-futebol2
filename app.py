@@ -414,9 +414,9 @@ def enviar_relatorio_bi(token, chat_ids):
     except: return
     
     hoje = pd.to_datetime(get_time_br().date())
-    m_d = df['Data_DT'] == hoje
-    m_s = df['Data_DT'] >= (hoje - timedelta(days=7))
-    m_m = df['Data_DT'] >= (hoje - timedelta(days=30))
+    mask_dia = df['Data_DT'] == hoje
+    mask_sem = df['Data_DT'] >= (hoje - timedelta(days=7))
+    mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
     
     def cm(d):
         g = d['Resultado'].str.contains('GREEN').sum(); r = d['Resultado'].str.contains('RED').sum()
@@ -428,16 +428,35 @@ def enviar_relatorio_bi(token, chat_ids):
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
-    stats = df[m_m][df[m_m]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+    stats = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats.empty:
         c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
         c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
-        ax.set_title(f'PERFORMANCE 30 DIAS (WR: {w_m:.1f}%)', color='white')
-        ax.set_xlabel(''); ax.tick_params(axis='x', rotation=45, colors='#ccc')
-        ax.legend(title='', frameon=False)
+        ax.set_title(f'PERFORMANCE 30 DIAS (WR: {w_m:.1f}%)', color='white', fontsize=12, pad=15)
+        ax.set_xlabel(''); ax.tick_params(axis='x', rotation=45, labelsize=9, colors='#cccccc')
+        ax.grid(axis='y', linestyle='--', alpha=0.2)
+        ax.legend(title='', frameon=False, loc='upper right')
+        for spine in ax.spines.values(): spine.set_visible(False)
         plt.tight_layout()
         buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
-        msg = f"📊 <b>RELATÓRIO BI</b>\n\n📆 <b>HOJE:</b> {t_d} (WR: {w_d:.1f}%)\n📅 <b>7 DIAS:</b> {t_s} (WR: {w_s:.1f}%)\n🗓️ <b>30 DIAS:</b> {t_m} (WR: {w_m:.1f}%)\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
+        
+        msg = f"""📊 <b>RELATÓRIO BI (ACUMULADO)</b>
+
+📆 <b>HOJE</b>
+🎯 {t_d} Sinais | ✅ {g_d} | ❌ {r_d}
+💰 Assertividade: <b>{w_d:.1f}%</b>
+
+📅 <b>7 DIAS</b>
+🎯 {t_s} Sinais | ✅ {g_s} | ❌ {r_s}
+💰 Assertividade: <b>{w_s:.1f}%</b>
+
+🗓️ <b>30 DIAS</b>
+🎯 {t_m} Sinais | ✅ {g_m} | ❌ {r_m}
+💰 Assertividade: <b>{w_m:.1f}%</b>
+
+♾️ <b>TOTAL GERAL</b>
+🎯 {t_a} Sinais | ✅ {g_a} | ❌ {r_a}
+💰 Assertividade: <b>{w_a:.1f}%</b>"""
         ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
         for cid in ids:
             buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
@@ -831,8 +850,9 @@ if st.session_state.ROBO_LIGADO:
                     c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
                     
                     # Correção da linha problemática do reset_index
-                    distribuicao = sinais_por_jogo.value_counts().sort_index().reset_index()
-                    distribuicao.columns = ['Qtd Sinais', 'Qtd Jogos']
+                    vc = sinais_por_jogo.sort_index()
+                    distribuicao = pd.DataFrame({'Qtd Sinais': vc.index, 'Qtd Jogos': vc.values})
+                    
                     fig_vol = px.bar(distribuicao, x='Qtd Sinais', y='Qtd Jogos', text='Qtd Jogos', title="Distribuição: Quantos sinais por partida?", color_discrete_sequence=['#FFD700'])
                     fig_vol.update_layout(template="plotly_dark"); st.plotly_chart(fig_vol, use_container_width=True)
                     
