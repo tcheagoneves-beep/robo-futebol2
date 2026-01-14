@@ -42,17 +42,22 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* CSS para botões de ícone limpos e alinhados */
+    /* CSS APRIMORADO PARA BOTÕES */
     .stButton button {
         width: 100%;
-        height: auto !important;
-        min-height: 42px;
-        font-size: 22px !important; /* Ícone visível */
+        min-height: 50px !important; /* Botões mais altos/maiores */
+        font-size: 24px !important;  /* Ícone grande e visível */
+        font-weight: bold !important;
         padding: 0px !important;
-        display: flex;
-        justify-content: center;
-        align-items: center;
+        
+        /* Centralização Perfeita do Ícone */
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        
+        border-radius: 8px !important;
         margin-top: 5px;
+        margin-bottom: 5px;
     }
     
     .footer-timer { 
