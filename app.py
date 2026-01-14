@@ -68,7 +68,6 @@ def clean_fid(x):
 # --- 3. BANCO DE DADOS (NUVEM & RAM DISK) ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
-        # ttl=0 garante que ele busque do Google e não do cache do navegador
         df = conn.read(worksheet=nome_aba, ttl=0)
         if df.empty or len(df.columns) < len(colunas_esperadas): return pd.DataFrame(columns=colunas_esperadas)
         return df.fillna("").astype(str)
@@ -79,50 +78,46 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: return False
 
 def carregar_tudo():
-    # Carrega tabelas auxiliares
     if 'df_black' not in st.session_state: st.session_state['df_black'] = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
     if 'df_safe' not in st.session_state: st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
     if 'df_vip' not in st.session_state: st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
     
-    # Carrega Histórico com LIMPEZA DE DUPLICATAS IMEDIATA
-    df = carregar_aba("Historico", COLS_HIST)
-    if not df.empty and 'Data' in df.columns:
-        df['FID'] = df['FID'].apply(clean_fid)
-        
-        # --- FIX 1: REMOÇÃO AGRESSIVA DE DUPLICATAS NA ORIGEM ---
-        # Se tiver FID e Estratégia iguais, mantém só o último (o mais recente)
-        # Isso corrige o erro de "Golden Bet com 2 Reds"
-        df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-        
-        # Atualiza a sessão com a versão limpa
-        st.session_state['historico_full'] = df
-        
-        hoje = get_time_br().strftime('%Y-%m-%d')
-        st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
-        
-        # Reconstrói a memória de proteção contra envios repetidos no Telegram
-        if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
-        
-        df_hoje = df[df['Data'] == hoje]
-        for _, row in df_hoje.iterrows():
-            id_blindagem = f"{row['FID']}_{row['Estrategia']}"
-            st.session_state['alertas_enviados'].add(id_blindagem)
+    if 'historico_full' not in st.session_state:
+        df = carregar_aba("Historico", COLS_HIST)
+        if not df.empty and 'Data' in df.columns:
+            df['FID'] = df['FID'].apply(clean_fid)
             
-    else:
-        st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
-        st.session_state['historico_sinais'] = []
+            # --- FIX: NORMALIZA A DATA PARA RECUPERAR OS DADOS ---
+            # Converte tudo para data real e depois volta para texto padrão YYYY-MM-DD
+            # Isso garante que 2026-01-13 14:00 vire 2026-01-13 e seja encontrado
+            try:
+                df['Data'] = pd.to_datetime(df['Data'], errors='coerce').dt.strftime('%Y-%m-%d')
+                df = df.dropna(subset=['Data']) # Remove datas inválidas
+            except: pass
+            
+            # Limpeza de duplicatas
+            df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+            
+            st.session_state['historico_full'] = df
+            
+            hoje = get_time_br().strftime('%Y-%m-%d')
+            st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
+            
+            if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+            
+            df_hoje = df[df['Data'] == hoje]
+            for _, row in df_hoje.iterrows():
+                id_blindagem = f"{row['FID']}_{row['Estrategia']}"
+                st.session_state['alertas_enviados'].add(id_blindagem)
+            
+        else:
+            st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
+            st.session_state['historico_sinais'] = []
 
 def adicionar_historico(item):
-    # Pega o DF atual da memória
     df_antigo = st.session_state.get('historico_full', pd.DataFrame(columns=COLS_HIST))
-    
-    # Cria o novo registro
     df_novo = pd.DataFrame([item])
-    
-    # Concatena
     df_final = pd.concat([df_novo, df_antigo], ignore_index=True)
-    
-    # --- FIX 2: GARANTE QUE NÃO DUPLICA AO SALVAR ---
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
     
     if salvar_aba("Historico", df_final):
@@ -135,13 +130,8 @@ def atualizar_historico_ram_disk(lista_atualizada):
     df_hoje = pd.DataFrame(lista_atualizada)
     df_disk = st.session_state['historico_full']
     hoje = get_time_br().strftime('%Y-%m-%d')
-    
-    # Remove dados de hoje do histórico antigo para substituir pelos atualizados
     if not df_disk.empty: df_disk = df_disk[df_disk['Data'] != hoje]
-    
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
-    
-    # --- FIX 3: GARANTE LIMPEZA FINAL ---
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
     
     if salvar_aba("Historico", df_final): st.session_state['historico_full'] = df_final
@@ -180,9 +170,7 @@ def salvar_strike(id_liga, pais, nome_liga, strikes):
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
-    # Limpa antes de calcular estatísticas para o painel de hoje
     df_raw = df_raw.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-    
     greens = len(df_raw[df_raw['Resultado'].str.contains('GREEN', na=False)])
     reds = len(df_raw[df_raw['Resultado'].str.contains('RED', na=False)])
     total = len(df_raw)
@@ -244,9 +232,8 @@ def buscar_inteligencia(estrategia, liga, jogo):
     prob_final = numerador / denominador
     str_fontes = "+".join(fontes) if fontes else "Geral"
     
-    # --- CÁLCULO DE MOMENTUM (STREAK) - CORREÇÃO DE ERRO DE ORDENAÇÃO ---
+    # --- CÁLCULO DE MOMENTUM (STREAK) ---
     f_times = pd.concat([f_casa, f_vis])
-    
     if not f_times.empty:
         try:
             f_times['Data_Temp'] = pd.to_datetime(f_times['Data'], errors='coerce')
@@ -373,7 +360,13 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
 def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
-    df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+    
+    # --- PADRONIZAÇÃO DE DATAS ---
+    try:
+        df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+    except: return
+    # -----------------------------
+    
     hoje = pd.to_datetime(get_time_br().date())
     
     mask_dia = df['Data'] == hoje
@@ -844,11 +837,13 @@ if ROBO_LIGADO:
             if df_bi.empty: st.warning("Sem dados históricos na nuvem.")
             else:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
-                df_bi['Data'] = pd.to_datetime(df_bi['Data'], errors='coerce')
                 
-                # --- FIX 4: LIMPEZA ANTES DE EXIBIR O BI ---
-                df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-                # -------------------------------------------
+                # --- CORREÇÃO BI: Normaliza datas antes de filtrar ---
+                try:
+                    df_bi['Data'] = pd.to_datetime(df_bi['Data'], errors='coerce')
+                    df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+                except: pass
+                # ---------------------------------------------------
                 
                 hoje_bi = pd.to_datetime(get_time_br().date())
                 if dias == "Hoje": df_show = df_bi[df_bi['Data'] == hoje_bi]
