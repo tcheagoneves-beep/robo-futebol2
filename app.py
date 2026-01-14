@@ -45,16 +45,13 @@ st.markdown("""
     /* CSS APRIMORADO PARA BOTÕES */
     .stButton button {
         width: 100%;
-        min-height: 50px !important; /* Botões mais altos/maiores */
-        font-size: 24px !important;  /* Ícone grande e visível */
+        min-height: 50px !important; 
+        font-size: 24px !important;  
         font-weight: bold !important;
         padding: 0px !important;
-        
-        /* Centralização Perfeita do Ícone */
         display: flex !important;
         justify-content: center !important;
         align-items: center !important;
-        
         border-radius: 8px !important;
         margin-top: 5px;
         margin-bottom: 5px;
@@ -198,6 +195,17 @@ def salvar_safe_league(id_liga, pais, nome_liga, tem_stats, tem_tabela):
         novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Motivo': motivo_str}])
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
+
+# --- NOVA FUNÇÃO: ZERA STRIKES SE A LIGA DER SINAL DE VIDA ---
+def resetar_strikes(id_liga):
+    df = st.session_state.get('df_vip', pd.DataFrame())
+    id_norm = normalizar_id(id_liga)
+    # Se a liga estiver na lista de Obs (strikes), remove ela de lá
+    if not df.empty and id_norm in df['id'].values:
+        df_new = df[df['id'] != id_norm]
+        if salvar_aba("Obs", df_new): 
+            st.session_state['df_vip'] = df_new
+            st.toast(f"♻️ Strikes zerados! Liga {id_liga} recuperada.")
 
 def salvar_strike(id_liga, pais, nome_liga, strikes, lista_jogos_str):
     df = st.session_state['df_vip']
@@ -809,6 +817,9 @@ if st.session_state.ROBO_LIGADO:
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
             salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, (rank_h is not None))
+            # ZERA STRIKES: Se a API mandou stats, a liga está saudável!
+            resetar_strikes(lid)
+            
             if st_short == 'HT' and gh == 0 and ga == 0:
                 try:
                     s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
@@ -821,6 +832,7 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         else: status_vis = "💤"
 
+        # LOGICA DE STRIKE APENAS SE FALTAR DADOS DE CHUTES (STATS)
         if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT':
             gerenciar_strikes(lid, j['league']['country'], j['league']['name'], fid)
         
