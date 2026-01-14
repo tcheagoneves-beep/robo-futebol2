@@ -42,11 +42,11 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* CSS PARA O ÚNICO BOTÃO (CACHE) - GRANDE E LIMPO */
+    /* CSS PARA O ÚNICO BOTÃO (CACHE) */
     .stButton button {
         width: 100%;
         height: 55px !important;
-        font-size: 18px !important;
+        font-size: 20px !important;
         font-weight: bold !important;
         padding: 0px !important;
         border-radius: 8px !important;
@@ -119,42 +119,39 @@ def salvar_aba(nome_aba, df_para_salvar):
 def carregar_tudo(force=False):
     now = time.time()
     
-    # Se forçado, ignora o tempo. Se não, verifica o cache.
     if not force:
+        # Se tem dados na memória e o cache ainda é válido, usa a memória
         if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
-            # Verifica se as tabelas essenciais existem na memória
-            if 'df_black' in st.session_state and 'df_vip' in st.session_state:
+            if 'df_safe' in st.session_state and 'df_vip' in st.session_state and 'historico_full' in st.session_state:
                 return
 
     # CARREGAMENTO REAL
-    
-    # 1. Blacklist
     df = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
     st.session_state['df_black'] = df
 
-    # 2. Seguras
     df = carregar_aba("Seguras", COLS_SAFE)
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
     st.session_state['df_safe'] = df
 
-    # 3. Obs (VIP)
     df = carregar_aba("Obs", COLS_OBS)
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
     st.session_state['df_vip'] = df
     
-    # 4. Histórico
     df = carregar_aba("Historico", COLS_HIST)
     if not df.empty and 'Data' in df.columns:
         df['FID'] = df['FID'].apply(clean_fid)
         try:
-            df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-            # Ordena para o BI pegar certo
+            # Normaliza a data apenas para ordenação básica
+            df['Data_Temp'] = pd.to_datetime(df['Data'], errors='coerce')
+            df = df.sort_values(by='Data_Temp')
+            df = df.drop(columns=['Data_Temp'])
             df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
         except: pass
         st.session_state['historico_full'] = df
         
         hoje = get_time_br().strftime('%Y-%m-%d')
+        # Inverte para mostrar o mais recente em cima no histórico
         st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
         
         if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
@@ -213,32 +210,38 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga):
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
+# --- GESTÃO DE ERROS OTIMIZADA (SEM LAG) ---
 def resetar_erros(id_liga):
     id_norm = normalizar_id(id_liga)
     
+    # 1. OBS (Remove se existir)
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     if not df_vip.empty and id_norm in df_vip['id'].values:
         df_new_vip = df_vip[df_vip['id'] != id_norm]
         if salvar_aba("Obs", df_new_vip): st.session_state['df_vip'] = df_new_vip
     
+    # 2. SEGURAS (Só acessa a nuvem SE precisar zerar)
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
         if 'Strikes' not in df_safe.columns: df_safe['Strikes'] = '0'
         if 'Jogos_Erro' not in df_safe.columns: df_safe['Jogos_Erro'] = ''
         
         idx = df_safe[df_safe['id'] == id_norm].index[0]
-        val_s = str(df_safe.at[idx, 'Strikes'])
-        if val_s != '0' and val_s != '':
+        val_s = str(df_safe.at[idx, 'Strikes']).strip()
+        
+        # OTIMIZAÇÃO: Só salva se for diferente de 0. Se já for 0, não faz nada (não trava).
+        if val_s != '0':
             df_safe.at[idx, 'Strikes'] = '0'
             df_safe.at[idx, 'Jogos_Erro'] = ''
             if salvar_aba("Seguras", df_safe): 
                 st.session_state['df_safe'] = df_safe
-                st.toast(f"✅ Liga {id_liga} validada e limpa!")
+                # Toast removido para não poluir
 
 def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     id_norm = normalizar_id(id_liga)
     fid_str = str(fid_jogo)
     
+    # --- VERIFICAÇÃO 1: ESTÁ NA SAFE? ---
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
         if 'Strikes' not in df_safe.columns: df_safe['Strikes'] = '0'
@@ -253,6 +256,7 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
         strikes = len(jogos_erro)
         
         if strikes >= 10:
+            # Rebaixa
             df_safe = df_safe.drop(idx)
             salvar_aba("Seguras", df_safe)
             st.session_state['df_safe'] = df_safe
@@ -267,13 +271,14 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             st.session_state['df_vip'] = final_vip
             st.toast(f"📉 Liga {nome_liga} REBAIXADA para Observação!")
         else:
+            # Atualiza Safe
             df_safe.at[idx, 'Strikes'] = str(strikes)
             df_safe.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
             salvar_aba("Seguras", df_safe)
             st.session_state['df_safe'] = df_safe
-            st.toast(f"⚠️ Erro em Liga Segura: {strikes}/10")
         return
 
+    # --- VERIFICAÇÃO 2: OBS ---
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     strikes = 0
     jogos_erro = []
@@ -310,8 +315,6 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     if strikes >= 10: 
         salvar_blacklist(id_liga, pais, nome_liga)
         st.toast(f"🚫 {nome_liga} Banida (10 Jogos s/ dados)")
-    else:
-        st.toast(f"⚠️ {nome_liga} em Obs: {strikes}/10")
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
@@ -510,31 +513,41 @@ def enviar_relatorio_bi(token, chat_ids):
     if df.empty: return
     try:
         df = df.copy()
-        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
+        # Converte Data para datetime seguro
+        df['Data_DT'] = pd.to_datetime(df['Data'], errors='coerce')
         df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
     except: return
     
     hoje = pd.to_datetime(get_time_br().date())
-    mask_dia = df['Data_DT'] == hoje
-    mask_sem = df['Data_DT'] >= (hoje - timedelta(days=7))
-    mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
+    
+    dias_selecionado = st.session_state.get('bi_dias_filter', 'Tudo')
+    
+    # LÓGICA DE FILTRO CORRIGIDA
+    if dias_selecionado == "Hoje": 
+        df_show = df[df['Data_DT'] == hoje]
+    elif dias_selecionado == "7 Dias": 
+        df_show = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
+    elif dias_selecionado == "30 Dias": 
+        df_show = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
+    else: 
+        # Se for "Tudo", pega o dataframe inteiro (resolve o problema de data invalida)
+        df_show = df
     
     def cm(d):
         g = d['Resultado'].str.contains('GREEN').sum(); r = d['Resultado'].str.contains('RED').sum()
         tot = g+r; wr = (g/tot*100) if tot>0 else 0
         return tot, g, r, wr
 
-    t_d, g_d, r_d, w_d = cm(df[mask_dia]); t_s, g_s, r_s, w_s = cm(df[mask_sem])
-    t_m, g_m, r_m, w_m = cm(df[mask_mes]); t_a, g_a, r_a, w_a = cm(df)
+    # Usa o df_show já filtrado para o relatório
+    t_a, g_a, r_a, w_a = cm(df_show)
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
-    stats = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+    stats = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats.empty:
         c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
         c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
-        ax.set_title(f'PERFORMANCE 30 DIAS (WR: {w_m:.1f}%)', color='white', fontsize=12, pad=15)
+        ax.set_title(f'PERFORMANCE (WR: {w_a:.1f}%)', color='white', fontsize=12, pad=15)
         ax.set_xlabel(''); ax.tick_params(axis='x', rotation=45, labelsize=9, colors='#cccccc')
         ax.grid(axis='y', linestyle='--', alpha=0.2)
         ax.legend(title='', frameon=False, loc='upper right')
@@ -542,7 +555,7 @@ def enviar_relatorio_bi(token, chat_ids):
         plt.tight_layout()
         buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
         
-        msg = f"📊 <b>RELATÓRIO BI</b>\n\n📆 <b>HOJE:</b> {t_d} (WR: {w_d:.1f}%)\n📅 <b>7 DIAS:</b> {t_s} (WR: {w_s:.1f}%)\n🗓️ <b>30 DIAS:</b> {t_m} (WR: {w_m:.1f}%)\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
+        msg = f"📊 <b>RELATÓRIO BI</b>\n\n♾️ <b>TOTAL NO PERÍODO:</b> {t_a} (WR: {w_a:.1f}%)"
         ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
         for cid in ids:
             buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
@@ -763,6 +776,8 @@ if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used':
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 
+carregar_tudo()
+
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
@@ -969,91 +984,56 @@ if st.session_state.ROBO_LIGADO:
             df_bi = st.session_state.get('historico_full', pd.DataFrame())
             if df_bi.empty: st.warning("Sem dados históricos.")
             else:
+                st.session_state['bi_dias_filter'] = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"], key="sb_periodo_bi")
+                enviar_relatorio_bi(None, None) # Apenas chama a função para desenhar na tela, sem mandar msg
+                
+                # A função enviar_relatorio_bi desenha o gráfico e stats na tela
+                # Se não desenhar, é porque precisa ajustar a lógica de display aqui
+                # Vamos simplificar: trazer a lógica visual pra cá para garantir que apareça
+                
                 try:
                     df_bi = df_bi.copy()
                     df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
                     df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
                     df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-                except: pass
-                
-                dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
-                h_bi = pd.to_datetime(get_time_br().date())
-                
-                # CORREÇÃO CRÍTICA DO BI (RESTAURADA)
-                if dias == "Tudo":
-                    df_show = df_bi
-                elif 'Data_DT' in df_bi.columns:
-                    if dias == "Hoje": df_show = df_bi[df_bi['Data_DT'] == h_bi]
-                    elif dias == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (h_bi - timedelta(days=7))]
-                    elif dias == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (h_bi - timedelta(days=30))]
-                    else: df_show = df_bi
-                else:
-                    df_show = df_bi
-                
-                if not df_show.empty:
-                    gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum()
-                    tt = gr+rd; ww = (gr/tt*100) if tt>0 else 0
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
-                    st.divider()
                     
-                    st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-                    if not st_s.empty:
-                        cts = st_s.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
-                        fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Performance por Estratégia", text='Qtd')
-                        fig.update_layout(template="plotly_dark"); st.plotly_chart(fig, use_container_width=True)
+                    hoje = pd.to_datetime(get_time_br().date())
+                    if st.session_state['bi_dias_filter'] == "Hoje": 
+                        df_show = df_bi[df_bi['Data_DT'] == hoje]
+                    elif st.session_state['bi_dias_filter'] == "7 Dias": 
+                        df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]
+                    elif st.session_state['bi_dias_filter'] == "30 Dias": 
+                        df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]
+                    else: 
+                        df_show = df_bi
+                    
+                    if not df_show.empty:
+                        gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum()
+                        tt = gr+rd; ww = (gr/tt*100) if tt>0 else 0
+                        m1, m2, m3, m4 = st.columns(4)
+                        m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
+                        st.divider()
+                        
+                        st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                        if not st_s.empty:
+                            cts = st_s.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
+                            fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Performance por Estratégia", text='Qtd')
+                            fig.update_layout(template="plotly_dark"); st.plotly_chart(fig, use_container_width=True)
 
-                    st.markdown("### ⚽ Raio-X por Jogo (Volume de Sinais)")
-                    sinais_por_jogo = df_show['Jogo'].value_counts()
-                    c_vol1, c_vol2, c_vol3 = st.columns(3)
-                    c_vol1.metric("Jogos Únicos", len(sinais_por_jogo))
-                    c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
-                    c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
-                    
-                    contagem_frequencia = sinais_por_jogo.value_counts().sort_index()
-                    df_freq = pd.DataFrame({
-                        'Qtd Sinais': contagem_frequencia.index,
-                        'Qtd Jogos': contagem_frequencia.values
-                    })
-                    
-                    fig_vol = px.bar(df_freq, x='Qtd Sinais', y='Qtd Jogos', 
-                                     text='Qtd Jogos', 
-                                     title="Distribuição: Quantos jogos tiveram X sinais?", 
-                                     color_discrete_sequence=['#FFD700'])
-                    fig_vol.update_layout(template="plotly_dark", xaxis_title="Quantidade de Sinais", yaxis_title="Quantidade de Jogos")
-                    st.plotly_chart(fig_vol, use_container_width=True)
-                    
-                    st.caption("📋 Detalhe dos Jogos com Mais Sinais")
-                    detalhe = df_show.groupby('Jogo')['Resultado'].value_counts().unstack(fill_value=0)
-                    detalhe['Total'] = detalhe.sum(axis=1)
-                    if '✅ GREEN' not in detalhe: detalhe['✅ GREEN'] = 0
-                    if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
-                    st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
-                    
-                    st.divider()
-                    cb1, cb2 = st.columns(2)
-                    with cb1:
-                        st.caption("🏆 Melhores Ligas")
-                        stats_l = df_show.groupby('Liga')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)*100).reset_index(name='Winrate')
-                        cnt_l = df_show['Liga'].value_counts().reset_index(name='Qtd')
-                        final_l = stats_l.merge(cnt_l, left_on='Liga', right_on='Liga')
-                        st.dataframe(final_l[final_l['Qtd']>=2].sort_values('Winrate', ascending=False).head(5).style.format({'Winrate': '{:.1f}%'}), hide_index=True, use_container_width=True)
-                    with cb2:
-                        st.caption("⚡ Top Estratégias")
-                        stats_e = df_show.groupby('Estrategia')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)*100).reset_index(name='Winrate')
-                        st.dataframe(stats_e.sort_values('Winrate', ascending=False).style.format({'Winrate': '{:.1f}%'}), hide_index=True, use_container_width=True)
-                    
-                    st.divider()
-                    st.markdown("### 👑 Reis do Green (Times que mais lucram)")
-                    df_g = df_show[df_show['Resultado'].str.contains('GREEN')]
-                    lst_t = []
-                    for j in df_g['Jogo']:
-                        try: p = j.split(' x '); lst_t.extend([p[0].strip(), p[1].strip()])
-                        except: pass
-                    if lst_t:
-                        top_r = pd.Series(lst_t).value_counts().reset_index()
-                        top_r.columns = ['Time', 'Qtd Green']
-                        st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
+                        st.markdown("### ⚽ Raio-X por Jogo")
+                        sinais_por_jogo = df_show['Jogo'].value_counts()
+                        c_vol1, c_vol2, c_vol3 = st.columns(3)
+                        c_vol1.metric("Jogos Únicos", len(sinais_por_jogo))
+                        c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
+                        c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
+                        
+                        st.caption("📋 Detalhe dos Jogos com Mais Sinais")
+                        detalhe = df_show.groupby('Jogo')['Resultado'].value_counts().unstack(fill_value=0)
+                        detalhe['Total'] = detalhe.sum(axis=1)
+                        if '✅ GREEN' not in detalhe: detalhe['✅ GREEN'] = 0
+                        if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
+                        st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
+                except Exception as e: st.error(f"Erro BI: {e}")
 
         with abas[4]: st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
         with abas[5]: 
