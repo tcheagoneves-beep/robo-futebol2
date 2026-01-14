@@ -14,7 +14,6 @@ from streamlit_gsheets import GSheetsConnection
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄️")
 
-# INICIALIZAÇÃO SEGURA DA VARIÁVEL
 if 'ROBO_LIGADO' not in st.session_state:
     st.session_state.ROBO_LIGADO = False
 ROBO_LIGADO = False 
@@ -70,6 +69,16 @@ def clean_fid(x):
     try: return str(int(float(x))) 
     except: return '0'
 
+# --- FUNÇÃO NOVA: LIMPEZA TOTAL DE ID ---
+def normalizar_id(val):
+    """Transforma qualquer coisa (78, '78', 78.0) em string limpa '78'"""
+    try:
+        if pd.isna(val) or val == "": return ""
+        # Converte para float, depois int para tirar o .0, depois string
+        return str(int(float(val))).strip()
+    except:
+        return str(val).strip()
+
 # --- 3. BANCO DE DADOS (NUVEM & RAM DISK) ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
@@ -88,24 +97,34 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: return False
 
 def carregar_tudo():
-    # --- CORREÇÃO DE IDS NA LEITURA ---
-    # Garante que IDs sejam lidos como texto limpo (sem .0 e sem espaços)
+    # Carrega e NORMALIZA IMEDIATAMENTE os IDs das tabelas de referência
     
+    # Blacklist
     if 'df_black' not in st.session_state: 
         df = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
-        if not df.empty: df['id'] = df['id'].apply(lambda x: str(x).replace('.0', '').strip())
+        if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_black'] = df
+    else:
+        # Garante que está normalizado mesmo se já carregou
+        st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
 
+    # Seguras
     if 'df_safe' not in st.session_state: 
         df = carregar_aba("Seguras", COLS_SAFE)
-        if not df.empty: df['id'] = df['id'].apply(lambda x: str(x).replace('.0', '').strip())
+        if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_safe'] = df
+    else:
+        st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
 
+    # Observação
     if 'df_vip' not in st.session_state: 
         df = carregar_aba("Obs", COLS_OBS)
-        if not df.empty: df['id'] = df['id'].apply(lambda x: str(x).replace('.0', '').strip())
+        if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_vip'] = df
+    else:
+        st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
     
+    # Histórico
     if 'historico_full' not in st.session_state:
         df = carregar_aba("Historico", COLS_HIST)
         if not df.empty and 'Data' in df.columns:
@@ -158,33 +177,37 @@ def atualizar_historico_ram_disk(lista_atualizada):
 
 def salvar_blacklist(id_liga, pais, nome_liga):
     df = st.session_state['df_black']
-    if str(id_liga) not in df['id'].values:
-        novo = pd.DataFrame([{'id': str(id_liga), 'País': str(pais), 'Liga': str(nome_liga)}])
+    id_norm = normalizar_id(id_liga)
+    if id_norm not in df['id'].values:
+        novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga)}])
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Blacklist", final): st.session_state['df_black'] = final
 
 def salvar_safe_league(id_liga, pais, nome_liga, tem_stats, tem_tabela):
-    id_str = str(id_liga); motivos = []
+    id_norm = normalizar_id(id_liga)
+    motivos = []
     if tem_stats: motivos.append("Chutes")
     if tem_tabela: motivos.append("Tabela")
     motivo_str = " + ".join(motivos) if motivos else "Validada"
+    
     df = st.session_state['df_safe']
-    if id_str in df['id'].values:
-        idx = df[df['id'] == id_str].index[0]
+    if id_norm in df['id'].values:
+        idx = df[df['id'] == id_norm].index[0]
         if df.at[idx, 'Motivo'] != motivo_str:
             df.at[idx, 'Motivo'] = motivo_str
             if salvar_aba("Seguras", df): st.session_state['df_safe'] = df
     else:
-        novo = pd.DataFrame([{'id': id_str, 'País': str(pais), 'Liga': str(nome_liga), 'Motivo': motivo_str}])
+        novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Motivo': motivo_str}])
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
 def salvar_strike(id_liga, pais, nome_liga, strikes):
     df = st.session_state['df_vip']
     hoje = get_time_br().strftime('%Y-%m-%d')
-    id_str = str(id_liga)
-    if id_str in df['id'].values: df = df[df['id'] != id_str]
-    novo = pd.DataFrame([{'id': id_str, 'País': str(pais), 'Liga': str(nome_liga), 'Data_Erro': hoje, 'Strikes': str(strikes)}])
+    id_norm = normalizar_id(id_liga)
+    
+    if id_norm in df['id'].values: df = df[df['id'] != id_norm]
+    novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Data_Erro': hoje, 'Strikes': str(strikes)}])
     final = pd.concat([df, novo], ignore_index=True)
     if salvar_aba("Obs", final): st.session_state['df_vip'] = final
 
@@ -660,50 +683,27 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
 def gerenciar_strikes(id_liga, pais, nome_liga):
     df = st.session_state.get('df_vip', pd.DataFrame())
     hoje = get_time_br().strftime('%Y-%m-%d')
-    id_str = str(id_liga); strikes = 0; data_antiga = ""
+    id_str = normalizar_id(id_liga)
     if not df.empty and id_str in df['id'].values:
         row = df[df['id'] == id_str].iloc[0]
         strikes = int(row['Strikes']); data_antiga = row['Data_Erro']
+    else:
+        strikes = 0; data_antiga = ""
+        
     if data_antiga == hoje: return
     novo_strike = strikes + 1
     salvar_strike(id_liga, pais, nome_liga, novo_strike)
     st.toast(f"⚠️ {nome_liga} Strike {novo_strike}")
     if novo_strike >= 2: salvar_blacklist(id_liga, pais, nome_liga); st.toast(f"🚫 {nome_liga} Banida")
 
-# --- 7. SIDEBAR ---
-with st.sidebar:
-    st.title("❄️ Neves Analytics")
-    with st.expander("⚙️ Configurações", expanded=True):
-        API_KEY = st.text_input("Chave API:", type="password")
-        TG_TOKEN = st.text_input("Token Telegram:", type="password")
-        TG_CHAT = st.text_input("Chat IDs:")
-        INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
-        c1, c2 = st.columns(2)
-        if c1.button("🔄 Reenviar"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if c2.button("🧹 Cache"): st.cache_data.clear()
-        
-        st.write("---")
-        if st.button("📊 Enviar Relatório BI"):
-            enviar_relatorio_bi(TG_TOKEN, TG_CHAT)
-            st.toast("Relatório Enviado!")
-            
-    verificar_reset_diario()
-    with st.expander("📶 Consumo API", expanded=False):
-        u = st.session_state['api_usage']
-        perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
-        st.progress(perc)
-        st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
-    ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
-
 # --- 8. DASHBOARD ---
 if ROBO_LIGADO:
     carregar_tudo()
     
-    # Prepara lista de IDs seguros e Obs para uso global
-    ids_black = st.session_state['df_black']['id'].values
-    # Força lista de strings limpas para garantir o "in"
-    ids_safe = [str(x) for x in st.session_state['df_safe']['id'].values]
-    ids_obs = [str(x) for x in st.session_state['df_vip']['id'].values]
+    # Prepara lista de IDs seguros e Obs com limpeza total
+    ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
+    ids_safe = [normalizar_id(x) for x in st.session_state['df_safe']['id'].values]
+    ids_obs = [normalizar_id(x) for x in st.session_state['df_vip']['id'].values]
 
     hoje_real = get_time_br().strftime('%Y-%m-%d')
     st.session_state['historico_sinais'] = [
@@ -726,13 +726,13 @@ if ROBO_LIGADO:
         verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) 
 
     radar = []
-    
     alvos = st.session_state.get('alvos_do_dia', {})
     candidatos_multipla = []; ids_no_radar = [] 
 
     for j in jogos_live:
-        lid = str(j['league']['id'])
+        lid = normalizar_id(j['league']['id']) # ID LIMPO DA API
         fid = j['fixture']['id']
+        
         if lid in ids_black: continue
         
         nome_liga_show = j['league']['name']
@@ -856,11 +856,10 @@ if ROBO_LIGADO:
                 pid = p['fixture']['id']
                 if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and pid not in ids_no_radar:
                     if datetime.fromisoformat(p['fixture']['date']) > agora:
-                        # --- MODIFICAÇÃO AQUI: ADICIONANDO ÍCONES NA AGENDA ---
-                        lid_agenda = str(p['league']['id'])
+                        # --- CORREÇÃO DA AGENDA ---
+                        lid_agenda = normalizar_id(p['league']['id']) # ID LIMPO
                         nome_liga_agenda = p['league']['name']
                         
-                        # Verifica se o ID (string limpa) está na lista de IDs seguros (lista de strings limpas)
                         if lid_agenda in ids_safe:
                             nome_liga_agenda += " 🛡️"
                         elif lid_agenda in ids_obs:
@@ -911,7 +910,6 @@ if ROBO_LIGADO:
             if df_bi.empty: st.warning("Sem dados históricos na nuvem.")
             else:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
-                
                 try:
                     df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
                     df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
