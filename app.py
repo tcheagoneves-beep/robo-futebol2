@@ -544,21 +544,21 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     
     # 🟣 Porteira Aberta
     if tempo <= 30 and (gh+ga) >= 2: 
-        SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"Placar: {gh}x{ga}"})
+        SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols", "stats": f"Placar: {gh}x{ga}"})
         
     # ⚡ Gol Relâmpago
     if (gh + ga) == 0:
         if (tempo <= 2 and (sog_h + sog_a) >= 1) or (tempo <= 10 and (sh_h + sh_a) >= 2):
-            SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": txt_stats})
+            SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": txt_stats})
             
     # 💰 Janela de Ouro
     if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: 
-        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final)", "stats": txt_stats})
+        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols", "stats": txt_stats})
         
     # 🟢 Blitz
     if tempo <= 60:
-        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol do time que pressiona)", "stats": f"Pressão: {rh}"})
-        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol do time que pressiona)", "stats": f"Pressão: {ra}"})
+        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols", "stats": f"Pressão: {rh}"})
+        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols", "stats": f"Pressão: {ra}"})
         
     if rank_home and rank_away:
         is_top_home = rank_home <= 4; is_top_away = rank_away <= 4
@@ -568,34 +568,34 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         # 🔥 Massacre
         if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
             if tempo <= 5 and (sh_h + sh_a) >= 1: 
-                SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve marcar logo)", "stats": f"Rank: {rank_home}x{rank_away}"})
+                SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT", "stats": f"Rank: {rank_home}x{rank_away}"})
         
         # 🦁 Favorito
         if 5 <= tempo <= 15:
-            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Favorito deve marcar)", "stats": f"Pressão: {rh}"})
-            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Favorito deve marcar)", "stats": f"Pressão: {ra}"})
+            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols", "stats": f"Pressão: {rh}"})
+            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols", "stats": f"Pressão: {ra}"})
         
         # ⚔️ Choque
         if is_top_home and is_top_away and tempo <= 7:
             if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: 
-                SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": txt_stats})
+                SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT", "stats": txt_stats})
         
         # 🥊 Briga de Rua
         if is_mid_home and is_mid_away:
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
-                SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats})
+                SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": txt_stats})
             
             # ❄️ Jogo Morno
             is_bot_home_morno = rank_home >= 10
             is_bot_away_morno = rank_away >= 10
             if is_bot_home_morno and is_bot_away_morno:
                 if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: 
-                    SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)"})
+                    SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
 
     # 💎 Golden Bet
     if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
         if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8:
-             SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima"})
+             SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit)", "stats": "🔥 Pressão Máxima"})
                 
     return SINAIS
 
@@ -716,7 +716,7 @@ if st.session_state.ROBO_LIGADO:
                     sg1 = next((x['value'] for x in s1 if x['type']=='Shots on Goal'), 0) or 0
                     sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
                     if (v1+v2) > 12 and (sg1+sg2) > 6:
-                        candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT (Apostar que sai gol no 2º tempo)"})
+                        candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
                 except: pass
         else: status_vis = "💤"
 
@@ -832,19 +832,15 @@ if st.session_state.ROBO_LIGADO:
                     c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
                     c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
                     
-                    # CORREÇÃO DEFINITIVA DO GRÁFICO (FREQUÊNCIA)
-                    # Conta quantos jogos tiveram 1 sinal, quantos tiveram 2, etc.
-                    contagem_frequencia = sinais_por_jogo.value_counts().sort_index()
+                    # --- CORREÇÃO DO GRÁFICO DE FREQUÊNCIA (SEM NOME DE TIMES NO EIXO X) ---
+                    # Conta a frequência (quantos jogos tiveram 1 sinal, quantos tiveram 2, etc.)
+                    freq = sinais_por_jogo.value_counts().sort_index().reset_index()
+                    freq.columns = ['Qtd Sinais', 'Qtd Jogos']
                     
-                    # Cria DataFrame manual para o Plotly
-                    df_freq = pd.DataFrame({
-                        'Qtd Sinais': contagem_frequencia.index,
-                        'Qtd Jogos': contagem_frequencia.values
-                    })
-                    
-                    fig_vol = px.bar(df_freq, x='Qtd Sinais', y='Qtd Jogos', 
+                    # Usa essa tabela agregada para plotar, garantindo que o eixo X seja numérico (1, 2, 3...)
+                    fig_vol = px.bar(freq, x='Qtd Sinais', y='Qtd Jogos', 
                                      text='Qtd Jogos', 
-                                     title="Distribuição: Quantos jogos tiveram X sinais?", 
+                                     title="Distribuição: Quantos sinais por partida?", 
                                      color_discrete_sequence=['#FFD700'])
                     fig_vol.update_layout(template="plotly_dark", xaxis_title="Quantidade de Sinais", yaxis_title="Quantidade de Jogos")
                     st.plotly_chart(fig_vol, use_container_width=True)
