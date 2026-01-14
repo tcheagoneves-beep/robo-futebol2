@@ -77,7 +77,8 @@ st.markdown("""
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID']
-COLS_SAFE = ['id', 'País', 'Liga', 'Motivo'] 
+# ATUALIZADO: Tabela Safe agora também monitora erros para poder rebaixar
+COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 
@@ -189,77 +190,129 @@ def salvar_blacklist(id_liga, pais, nome_liga):
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Blacklist", final): st.session_state['df_black'] = final
 
-def salvar_safe_league(id_liga, pais, nome_liga, tem_stats, tem_tabela):
+def salvar_safe_league_basic(id_liga, pais, nome_liga):
+    # Salva na Safe com 0 strikes
     id_norm = normalizar_id(id_liga)
-    motivos = []
-    if tem_stats: motivos.append("Chutes")
-    if tem_tabela: motivos.append("Tabela")
-    motivo_str = " + ".join(motivos) if motivos else "Validada"
     df = st.session_state['df_safe']
-    if id_norm in df['id'].values:
-        idx = df[df['id'] == id_norm].index[0]
-        if df.at[idx, 'Motivo'] != motivo_str:
-            df.at[idx, 'Motivo'] = motivo_str
-            if salvar_aba("Seguras", df): st.session_state['df_safe'] = df
-    else:
-        novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Motivo': motivo_str}])
+    if id_norm not in df['id'].values:
+        novo = pd.DataFrame([{
+            'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
+            'Motivo': 'Validada', 'Strikes': '0', 'Jogos_Erro': ''
+        }])
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
-def resetar_strikes(id_liga):
-    df = st.session_state.get('df_vip', pd.DataFrame())
+# --- NOVA INTELIGÊNCIA: GESTÃO DE ERROS (SAFE -> OBS -> BLACKLIST) ---
+def resetar_erros(id_liga):
+    """Se a liga mandou dados, ela é absolvida e volta para Segura limpa"""
     id_norm = normalizar_id(id_liga)
-    if not df.empty and id_norm in df['id'].values:
-        df_new = df[df['id'] != id_norm]
-        if salvar_aba("Obs", df_new): 
-            st.session_state['df_vip'] = df_new
-            st.toast(f"♻️ Strikes zerados! Liga {id_liga} recuperada.")
-
-def salvar_strike(id_liga, pais, nome_liga, strikes, lista_jogos_str):
-    df = st.session_state['df_vip']
-    hoje = get_time_br().strftime('%Y-%m-%d')
-    id_norm = normalizar_id(id_liga)
-    if id_norm in df['id'].values: df = df[df['id'] != id_norm]
     
-    novo = pd.DataFrame([{
-        'id': id_norm, 
-        'País': str(pais), 
-        'Liga': str(nome_liga), 
-        'Data_Erro': hoje, 
-        'Strikes': str(strikes),
-        'Jogos_Erro': lista_jogos_str
-    }])
-    final = pd.concat([df, novo], ignore_index=True)
-    if salvar_aba("Obs", final): st.session_state['df_vip'] = final
+    # 1. Limpa da lista de OBS (se estiver lá)
+    df_vip = st.session_state.get('df_vip', pd.DataFrame())
+    if not df_vip.empty and id_norm in df_vip['id'].values:
+        df_new_vip = df_vip[df_vip['id'] != id_norm]
+        if salvar_aba("Obs", df_new_vip): st.session_state['df_vip'] = df_new_vip
+    
+    # 2. Zera contadores na lista SEGURAS (se estiver lá)
+    df_safe = st.session_state.get('df_safe', pd.DataFrame())
+    if not df_safe.empty and id_norm in df_safe['id'].values:
+        idx = df_safe[df_safe['id'] == id_norm].index[0]
+        # Só atualiza se tiver sujeira
+        val_s = str(df_safe.at[idx, 'Strikes'])
+        if val_s != '0' and val_s != '':
+            df_safe.at[idx, 'Strikes'] = '0'
+            df_safe.at[idx, 'Jogos_Erro'] = ''
+            if salvar_aba("Seguras", df_safe): 
+                st.session_state['df_safe'] = df_safe
+                st.toast(f"✅ Liga {id_liga} validada e limpa!")
 
-def gerenciar_strikes(id_liga, pais, nome_liga, fid_jogo):
-    df = st.session_state.get('df_vip', pd.DataFrame())
+def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
+    """
+    Fluxo de Degradação:
+    1. Se está na SAFE e erra 10x -> Vai para OBS.
+    2. Se está na OBS e erra 10x -> Vai para BLACKLIST.
+    """
     id_norm = normalizar_id(id_liga)
+    fid_str = str(fid_jogo)
+    
+    # --- VERIFICAÇÃO 1: ESTÁ NA SAFE? ---
+    df_safe = st.session_state.get('df_safe', pd.DataFrame())
+    if not df_safe.empty and id_norm in df_safe['id'].values:
+        idx = df_safe[df_safe['id'] == id_norm].index[0]
+        
+        # Pega histórico de erros
+        jogos_erro = str(df_safe.at[idx, 'Jogos_Erro']).split(',') if str(df_safe.at[idx, 'Jogos_Erro']).strip() else []
+        if fid_str in jogos_erro: return # Já contou esse jogo
+        
+        jogos_erro.append(fid_str)
+        strikes = len(jogos_erro)
+        
+        if strikes >= 10:
+            # REBAIXAMENTO: Remove da Safe -> Adiciona na Obs
+            df_safe = df_safe.drop(idx)
+            salvar_aba("Seguras", df_safe)
+            st.session_state['df_safe'] = df_safe
+            
+            # Adiciona na Obs (Começa do zero na Obs)
+            df_vip = st.session_state.get('df_vip', pd.DataFrame())
+            novo_obs = pd.DataFrame([{
+                'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
+                'Data_Erro': get_time_br().strftime('%Y-%m-%d'), 'Strikes': '1', 'Jogos_Erro': fid_str
+            }])
+            final_vip = pd.concat([df_vip, novo_obs], ignore_index=True)
+            salvar_aba("Obs", final_vip)
+            st.session_state['df_vip'] = final_vip
+            
+            st.toast(f"📉 Liga {nome_liga} REBAIXADA para Observação!")
+        else:
+            # Atualiza contador na Safe
+            df_safe.at[idx, 'Strikes'] = str(strikes)
+            df_safe.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
+            salvar_aba("Seguras", df_safe)
+            st.session_state['df_safe'] = df_safe
+            st.toast(f"⚠️ Erro em Liga Segura: {strikes}/10")
+        return
+
+    # --- VERIFICAÇÃO 2: ESTÁ NA OBS (OU NOVA)? ---
+    df_vip = st.session_state.get('df_vip', pd.DataFrame())
     strikes = 0
     jogos_erro = []
     
-    if not df.empty and id_norm in df['id'].values:
-        row = df[df['id'] == id_norm].iloc[0]
+    if not df_vip.empty and id_norm in df_vip['id'].values:
+        row = df_vip[df_vip['id'] == id_norm].iloc[0]
         try:
-            val_s = str(row.get('Strikes', 0)).strip()
-            strikes = int(float(val_s)) if val_s and val_s.lower() != 'nan' else 0
             val_jogos = str(row.get('Jogos_Erro', '')).strip()
             if val_jogos: jogos_erro = val_jogos.split(',')
         except: pass
     
-    if str(fid_jogo) in jogos_erro: return
+    if fid_str in jogos_erro: return
 
-    jogos_erro.append(str(fid_jogo))
-    novo_strike = len(jogos_erro) 
+    jogos_erro.append(fid_str)
+    strikes = len(jogos_erro)
     lista_jogos_str = ",".join(jogos_erro)
     
-    salvar_strike(id_liga, pais, nome_liga, novo_strike, lista_jogos_str)
+    # Atualiza ou Cria na Obs
+    if id_norm in df_vip['id'].values:
+        idx = df_vip[df_vip['id'] == id_norm].index[0]
+        df_vip.at[idx, 'Strikes'] = str(strikes)
+        df_vip.at[idx, 'Jogos_Erro'] = lista_jogos_str
+        df_vip.at[idx, 'Data_Erro'] = get_time_br().strftime('%Y-%m-%d')
+        salvar_aba("Obs", df_vip)
+        st.session_state['df_vip'] = df_vip
+    else:
+        novo = pd.DataFrame([{
+            'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
+            'Data_Erro': get_time_br().strftime('%Y-%m-%d'), 'Strikes': '1', 'Jogos_Erro': fid_str
+        }])
+        final = pd.concat([df_vip, novo], ignore_index=True)
+        salvar_aba("Obs", final)
+        st.session_state['df_vip'] = final
     
-    if novo_strike >= 10: 
+    if strikes >= 10: 
         salvar_blacklist(id_liga, pais, nome_liga)
         st.toast(f"🚫 {nome_liga} Banida (10 Jogos s/ dados)")
     else:
-        st.toast(f"⚠️ {nome_liga} Strike {novo_strike}/10")
+        st.toast(f"⚠️ {nome_liga} em Obs: {strikes}/10")
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
@@ -748,12 +801,14 @@ if st.session_state.ROBO_LIGADO:
     carregar_tudo()
     
     ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
-    ids_safe = [normalizar_id(x) for x in st.session_state['df_safe']['id'].values]
     
-    # CORREÇÃO DO CONTADOR OBS (USANDO LEN DO DATAFRAME DIRETO)
+    # CORREÇÃO DO CONTADOR OBS E SAFE
     df_obs = st.session_state.get('df_vip', pd.DataFrame())
     count_obs = len(df_obs)
-    ids_obs = [normalizar_id(x) for x in df_obs['id'].values]
+    
+    df_safe_show = st.session_state.get('df_safe', pd.DataFrame())
+    count_safe = len(df_safe_show)
+    ids_safe = [normalizar_id(x) for x in df_safe_show['id'].values]
 
     hoje_real = get_time_br().strftime('%Y-%m-%d')
     st.session_state['historico_sinais'] = [s for s in st.session_state['historico_sinais'] if s.get('Data') == hoje_real]
@@ -786,7 +841,7 @@ if st.session_state.ROBO_LIGADO:
         
         nome_liga_show = j['league']['name']
         if lid in ids_safe: nome_liga_show += " 🛡️"
-        elif lid in ids_obs: nome_liga_show += " ⚠️"
+        elif lid in df_obs['id'].values: nome_liga_show += " ⚠️"
             
         ids_no_radar.append(fid)
         tempo = j['fixture']['status']['elapsed'] or 0
@@ -820,8 +875,10 @@ if st.session_state.ROBO_LIGADO:
         lista_sinais = []
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
-            salvar_safe_league(lid, j['league']['country'], j['league']['name'], True, (rank_h is not None))
-            resetar_strikes(lid)
+            salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'])
+            
+            # REDENÇÃO: Se tem stats, limpa a capivara
+            resetar_erros(lid)
             
             if st_short == 'HT' and gh == 0 and ga == 0:
                 try:
@@ -835,8 +892,9 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         else: status_vis = "💤"
 
+        # GESTÃO DE ERROS (REBAIXAMENTO)
         if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT':
-            gerenciar_strikes(lid, j['league']['country'], j['league']['name'], fid)
+            gerenciar_erros(lid, j['league']['country'], j['league']['name'], fid)
         
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
@@ -877,7 +935,7 @@ if st.session_state.ROBO_LIGADO:
                     if datetime.fromisoformat(p['fixture']['date']) > agora:
                         l_id = normalizar_id(p['league']['id']); l_nm = p['league']['name']
                         if l_id in ids_safe: l_nm += " 🛡️"
-                        elif l_id in ids_obs: l_nm += " ⚠️"
+                        elif l_id in df_obs['id'].values: l_nm += " ⚠️"
                         agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
             except: pass
 
@@ -891,11 +949,10 @@ if st.session_state.ROBO_LIGADO:
         c1, c2, c3 = st.columns(3)
         c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{len(ids_safe)}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
+        c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{count_safe}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
         
         st.write("")
-        # AQUI FOI CORRIGIDO O COUNT_OBS
-        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(ids_black)})", f"🛡️ Seguras ({len(ids_safe)})", f"⚠️ Obs ({count_obs})"])
+        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(ids_black)})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})"])
         
         with abas[0]: 
             if radar: st.dataframe(pd.DataFrame(radar)[['Liga', 'Jogo', 'Tempo', 'Status']].astype(str), use_container_width=True, hide_index=True)
@@ -1001,8 +1058,14 @@ if st.session_state.ROBO_LIGADO:
                         st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
 
         with abas[4]: st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
-        with abas[5]: st.dataframe(st.session_state['df_safe'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
-        with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()).drop(columns=['id', 'Jogos_Erro'], errors='ignore'), use_container_width=True, hide_index=True)
+        with abas[5]: 
+            # Esconde colunas técnicas da Safe (Strikes e Jogos_Erro)
+            cols_safe_view = [c for c in st.session_state['df_safe'].columns if c not in ['id', 'Strikes', 'Jogos_Erro']]
+            st.dataframe(st.session_state['df_safe'][cols_safe_view].astype(str), use_container_width=True, hide_index=True)
+        with abas[6]: 
+            # Esconde colunas técnicas da Obs
+            cols_obs_view = [c for c in st.session_state.get('df_vip', pd.DataFrame()).columns if c not in ['id', 'Jogos_Erro']]
+            st.dataframe(st.session_state.get('df_vip', pd.DataFrame())[cols_obs_view].astype(str), use_container_width=True, hide_index=True)
 
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
