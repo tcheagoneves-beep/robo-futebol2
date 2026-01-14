@@ -76,7 +76,6 @@ def normalizar_id(val):
     try:
         s_val = str(val).strip()
         if not s_val or s_val.lower() == 'nan': return ""
-        # Converte para float depois int para remover decimais (.0)
         return str(int(float(s_val)))
     except:
         return str(val).strip()
@@ -506,9 +505,16 @@ if st.session_state.ROBO_LIGADO:
         resp = requests.get(url, headers={"x-apisports-key": API_KEY}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
         update_api_usage(resp.headers); res = resp.json()
         jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
-    except: jogos_live = []; api_error = True
+        
+        # --- DIAGNÓSTICO DE ERRO ---
+        if api_error and "errors" in res:
+            st.error(f"Detalhe do Erro: {res['errors']}")
+    except Exception as e: 
+        jogos_live = []; api_error = True
+        st.error(f"Erro de Conexão: {e}")
 
-    if not api_error: 
+    if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
+    else: 
         check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
         verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) 
 
