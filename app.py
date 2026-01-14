@@ -87,22 +87,20 @@ def carregar_tudo():
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
             
-            # --- FIX SEGURO: LIMPEZA SUAVE DE DATA ---
-            # Remove apenas o horário se existir, mas NÃO EXCLUI A LINHA se der erro
-            # Garante que tudo seja string primeiro
-            df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
-            
-            # Remove duplicatas (FID + Estratégia iguais), mantendo o último
-            df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+            # --- LIMPEZA DE FORMATO E DUPLICATAS ---
+            try:
+                # Remove horário da data (limpeza de string)
+                df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+                # Remove duplicatas lógicas (mantém o último sinal enviado)
+                df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+            except: pass
             
             st.session_state['historico_full'] = df
             
             hoje = get_time_br().strftime('%Y-%m-%d')
-            
-            # Cria lista de hoje baseada na string exata
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
             
-            # Blindagem de memória
+            # Blindagem de memória contra reenvio
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             
             df_hoje = df[df['Data'] == hoje]
@@ -118,8 +116,6 @@ def adicionar_historico(item):
     df_antigo = st.session_state.get('historico_full', pd.DataFrame(columns=COLS_HIST))
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_antigo], ignore_index=True)
-    
-    # Limpa duplicatas ao salvar
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
     
     if salvar_aba("Historico", df_final):
@@ -132,15 +128,12 @@ def atualizar_historico_ram_disk(lista_atualizada):
     df_hoje = pd.DataFrame(lista_atualizada)
     df_disk = st.session_state['historico_full']
     hoje = get_time_br().strftime('%Y-%m-%d')
-    
     if not df_disk.empty and 'Data' in df_disk.columns:
-         # Garante formato string limpo para comparação
          df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
          df_disk = df_disk[df_disk['Data'] != hoje]
     
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
-    
     if salvar_aba("Historico", df_final): st.session_state['historico_full'] = df_final
 
 def salvar_blacklist(id_liga, pais, nome_liga):
@@ -370,19 +363,14 @@ def enviar_relatorio_bi(token, chat_ids):
     
     # --- FAXINA SEGURA PARA O BI ---
     try:
-        # Garante que a coluna é string e limpa o "00:00:00" e espaços
         df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-        # Converte para datetime real para fazer as contas
         df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
-        
-        # Limpa duplicatas antes de calcular
+        # Não remove NaT para não sumir do total
         df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
     except: return
-    # -------------------------------
     
     hoje = pd.to_datetime(get_time_br().date())
     
-    # Filtros baseados na Data Convertida
     mask_dia = df['Data_DT'] == hoje
     mask_sem = df['Data_DT'] >= (hoje - timedelta(days=7))
     mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
@@ -397,7 +385,7 @@ def enviar_relatorio_bi(token, chat_ids):
     t_d, g_d, r_d, w_d = calc_metrics(df[mask_dia])
     t_s, g_s, r_s, w_s = calc_metrics(df[mask_sem])
     t_m, g_m, r_m, w_m = calc_metrics(df[mask_mes])
-    t_a, g_a, r_a, w_a = calc_metrics(df) # Total considera tudo, mesmo sem data válida se falhar a conversão
+    t_a, g_a, r_a, w_a = calc_metrics(df) # Total geral conta tudo
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -584,42 +572,60 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     rh, ra = momentum(fid, sog_h, sog_a)
     SINAIS = []
     
+    # 🟣 Porteira Aberta
     if tempo <= 30 and (gh+ga) >= 2: 
-        SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols", "stats": f"Placar: {gh}x{ga}"})
-    if 5 <= tempo <= 15 and (sog_h+sog_a) >= 1 and (gh + ga) == 0: 
-        SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT", "stats": txt_stats})
-    if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: 
-        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols", "stats": txt_stats})
+        SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"Placar: {gh}x{ga}"})
         
+    # ⚡ Gol Relâmpago (Regra: <=2min com 1 SOG ou <=10min com 2 Sh)
+    if (gh + ga) == 0:
+        if (tempo <= 2 and (sog_h + sog_a) >= 1) or (tempo <= 10 and (sh_h + sh_a) >= 2):
+            SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": txt_stats})
+            
+    # 💰 Janela de Ouro
+    if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: 
+        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final)", "stats": txt_stats})
+        
+    # 🟢 Blitz
     if tempo <= 60:
-        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols", "stats": f"Pressão: {rh}"})
-        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols", "stats": f"Pressão: {ra}"})
+        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol do time que pressiona)", "stats": f"Pressão: {rh}"})
+        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol do time que pressiona)", "stats": f"Pressão: {ra}"})
         
     if rank_home and rank_away:
         is_top_home = rank_home <= 4; is_top_away = rank_away <= 4
         is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11
         is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
         
+        # 🔥 Massacre
         if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
             if tempo <= 5 and (sh_h + sh_a) >= 1: 
-                SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT", "stats": f"Rank: {rank_home}x{rank_away}"})
-        if 5 <= tempo <= 15:
-            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols", "stats": f"Pressão: {rh}"})
-            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols", "stats": f"Pressão: {ra}"})
+                SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve marcar logo)", "stats": f"Rank: {rank_home}x{rank_away}"})
         
+        # 🦁 Favorito
+        if 5 <= tempo <= 15:
+            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Favorito deve marcar)", "stats": f"Pressão: {rh}"})
+            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Favorito deve marcar)", "stats": f"Pressão: {ra}"})
+        
+        # ⚔️ Choque
         if is_top_home and is_top_away and tempo <= 7:
             if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: 
-                SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT", "stats": txt_stats})
+                SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": txt_stats})
+        
+        # 🥊 Briga de Rua
         if is_mid_home and is_mid_away:
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
-                SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT", "stats": txt_stats})
+                SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats})
             
-            if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: 
-                SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT", "stats": "0 Chutes"})
+            # ❄️ Jogo Morno (Rank 10+ e 15 min exatos)
+            is_bot_home_morno = rank_home >= 10
+            is_bot_away_morno = rank_away >= 10
+            if is_bot_home_morno and is_bot_away_morno:
+                if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: 
+                    SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)"})
 
+    # 💎 Golden Bet
     if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
         if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8:
-             SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit)", "stats": "🔥 Pressão Máxima"})
+             SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima"})
                 
     return SINAIS
 
@@ -753,7 +759,7 @@ if ROBO_LIGADO:
                     sog_h = next((x['value'] for x in stats[0]['statistics'] if x['type']=='Shots on Goal'), 0) or 0
                     sog_a = next((x['value'] for x in stats[1]['statistics'] if x['type']=='Shots on Goal'), 0) or 0
                     if (sh_h + sh_a) > 12 and (sog_h + sog_a) > 6:
-                        candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{sh_h+sh_a} Chutes", 'indica': "Over 0.5 FT"})
+                        candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{sh_h+sh_a} Chutes", 'indica': "Over 0.5 FT (Apostar que sai gol no 2º tempo)"})
                 except: pass
         else: status_vis = "💤"
 
@@ -793,7 +799,8 @@ if ROBO_LIGADO:
         novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
         if novos:
             msg = "<b>🚀 OPORTUNIDADE DE MÚLTIPLA (HT) 🚀</b>\n"
-            for c in novos: msg += f"\n⚽ {c['jogo']} ({c['stats']})"; st.session_state['multiplas_enviadas'].add(c['fid'])
+            for c in novos: msg += f"\n⚽ {c['jogo']} ({c['stats']})\n⚠️ AÇÃO: {c['indica']}"
+            st.session_state['multiplas_enviadas'].add(c['fid'])
             enviar_telegram(TG_TOKEN, TG_CHAT, msg)
 
     agenda = []
@@ -852,17 +859,14 @@ if ROBO_LIGADO:
             else:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
                 
-                # --- FAXINA SEGURA PARA O BI ---
                 try:
                     df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
                     df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
                     df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
                 except: pass
-                # -------------------------------
                 
                 hoje_bi = pd.to_datetime(get_time_br().date())
                 
-                # Se der erro na data, ignora filtro de tempo mas considera no total
                 if 'Data_DT' in df_bi.columns:
                     if dias == "Hoje": df_show = df_bi[df_bi['Data_DT'] == hoje_bi]
                     elif dias == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje_bi - timedelta(days=7))]
