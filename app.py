@@ -17,7 +17,6 @@ st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄�
 # INICIALIZAÇÃO SEGURA DA VARIÁVEL
 if 'ROBO_LIGADO' not in st.session_state:
     st.session_state.ROBO_LIGADO = False
-ROBO_LIGADO = False 
 
 # INICIALIZAÇÃO DE VARIÁVEIS DE CONTROLE DE API
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
@@ -43,7 +42,7 @@ st.markdown("""
         width: 100%; 
         white-space: normal !important; 
         height: auto !important;        
-        min-height: 45px;               
+        min-height: 45px;                
         font-size: 14px !important; 
         font-weight: bold !important;
         padding: 5px 10px !important;
@@ -423,12 +422,12 @@ def enviar_relatorio_bi(token, chat_ids):
         tot = g+r; wr = (g/tot*100) if tot>0 else 0
         return tot, g, r, wr
 
-    t_d, g_d, r_d, w_d = cm(df[m_d]); t_s, g_s, r_s, w_s = cm(df[m_s])
-    t_m, g_m, r_m, w_m = cm(df[m_m]); t_a, g_a, r_a, w_a = cm(df)
+    t_d, g_d, r_d, w_d = cm(df[mask_dia]); t_s, g_s, r_s, w_s = cm(df[mask_sem])
+    t_m, g_m, r_m, w_m = cm(df[mask_mes]); t_a, g_a, r_a, w_a = cm(df)
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
-    stats = df[m_m][df[m_m]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+    stats = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
     if not stats.empty:
         c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
         c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
@@ -491,6 +490,44 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             except: pass
         if jogo_encontrado:
             if processar_resultado(s, jogo_encontrado, token, chats): atualizou = True
+    if atualizou: atualizar_historico_ram_disk(hist)
+
+# --- NOVA FUNÇÃO ANTI-VAR (Correção de Gol Anulado) ---
+def verificar_var_rollback(jogos_live, token, chats):
+    hist = st.session_state['historico_sinais']
+    # Filtra apenas os que já deram Green
+    greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
+    if not greens: return
+
+    atualizou = False
+    for s in greens:
+        # Se for Jogo Morno, gol anulado ajuda (mantém o under), então ignora
+        if "Morno" in s['Estrategia']: continue
+
+        fid = int(clean_fid(s.get('FID', 0)))
+        jogo_api = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
+        
+        if jogo_api:
+            gh = jogo_api['goals']['home'] or 0
+            ga = jogo_api['goals']['away'] or 0
+            
+            try:
+                ph, pa = map(int, s['Placar_Sinal'].split('x'))
+                # LÓGICA ANTI-VAR:
+                # Se a soma de gols atual for MENOR ou IGUAL à soma do placar do sinal,
+                # significa que o gol que deu o Green foi anulado.
+                if (gh + ga) <= (ph + pa):
+                    s['Resultado'] = 'Pendente'
+                    s['Placar_Sinal'] = f"{gh}x{ga}" # Atualiza placar para o real
+                    atualizou = True
+                    
+                    msg = (f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n\n"
+                           f"⚽ {s['Jogo']}\n"
+                           f"📉 Placar voltou para: <b>{gh}x{ga}</b>\n"
+                           f"🔄 Status revertido para <b>PENDENTE</b>. Monitoramento continua!")
+                    enviar_telegram(token, chats, msg)
+            except: pass
+
     if atualizou: atualizar_historico_ram_disk(hist)
 
 def reenviar_sinais(token, chats):
@@ -585,7 +622,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
                 SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats})
             
-            # ❄️ Jogo Morno
+            # ❄️ Jogo Morno (CORRIGIDO: >= 10, conforme solicitado)
             is_bot_home_morno = rank_home >= 10
             is_bot_away_morno = rank_away >= 10
             if is_bot_home_morno and is_bot_away_morno:
@@ -661,7 +698,9 @@ if st.session_state.ROBO_LIGADO:
 
     if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
     else: 
+        # --- VERIFICAÇÕES DE RESULTADO E VAR ---
         check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
+        verificar_var_rollback(jogos_live, TG_TOKEN, TG_CHAT) # <--- NOVA CHAMADA AQUI
         verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) 
 
     radar = []; alvos = st.session_state.get('alvos_do_dia', {})
@@ -832,11 +871,7 @@ if st.session_state.ROBO_LIGADO:
                     c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
                     c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
                     
-                    # CORREÇÃO DEFINITIVA DO GRÁFICO (FREQUÊNCIA)
-                    # Conta quantos jogos tiveram 1 sinal, quantos tiveram 2, etc.
                     contagem_frequencia = sinais_por_jogo.value_counts().sort_index()
-                    
-                    # Cria DataFrame manual para o Plotly
                     df_freq = pd.DataFrame({
                         'Qtd Sinais': contagem_frequencia.index,
                         'Qtd Jogos': contagem_frequencia.values
