@@ -18,9 +18,9 @@ st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄�
 if 'ROBO_LIGADO' not in st.session_state:
     st.session_state.ROBO_LIGADO = False
 
-# CONTROLE DE CACHE DO BANCO DE DADOS (Para não travar as abas)
+# CONTROLE DE CACHE DO BANCO DE DADOS
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
-DB_CACHE_TIME = 60  # Tempo em segundos para ler a planilha novamente
+DB_CACHE_TIME = 60
 
 # INICIALIZAÇÃO DE VARIÁVEIS DE CONTROLE DE API
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
@@ -42,14 +42,15 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
+    /* Ajuste para botões pequenos na sidebar */
     .stButton button {
         width: 100%; 
-        white-space: normal !important; 
+        white-space: nowrap !important; 
         height: auto !important;        
-        min-height: 45px;                
-        font-size: 14px !important; 
+        min-height: 40px;                
+        font-size: 13px !important; 
         font-weight: bold !important;
-        padding: 5px 10px !important;
+        padding: 5px 5px !important;
         line-height: 1.2 !important;
     }
     
@@ -68,7 +69,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo'] 
-COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes']
+COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 
 # --- 2. UTILITÁRIOS ---
@@ -85,7 +86,7 @@ def normalizar_id(val):
     except:
         return str(val).strip()
 
-# --- 3. BANCO DE DADOS (COM CACHE INTELIGENTE) ---
+# --- 3. BANCO DE DADOS (CACHE) ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
@@ -102,13 +103,11 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: return False
 
 def carregar_tudo(force=False):
-    # Lógica de Cache: Só lê do Google se passou o tempo limite ou se for forçado
     now = time.time()
     if not force and 'df_black' in st.session_state:
         if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
-            return # Usa a memória local (Rápido)
+            return 
 
-    # Se passou do tempo ou forçado, lê do Google
     if 'df_black' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
         df = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
         if not df.empty: df['id'] = df['id'].apply(normalizar_id)
@@ -136,7 +135,6 @@ def carregar_tudo(force=False):
             hoje = get_time_br().strftime('%Y-%m-%d')
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
             
-            # Recarrega alertas enviados para não duplicar se reiniciar
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             df_hoje = df[df['Data'] == hoje]
             for _, row in df_hoje.iterrows():
@@ -195,34 +193,51 @@ def salvar_safe_league(id_liga, pais, nome_liga, tem_stats, tem_tabela):
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
-def salvar_strike(id_liga, pais, nome_liga, strikes):
+def salvar_strike(id_liga, pais, nome_liga, strikes, lista_jogos_str):
     df = st.session_state['df_vip']
     hoje = get_time_br().strftime('%Y-%m-%d')
     id_norm = normalizar_id(id_liga)
     if id_norm in df['id'].values: df = df[df['id'] != id_norm]
-    novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Data_Erro': hoje, 'Strikes': str(strikes)}])
+    
+    novo = pd.DataFrame([{
+        'id': id_norm, 
+        'País': str(pais), 
+        'Liga': str(nome_liga), 
+        'Data_Erro': hoje, 
+        'Strikes': str(strikes),
+        'Jogos_Erro': lista_jogos_str
+    }])
     final = pd.concat([df, novo], ignore_index=True)
     if salvar_aba("Obs", final): st.session_state['df_vip'] = final
 
-def gerenciar_strikes(id_liga, pais, nome_liga):
+def gerenciar_strikes(id_liga, pais, nome_liga, fid_jogo):
     df = st.session_state.get('df_vip', pd.DataFrame())
-    hoje = get_time_br().strftime('%Y-%m-%d')
     id_norm = normalizar_id(id_liga)
-    strikes = 0; data_antiga = ""
+    strikes = 0
+    jogos_erro = []
+    
     if not df.empty and id_norm in df['id'].values:
         row = df[df['id'] == id_norm].iloc[0]
         try:
             val_s = str(row.get('Strikes', 0)).strip()
             strikes = int(float(val_s)) if val_s and val_s.lower() != 'nan' else 0
-        except: strikes = 0
-        data_antiga = str(row.get('Data_Erro', ''))
-    if data_antiga == hoje: return
-    novo_strike = strikes + 1
-    salvar_strike(id_liga, pais, nome_liga, novo_strike)
-    st.toast(f"⚠️ {nome_liga} Strike {novo_strike}")
-    if novo_strike >= 2: 
+            val_jogos = str(row.get('Jogos_Erro', '')).strip()
+            if val_jogos: jogos_erro = val_jogos.split(',')
+        except: pass
+    
+    if str(fid_jogo) in jogos_erro: return
+
+    jogos_erro.append(str(fid_jogo))
+    novo_strike = len(jogos_erro) 
+    lista_jogos_str = ",".join(jogos_erro)
+    
+    salvar_strike(id_liga, pais, nome_liga, novo_strike, lista_jogos_str)
+    
+    if novo_strike >= 10: 
         salvar_blacklist(id_liga, pais, nome_liga)
-        st.toast(f"🚫 {nome_liga} Banida")
+        st.toast(f"🚫 {nome_liga} Banida (10 Jogos s/ dados)")
+    else:
+        st.toast(f"⚠️ {nome_liga} Strike {novo_strike}/10")
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
@@ -420,7 +435,9 @@ def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     try:
-        df['Data_DT'] = pd.to_datetime(df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip(), errors='coerce')
+        df = df.copy()
+        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
         df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
     except: return
     
@@ -457,13 +474,11 @@ def enviar_relatorio_bi(token, chat_ids):
             buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
         plt.close(fig)
 
-# --- PROCESSAMENTO DE RESULTADOS (HT/FT + JOGO MORNO FIX) ---
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0
     ga = jogo_api['goals']['away'] or 0
     st_short = jogo_api['fixture']['status']['short']
     
-    # Lista de estratégias que SÓ valem para o 1º Tempo
     STRATS_ONLY_HT = [
         "Gol Relâmpago", 
         "Massacre", 
@@ -477,7 +492,6 @@ def processar_resultado(sinal, jogo_api, token, chats):
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
-    # --- LÓGICA ESPECÍFICA: JOGO MORNO (Under) ---
     if sinal['Estrategia'] == "❄️ Jogo Morno":
         if (gh + ga) >= 2:
             sinal['Resultado'] = '❌ RED'
@@ -490,13 +504,11 @@ def processar_resultado(sinal, jogo_api, token, chats):
                 return True
         return False
 
-    # --- VERIFICAÇÃO DE GREEN (Geral) ---
     if (gh+ga) > (ph+pa):
         sinal['Resultado'] = '✅ GREEN'
         enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar Atual: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
         return True
 
-    # --- GUILHOTINA HT: MATAR ESTRATÉGIAS NO 2º TEMPO ---
     eh_estrategia_ht = any(nome in sinal['Estrategia'] for nome in STRATS_ONLY_HT)
     
     if eh_estrategia_ht and st_short in ['2H', 'FT', 'AET', 'PEN', 'ABD']:
@@ -504,7 +516,6 @@ def processar_resultado(sinal, jogo_api, token, chats):
         enviar_telegram(token, chats, f"❌ <b>RED | FIM DO 1º TEMPO</b>\n\n⚽ {sinal['Jogo']}\n📉 Placar HT: {gh}x{ga}\n🎯 {sinal['Estrategia']} (Não bateu no HT)")
         return True
 
-    # --- VERIFICAÇÃO DE RED FINAL ---
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
         enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
@@ -531,7 +542,6 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             if processar_resultado(s, jogo_encontrado, token, chats): atualizou = True
     if atualizou: atualizar_historico_ram_disk(hist)
 
-# --- FUNÇÃO ANTI-VAR (Correção de Gol Anulado) ---
 def verificar_var_rollback(jogos_live, token, chats):
     hist = st.session_state['historico_sinais']
     greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
@@ -689,12 +699,25 @@ with st.sidebar:
         TG_TOKEN = st.text_input("Token Telegram:", type="password")
         TG_CHAT = st.text_input("Chat IDs:")
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
-        c1, c2 = st.columns(2)
-        if c1.button("🔄 Reenviar"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if c2.button("🧹 Cache"): 
-            st.cache_data.clear()
-            carregar_tudo(force=True)
-            st.session_state['last_db_update'] = 0
+        
+        c1, c2, c3 = st.columns([1,1,1])
+        with c1:
+            if st.button("🔄 Reenv"): 
+                reenviar_sinais(TG_TOKEN, TG_CHAT)
+        with c2:
+            if st.button("🧹 Cache"): 
+                st.cache_data.clear()
+                carregar_tudo(force=True)
+                st.session_state['last_db_update'] = 0
+        with c3:
+            if st.button("🗑️ BL"):
+                st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
+                salvar_aba("Blacklist", st.session_state['df_black'])
+                st.cache_data.clear()
+                st.toast("Blacklist Limpa!")
+                time.sleep(1)
+                st.rerun()
+
         st.write("---")
         if st.button("📊 Enviar Relatório BI"):
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
@@ -795,7 +818,9 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         else: status_vis = "💤"
 
-        if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT': gerenciar_strikes(lid, j['league']['country'], j['league']['name'])
+        # LOGICA DE STRIKE APENAS SE FALTAR DADOS DE CHUTES (STATS)
+        if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT':
+            gerenciar_strikes(lid, j['league']['country'], j['league']['name'], fid)
         
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
@@ -863,7 +888,6 @@ if st.session_state.ROBO_LIGADO:
             else: st.caption("Sem jogos futuros hoje.")
         with abas[2]: 
             if not hist_hj.empty: 
-                # FILTRO VISUAL COMPLETO: Esconde colunas técnicas
                 colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT']
                 cols_view = [c for c in hist_hj.columns if c not in colunas_esconder]
                 st.dataframe(hist_hj[cols_view].astype(str), use_container_width=True, hide_index=True)
@@ -959,7 +983,7 @@ if st.session_state.ROBO_LIGADO:
 
         with abas[4]: st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
         with abas[5]: st.dataframe(st.session_state['df_safe'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
-        with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()).drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
+        with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()).drop(columns=['id', 'Jogos_Erro'], errors='ignore'), use_container_width=True, hide_index=True)
 
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
