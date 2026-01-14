@@ -77,7 +77,6 @@ st.markdown("""
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID']
-# ATUALIZADO: Tabela Safe agora também monitora erros para poder rebaixar
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
@@ -103,8 +102,13 @@ def carregar_aba(nome_aba, colunas_esperadas):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    df[col] = ""
-        if df.empty or len(df.columns) < len(colunas_esperadas): return pd.DataFrame(columns=colunas_esperadas)
+                    # Se faltar coluna, cria com valor padrão seguro
+                    if col == 'Strikes': df[col] = '0'
+                    else: df[col] = ""
+        
+        if df.empty or len(df.columns) < len(colunas_esperadas): 
+            return pd.DataFrame(columns=colunas_esperadas)
+            
         return df.fillna("").astype(str)
     except: return pd.DataFrame(columns=colunas_esperadas)
 
@@ -191,7 +195,6 @@ def salvar_blacklist(id_liga, pais, nome_liga):
         if salvar_aba("Blacklist", final): st.session_state['df_black'] = final
 
 def salvar_safe_league_basic(id_liga, pais, nome_liga):
-    # Salva na Safe com 0 strikes
     id_norm = normalizar_id(id_liga)
     df = st.session_state['df_safe']
     if id_norm not in df['id'].values:
@@ -202,22 +205,24 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga):
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
-# --- NOVA INTELIGÊNCIA: GESTÃO DE ERROS (SAFE -> OBS -> BLACKLIST) ---
+# --- GESTÃO DE ERROS (CORRIGIDO PARA EVITAR KEYERROR) ---
 def resetar_erros(id_liga):
-    """Se a liga mandou dados, ela é absolvida e volta para Segura limpa"""
     id_norm = normalizar_id(id_liga)
     
-    # 1. Limpa da lista de OBS (se estiver lá)
+    # 1. OBS
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     if not df_vip.empty and id_norm in df_vip['id'].values:
         df_new_vip = df_vip[df_vip['id'] != id_norm]
         if salvar_aba("Obs", df_new_vip): st.session_state['df_vip'] = df_new_vip
     
-    # 2. Zera contadores na lista SEGURAS (se estiver lá)
+    # 2. SEGURAS (COM PROTEÇÃO CONTRA KEYERROR)
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
+        # Garante que as colunas existem antes de tentar acessar
+        if 'Strikes' not in df_safe.columns: df_safe['Strikes'] = '0'
+        if 'Jogos_Erro' not in df_safe.columns: df_safe['Jogos_Erro'] = ''
+        
         idx = df_safe[df_safe['id'] == id_norm].index[0]
-        # Só atualiza se tiver sujeira
         val_s = str(df_safe.at[idx, 'Strikes'])
         if val_s != '0' and val_s != '':
             df_safe.at[idx, 'Strikes'] = '0'
@@ -227,33 +232,28 @@ def resetar_erros(id_liga):
                 st.toast(f"✅ Liga {id_liga} validada e limpa!")
 
 def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
-    """
-    Fluxo de Degradação:
-    1. Se está na SAFE e erra 10x -> Vai para OBS.
-    2. Se está na OBS e erra 10x -> Vai para BLACKLIST.
-    """
     id_norm = normalizar_id(id_liga)
     fid_str = str(fid_jogo)
     
     # --- VERIFICAÇÃO 1: ESTÁ NA SAFE? ---
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
-        idx = df_safe[df_safe['id'] == id_norm].index[0]
+        if 'Strikes' not in df_safe.columns: df_safe['Strikes'] = '0'
+        if 'Jogos_Erro' not in df_safe.columns: df_safe['Jogos_Erro'] = ''
         
-        # Pega histórico de erros
+        idx = df_safe[df_safe['id'] == id_norm].index[0]
         jogos_erro = str(df_safe.at[idx, 'Jogos_Erro']).split(',') if str(df_safe.at[idx, 'Jogos_Erro']).strip() else []
-        if fid_str in jogos_erro: return # Já contou esse jogo
+        
+        if fid_str in jogos_erro: return 
         
         jogos_erro.append(fid_str)
         strikes = len(jogos_erro)
         
         if strikes >= 10:
-            # REBAIXAMENTO: Remove da Safe -> Adiciona na Obs
             df_safe = df_safe.drop(idx)
             salvar_aba("Seguras", df_safe)
             st.session_state['df_safe'] = df_safe
             
-            # Adiciona na Obs (Começa do zero na Obs)
             df_vip = st.session_state.get('df_vip', pd.DataFrame())
             novo_obs = pd.DataFrame([{
                 'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
@@ -262,10 +262,8 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             final_vip = pd.concat([df_vip, novo_obs], ignore_index=True)
             salvar_aba("Obs", final_vip)
             st.session_state['df_vip'] = final_vip
-            
             st.toast(f"📉 Liga {nome_liga} REBAIXADA para Observação!")
         else:
-            # Atualiza contador na Safe
             df_safe.at[idx, 'Strikes'] = str(strikes)
             df_safe.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
             salvar_aba("Seguras", df_safe)
@@ -273,7 +271,7 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             st.toast(f"⚠️ Erro em Liga Segura: {strikes}/10")
         return
 
-    # --- VERIFICAÇÃO 2: ESTÁ NA OBS (OU NOVA)? ---
+    # --- VERIFICAÇÃO 2: OBS ---
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     strikes = 0
     jogos_erro = []
@@ -291,7 +289,6 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     strikes = len(jogos_erro)
     lista_jogos_str = ",".join(jogos_erro)
     
-    # Atualiza ou Cria na Obs
     if id_norm in df_vip['id'].values:
         idx = df_vip[df_vip['id'] == id_norm].index[0]
         df_vip.at[idx, 'Strikes'] = str(strikes)
