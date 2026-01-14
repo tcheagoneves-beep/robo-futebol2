@@ -847,7 +847,10 @@ if st.session_state.ROBO_LIGADO:
             if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Sem jogos futuros hoje.")
         with abas[2]: 
-            if not hist_hj.empty: st.dataframe(hist_hj.astype(str), use_container_width=True, hide_index=True)
+            if not hist_hj.empty: 
+                # FILTRO VISUAL: Remove colunas técnicas
+                cols_view = [c for c in hist_hj.columns if c not in ['FID', 'HomeID', 'AwayID']]
+                st.dataframe(hist_hj[cols_view].astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
         with abas[3]: 
@@ -937,9 +940,9 @@ if st.session_state.ROBO_LIGADO:
                         top_r.columns = ['Time', 'Qtd Green']
                         st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
 
-        with abas[4]: st.dataframe(st.session_state['df_black'], use_container_width=True, hide_index=True)
-        with abas[5]: st.dataframe(st.session_state['df_safe'], use_container_width=True, hide_index=True)
-        with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()), use_container_width=True, hide_index=True)
+        with abas[4]: st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
+        with abas[5]: st.dataframe(st.session_state['df_safe'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
+        with abas[6]: st.dataframe(st.session_state.get('df_vip', pd.DataFrame()).drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
 
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
