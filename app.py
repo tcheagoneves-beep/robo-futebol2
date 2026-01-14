@@ -14,6 +14,12 @@ from streamlit_gsheets import GSheetsConnection
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄️")
 
+# --- INICIALIZAÇÃO SEGURA DA VARIÁVEL (CORREÇÃO DO ERRO) ---
+# Garante que a variável exista antes de qualquer uso
+if 'ROBO_LIGADO' not in st.session_state:
+    st.session_state.ROBO_LIGADO = False
+ROBO_LIGADO = False 
+
 st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
@@ -91,7 +97,9 @@ def carregar_tudo():
         df = carregar_aba("Historico", COLS_HIST)
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
+            
             try:
+                # Limpeza segura da data
                 df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
                 df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
             except: pass
@@ -117,6 +125,7 @@ def adicionar_historico(item):
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_antigo], ignore_index=True)
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
+    
     if salvar_aba("Historico", df_final):
         st.session_state['historico_full'] = df_final
         st.session_state['historico_sinais'].insert(0, item)
@@ -130,6 +139,7 @@ def atualizar_historico_ram_disk(lista_atualizada):
     if not df_disk.empty and 'Data' in df_disk.columns:
          df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
          df_disk = df_disk[df_disk['Data'] != hoje]
+    
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
     if salvar_aba("Historico", df_final): st.session_state['historico_full'] = df_final
@@ -175,10 +185,11 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- 4. INTELIGÊNCIA PREDIITIVA ---
+# --- 4. INTELIGÊNCIA PREDIITIVA (PONDERADA + STREAK) ---
 def buscar_inteligencia(estrategia, liga, jogo):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
+    
     try:
         times = jogo.split(' x ')
         time_casa = times[0].split('(')[0].strip()
@@ -187,6 +198,7 @@ def buscar_inteligencia(estrategia, liga, jogo):
         return "\n🔮 <b>Prob: Erro Nome</b>"
     
     numerador = 0; denominador = 0; fontes = []
+
     f_casa = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
     f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
     
@@ -194,10 +206,12 @@ def buscar_inteligencia(estrategia, liga, jogo):
     if len(f_casa) >= 3:
         wr_casa = (f_casa['Resultado'].str.contains('GREEN').sum() / len(f_casa)) * 100
         tem_casa = True
+
     wr_vis = 0; tem_vis = False
     if len(f_vis) >= 3:
         wr_vis = (f_vis['Resultado'].str.contains('GREEN').sum() / len(f_vis)) * 100
         tem_vis = True
+    
     if tem_casa or tem_vis:
         divisao = 2 if (tem_casa and tem_vis) else 1
         media_times = (wr_casa + wr_vis) / divisao
@@ -644,6 +658,33 @@ def gerenciar_strikes(id_liga, pais, nome_liga):
     st.toast(f"⚠️ {nome_liga} Strike {novo_strike}")
     if novo_strike >= 2: salvar_blacklist(id_liga, pais, nome_liga); st.toast(f"🚫 {nome_liga} Banida")
 
+# --- 7. SIDEBAR ---
+with st.sidebar:
+    st.title("❄️ Neves Analytics")
+    with st.expander("⚙️ Configurações", expanded=True):
+        API_KEY = st.text_input("Chave API:", type="password")
+        TG_TOKEN = st.text_input("Token Telegram:", type="password")
+        TG_CHAT = st.text_input("Chat IDs:")
+        INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
+        c1, c2 = st.columns(2)
+        if c1.button("🔄 Reenviar"): reenviar_sinais(TG_TOKEN, TG_CHAT)
+        if c2.button("🧹 Cache"): st.cache_data.clear()
+        
+        st.write("---")
+        if st.button("📊 Enviar Relatório BI"):
+            enviar_relatorio_bi(TG_TOKEN, TG_CHAT)
+            st.toast("Relatório Enviado!")
+            
+    verificar_reset_diario()
+    with st.expander("📶 Consumo API", expanded=False):
+        u = st.session_state['api_usage']
+        perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
+        st.progress(perc)
+        st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
+    
+    # Checkbox que define a variável ROBO_LIGADO
+    ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
+
 # --- 8. DASHBOARD ---
 if ROBO_LIGADO:
     carregar_tudo()
@@ -803,7 +844,7 @@ if ROBO_LIGADO:
                 pid = p['fixture']['id']
                 if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and pid not in ids_no_radar:
                     if datetime.fromisoformat(p['fixture']['date']) > agora:
-                        # --- MODIFICAÇÃO AQUI: ADICIONANDO ÍCONES NA AGENDA ---
+                        # --- ÍCONES NA AGENDA ---
                         lid = str(p['league']['id'])
                         nome_liga_agenda = p['league']['name']
                         if lid in ids_safe:
@@ -812,7 +853,6 @@ if ROBO_LIGADO:
                             nome_liga_agenda += " ⚠️"
                         
                         agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": nome_liga_agenda, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
-                        # ------------------------------------------------------
             except: pass
 
     hora_atual = get_time_br().hour
