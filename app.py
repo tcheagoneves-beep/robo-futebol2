@@ -19,6 +19,10 @@ if 'ROBO_LIGADO' not in st.session_state:
     st.session_state.ROBO_LIGADO = False
 ROBO_LIGADO = False 
 
+# INICIALIZAÇÃO DE VARIÁVEIS DE CONTROLE DE API
+if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
+if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
+
 st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
@@ -202,35 +206,24 @@ def salvar_strike(id_liga, pais, nome_liga, strikes):
     final = pd.concat([df, novo], ignore_index=True)
     if salvar_aba("Obs", final): st.session_state['df_vip'] = final
 
-# --- FUNÇÃO CORRIGIDA PARA EVITAR O ERRO ValueError ---
 def gerenciar_strikes(id_liga, pais, nome_liga):
     df = st.session_state.get('df_vip', pd.DataFrame())
     hoje = get_time_br().strftime('%Y-%m-%d')
     id_norm = normalizar_id(id_liga)
-    
-    strikes = 0
-    data_antiga = ""
+    strikes = 0; data_antiga = ""
     
     if not df.empty and id_norm in df['id'].values:
         row = df[df['id'] == id_norm].iloc[0]
-        # BLINDAGEM: Tenta converter, se falhar vira 0
         try:
             val_s = str(row.get('Strikes', 0)).strip()
-            if val_s and val_s.lower() != 'nan':
-                strikes = int(float(val_s))
-            else:
-                strikes = 0
-        except:
-            strikes = 0
-        
+            strikes = int(float(val_s)) if val_s and val_s.lower() != 'nan' else 0
+        except: strikes = 0
         data_antiga = str(row.get('Data_Erro', ''))
         
     if data_antiga == hoje: return
-    
     novo_strike = strikes + 1
     salvar_strike(id_liga, pais, nome_liga, novo_strike)
     st.toast(f"⚠️ {nome_liga} Strike {novo_strike}")
-    
     if novo_strike >= 2: 
         salvar_blacklist(id_liga, pais, nome_liga)
         st.toast(f"🚫 {nome_liga} Banida")
@@ -243,6 +236,28 @@ def calcular_stats(df_raw):
     total = len(df_raw)
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
+
+# --- FUNÇÕES QUE FALTAVAM (AQUI ESTÁ A CORREÇÃO DO ERRO) ---
+def verificar_reset_diario():
+    hoje_utc = datetime.now(pytz.utc).date()
+    if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = hoje_utc
+    if st.session_state['data_api_usage'] != hoje_utc:
+        st.session_state['api_usage']['used'] = 0
+        st.session_state['data_api_usage'] = hoje_utc
+        st.session_state['alvos_do_dia'] = {}
+        return True
+    return False
+
+def update_api_usage(headers):
+    if not headers: return
+    try:
+        limit = int(headers.get('x-ratelimit-requests-limit', 75000))
+        remaining = int(headers.get('x-ratelimit-requests-remaining', 0))
+        used = limit - remaining
+        st.session_state['api_usage'] = {'used': used, 'limit': limit}
+        st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
+    except: pass
+# -----------------------------------------------------------
 
 # --- 4. INTELIGÊNCIA PREDIITIVA ---
 def buscar_inteligencia(estrategia, liga, jogo):
@@ -513,6 +528,7 @@ with st.sidebar:
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
             
     with st.expander("📶 Consumo API", expanded=False):
+        verificar_reset_diario()
         u = st.session_state['api_usage']
         perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
         st.progress(perc)
