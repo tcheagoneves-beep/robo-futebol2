@@ -86,9 +86,30 @@ def carregar_tudo():
         df = carregar_aba("Historico", COLS_HIST)
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
+            
+            # --- FIX SEGURO: LIMPEZA SUAVE DE DATA ---
+            # Remove apenas o horário se existir, mas NÃO EXCLUI A LINHA se der erro
+            # Garante que tudo seja string primeiro
+            df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
+            
+            # Remove duplicatas (FID + Estratégia iguais), mantendo o último
+            df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+            
             st.session_state['historico_full'] = df
+            
             hoje = get_time_br().strftime('%Y-%m-%d')
+            
+            # Cria lista de hoje baseada na string exata
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
+            
+            # Blindagem de memória
+            if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+            
+            df_hoje = df[df['Data'] == hoje]
+            for _, row in df_hoje.iterrows():
+                id_blindagem = f"{row['FID']}_{row['Estrategia']}"
+                st.session_state['alertas_enviados'].add(id_blindagem)
+            
         else:
             st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
             st.session_state['historico_sinais'] = []
@@ -97,6 +118,10 @@ def adicionar_historico(item):
     df_antigo = st.session_state.get('historico_full', pd.DataFrame(columns=COLS_HIST))
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_antigo], ignore_index=True)
+    
+    # Limpa duplicatas ao salvar
+    df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
+    
     if salvar_aba("Historico", df_final):
         st.session_state['historico_full'] = df_final
         st.session_state['historico_sinais'].insert(0, item)
@@ -107,8 +132,15 @@ def atualizar_historico_ram_disk(lista_atualizada):
     df_hoje = pd.DataFrame(lista_atualizada)
     df_disk = st.session_state['historico_full']
     hoje = get_time_br().strftime('%Y-%m-%d')
-    if not df_disk.empty: df_disk = df_disk[df_disk['Data'] != hoje]
+    
+    if not df_disk.empty and 'Data' in df_disk.columns:
+         # Garante formato string limpo para comparação
+         df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
+         df_disk = df_disk[df_disk['Data'] != hoje]
+    
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
+    df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
+    
     if salvar_aba("Historico", df_final): st.session_state['historico_full'] = df_final
 
 def salvar_blacklist(id_liga, pais, nome_liga):
@@ -145,6 +177,7 @@ def salvar_strike(id_liga, pais, nome_liga, strikes):
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
+    df_raw = df_raw.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
     greens = len(df_raw[df_raw['Resultado'].str.contains('GREEN', na=False)])
     reds = len(df_raw[df_raw['Resultado'].str.contains('RED', na=False)])
     total = len(df_raw)
@@ -207,7 +240,14 @@ def buscar_inteligencia(estrategia, liga, jogo):
     str_fontes = "+".join(fontes) if fontes else "Geral"
     
     # --- CÁLCULO DE MOMENTUM (STREAK) ---
-    f_times = pd.concat([f_casa, f_vis]).sort_values(by='Data', ascending=False)
+    f_times = pd.concat([f_casa, f_vis])
+    if not f_times.empty:
+        try:
+            f_times['Data_Temp'] = pd.to_datetime(f_times['Data'], errors='coerce')
+            f_times = f_times.sort_values(by='Data_Temp', ascending=False)
+        except:
+            f_times = f_times.sort_values(by='Data', ascending=False)
+
     streak_msg = ""
     if not f_times.empty:
         last_results = f_times['Resultado'].head(5).tolist()
@@ -250,18 +290,16 @@ def enviar_telegram(token, chat_ids, msg):
 
 # --- RADAR MATINAL INTELIGENTE (FILTRO DE LUCRATIVIDADE) ---
 def verificar_alerta_matinal(token, chat_ids, api_key):
-    # Envia entre 08:00 e 12:00 uma vez por dia
     agora = get_time_br()
     hoje_str = agora.strftime('%Y-%m-%d')
     chave = f'alerta_matinal_{hoje_str}'
     
-    if chave in st.session_state: return # Já enviou hoje
-    if not (8 <= agora.hour < 12): return # Fora do horário
+    if chave in st.session_state: return 
+    if not (8 <= agora.hour < 12): return 
 
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
-    # 1. Identifica Top Times Lucrativos (Geral)
     df_green = df[df['Resultado'].str.contains('GREEN', na=False)]
     times_lucrativos = []
     for jogo in df_green['Jogo']:
@@ -275,15 +313,11 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     top_times = pd.Series(times_lucrativos).value_counts().head(5)
     lista_top = top_times.index.tolist()
     
-    # 2. Agenda Hoje
     jogos_hoje = buscar_agenda_cached(api_key, hoje_str)
     if not jogos_hoje: return
     
-    # --- MEMÓRIA DE ALVOS (HEADSHOT) ---
-    # Se não existir, cria a lista de alvos para o dia
     if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 
-    # 3. Match e Melhor Estratégia
     matches = []
     for jogo in jogos_hoje:
         try:
@@ -299,8 +333,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             
             if time_foco:
                 greens_total = top_times[time_foco]
-                
-                # Busca melhor estratégia
                 df_time_all = df[df['Jogo'].str.contains(time_foco, na=False)]
                 melhor_strat = "Geral"
                 melhor_wr = 0
@@ -317,7 +349,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
                 
                 if melhor_wr > 60:
                     motivo = f"🔥 <b>Oportunidade Sniper:</b> O {time_foco} tem histórico de <b>{melhor_wr:.0f}% de acerto</b> na estratégia <b>{melhor_strat}</b>!"
-                    # SALVA NA MEMÓRIA PARA O HEADSHOT MAIS TARDE
                     st.session_state['alvos_do_dia'][time_foco] = melhor_strat
                 else:
                     motivo = f"💰 <b>Volume:</b> O {time_foco} é uma máquina de Greens ({greens_total} acumulados). Fique atento a qualquer sinal!"
@@ -336,12 +367,25 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
 def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
-    df['Data'] = pd.to_datetime(df['Data'], errors='coerce')
+    
+    # --- FAXINA SEGURA PARA O BI ---
+    try:
+        # Garante que a coluna é string e limpa o "00:00:00" e espaços
+        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+        # Converte para datetime real para fazer as contas
+        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
+        
+        # Limpa duplicatas antes de calcular
+        df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+    except: return
+    # -------------------------------
+    
     hoje = pd.to_datetime(get_time_br().date())
     
-    mask_dia = df['Data'] == hoje
-    mask_sem = df['Data'] >= (hoje - timedelta(days=7))
-    mask_mes = df['Data'] >= (hoje - timedelta(days=30))
+    # Filtros baseados na Data Convertida
+    mask_dia = df['Data_DT'] == hoje
+    mask_sem = df['Data_DT'] >= (hoje - timedelta(days=7))
+    mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
     
     def calc_metrics(d):
         g = d['Resultado'].str.contains('GREEN').sum()
@@ -353,7 +397,7 @@ def enviar_relatorio_bi(token, chat_ids):
     t_d, g_d, r_d, w_d = calc_metrics(df[mask_dia])
     t_s, g_s, r_s, w_s = calc_metrics(df[mask_sem])
     t_m, g_m, r_m, w_m = calc_metrics(df[mask_mes])
-    t_a, g_a, r_a, w_a = calc_metrics(df)
+    t_a, g_a, r_a, w_a = calc_metrics(df) # Total considera tudo, mesmo sem data válida se falhar a conversão
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(7, 4))
@@ -454,7 +498,6 @@ def reenviar_sinais(token, chats):
         enviar_telegram(token, chats, msg); time.sleep(0.5)
 
 # --- 6. CORE ---
-# Inicialização das variáveis de sessão
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
@@ -471,7 +514,6 @@ def verificar_reset_diario():
     if st.session_state['data_api_usage'] != hoje_utc:
         st.session_state['api_usage']['used'] = 0
         st.session_state['data_api_usage'] = hoje_utc
-        # Reseta os alvos do dia também para não misturar
         st.session_state['alvos_do_dia'] = {}
         return True
     return False
@@ -649,7 +691,6 @@ if ROBO_LIGADO:
     df_vip_temp = st.session_state.get('df_vip', pd.DataFrame())
     ids_obs = df_vip_temp['id'].values if not df_vip_temp.empty and 'id' in df_vip_temp.columns else []
     
-    # Carrega os alvos do dia (Headshots)
     alvos = st.session_state.get('alvos_do_dia', {})
     
     candidatos_multipla = []; ids_no_radar = [] 
@@ -727,12 +768,10 @@ if ROBO_LIGADO:
                     if adicionar_historico(item):
                         prob_msg = buscar_inteligencia(sinal['tag'], j['league']['name'], f"{home} x {away}")
                         
-                        # --- VERIFICA SE É HEADSHOT (PREVISTO DE MANHÃ) ---
                         eh_headshot = False
                         if home in alvos and alvos[home] == sinal['tag']: eh_headshot = True
                         if away in alvos and alvos[away] == sinal['tag']: eh_headshot = True
                         
-                        # Define cabeçalho
                         if eh_headshot:
                             header_msg = "🎯 HEADSHOT | PREVISÃO CONFIRMADA 🎯"
                             tag_extra = f"\n🔥 {sinal['tag'].upper()} *(Validado pelo Relatório Matinal)*"
@@ -812,12 +851,25 @@ if ROBO_LIGADO:
             if df_bi.empty: st.warning("Sem dados históricos na nuvem.")
             else:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
-                df_bi['Data'] = pd.to_datetime(df_bi['Data'], errors='coerce')
+                
+                # --- FAXINA SEGURA PARA O BI ---
+                try:
+                    df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+                    df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
+                    df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+                except: pass
+                # -------------------------------
+                
                 hoje_bi = pd.to_datetime(get_time_br().date())
-                if dias == "Hoje": df_show = df_bi[df_bi['Data'] == hoje_bi]
-                elif dias == "7 Dias": df_show = df_bi[df_bi['Data'] >= (hoje_bi - timedelta(days=7))]
-                elif dias == "30 Dias": df_show = df_bi[df_bi['Data'] >= (hoje_bi - timedelta(days=30))]
-                else: df_show = df_bi
+                
+                # Se der erro na data, ignora filtro de tempo mas considera no total
+                if 'Data_DT' in df_bi.columns:
+                    if dias == "Hoje": df_show = df_bi[df_bi['Data_DT'] == hoje_bi]
+                    elif dias == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje_bi - timedelta(days=7))]
+                    elif dias == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje_bi - timedelta(days=30))]
+                    else: df_show = df_bi
+                else:
+                    df_show = df_bi
                 
                 if not df_show.empty:
                     greens_bi = df_show['Resultado'].str.contains('GREEN').sum()
