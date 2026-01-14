@@ -42,11 +42,11 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* CSS PARA O BOTÃO DE CACHE (GRANDE E SEGURO) */
+    /* CSS PARA O ÚNICO BOTÃO (CACHE) */
     .stButton button {
         width: 100%;
-        height: 50px !important;
-        font-size: 18px !important;
+        height: 55px !important;
+        font-size: 20px !important;
         font-weight: bold !important;
         padding: 0px !important;
         border-radius: 8px !important;
@@ -56,6 +56,7 @@ st.markdown("""
         background-color: #262730;
         border: 1px solid #4e4e4e;
         color: white;
+        margin-top: 10px;
     }
     .stButton button:hover {
         border-color: #00FF00;
@@ -155,7 +156,6 @@ def carregar_tudo(force=False):
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
-    # Proteção: Recarrega o banco antes de salvar para evitar sobrescrever com vazio
     if 'historico_full' not in st.session_state or st.session_state['historico_full'].empty:
         carregar_tudo(force=True)
         
@@ -722,6 +722,7 @@ with st.sidebar:
         TG_CHAT = st.text_input("Chat IDs:")
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
         
+        # BOTÃO ÚNICO DE CACHE (GRANDE)
         if st.button("🧹 Limpar Cache"): 
             st.cache_data.clear()
             carregar_tudo(force=True)
@@ -748,7 +749,11 @@ if st.session_state.ROBO_LIGADO:
     
     ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
     ids_safe = [normalizar_id(x) for x in st.session_state['df_safe']['id'].values]
-    ids_obs = [normalizar_id(x) for x in st.session_state['df_vip']['id'].values]
+    
+    # CORREÇÃO DO CONTADOR OBS (USANDO LEN DO DATAFRAME DIRETO)
+    df_obs = st.session_state.get('df_vip', pd.DataFrame())
+    count_obs = len(df_obs)
+    ids_obs = [normalizar_id(x) for x in df_obs['id'].values]
 
     hoje_real = get_time_br().strftime('%Y-%m-%d')
     st.session_state['historico_sinais'] = [s for s in st.session_state['historico_sinais'] if s.get('Data') == hoje_real]
@@ -889,7 +894,8 @@ if st.session_state.ROBO_LIGADO:
         c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{len(ids_safe)}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
         
         st.write("")
-        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(ids_black)})", f"🛡️ Seguras ({len(ids_safe)})", f"⚠️ Obs ({len(ids_obs)})"])
+        # AQUI FOI CORRIGIDO O COUNT_OBS
+        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(ids_black)})", f"🛡️ Seguras ({len(ids_safe)})", f"⚠️ Obs ({count_obs})"])
         
         with abas[0]: 
             if radar: st.dataframe(pd.DataFrame(radar)[['Liga', 'Jogo', 'Tempo', 'Status']].astype(str), use_container_width=True, hide_index=True)
@@ -919,7 +925,6 @@ if st.session_state.ROBO_LIGADO:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
                 h_bi = pd.to_datetime(get_time_br().date())
                 
-                # CORREÇÃO CRÍTICA DO BI (RESTAURADA)
                 if dias == "Tudo":
                     df_show = df_bi
                 elif 'Data_DT' in df_bi.columns:
