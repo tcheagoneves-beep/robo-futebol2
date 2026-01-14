@@ -87,8 +87,20 @@ def carregar_tudo():
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
             st.session_state['historico_full'] = df
+            
             hoje = get_time_br().strftime('%Y-%m-%d')
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
+            
+            # --- BLINDAGEM CONTRA DUPLICIDADE (Carrega o que já foi enviado hoje) ---
+            if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+            
+            df_hoje = df[df['Data'] == hoje]
+            for _, row in df_hoje.iterrows():
+                # Reconstrói o ID único: FID_Estrategia
+                id_blindagem = f"{row['FID']}_{row['Estrategia']}"
+                st.session_state['alertas_enviados'].add(id_blindagem)
+            # -----------------------------------------------------------------------
+            
         else:
             st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
             st.session_state['historico_sinais'] = []
@@ -209,13 +221,11 @@ def buscar_inteligencia(estrategia, liga, jogo):
     # --- CÁLCULO DE MOMENTUM (STREAK) - CORREÇÃO DE ERRO DE ORDENAÇÃO ---
     f_times = pd.concat([f_casa, f_vis])
     
-    # Tenta converter a data para datetime para ordenar corretamente e evitar TypeError
     if not f_times.empty:
         try:
             f_times['Data_Temp'] = pd.to_datetime(f_times['Data'], errors='coerce')
             f_times = f_times.sort_values(by='Data_Temp', ascending=False)
         except:
-            # Se falhar, tenta ordenar string mesmo
             f_times = f_times.sort_values(by='Data', ascending=False)
 
     streak_msg = ""
@@ -260,18 +270,17 @@ def enviar_telegram(token, chat_ids, msg):
 
 # --- RADAR MATINAL INTELIGENTE (FILTRO DE LUCRATIVIDADE) ---
 def verificar_alerta_matinal(token, chat_ids, api_key):
-    # Envia entre 08:00 e 12:00 uma vez por dia
     agora = get_time_br()
     hoje_str = agora.strftime('%Y-%m-%d')
     chave = f'alerta_matinal_{hoje_str}'
     
-    if chave in st.session_state: return # Já enviou hoje
-    if not (8 <= agora.hour < 12): return # Fora do horário
+    if chave in st.session_state: return 
+    if not (8 <= agora.hour < 12): return 
 
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
     
-    # 1. Identifica Top Times Lucrativos (Geral)
+    # 1. Identifica Top Times Lucrativos
     df_green = df[df['Resultado'].str.contains('GREEN', na=False)]
     times_lucrativos = []
     for jogo in df_green['Jogo']:
@@ -290,7 +299,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     if not jogos_hoje: return
     
     # --- MEMÓRIA DE ALVOS (HEADSHOT) ---
-    # Se não existir, cria a lista de alvos para o dia
     if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 
     # 3. Match e Melhor Estratégia
@@ -327,7 +335,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
                 
                 if melhor_wr > 60:
                     motivo = f"🔥 <b>Oportunidade Sniper:</b> O {time_foco} tem histórico de <b>{melhor_wr:.0f}% de acerto</b> na estratégia <b>{melhor_strat}</b>!"
-                    # SALVA NA MEMÓRIA PARA O HEADSHOT MAIS TARDE
                     st.session_state['alvos_do_dia'][time_foco] = melhor_strat
                 else:
                     motivo = f"💰 <b>Volume:</b> O {time_foco} é uma máquina de Greens ({greens_total} acumulados). Fique atento a qualquer sinal!"
@@ -464,7 +471,6 @@ def reenviar_sinais(token, chats):
         enviar_telegram(token, chats, msg); time.sleep(0.5)
 
 # --- 6. CORE ---
-# Inicialização das variáveis de sessão
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
@@ -481,7 +487,6 @@ def verificar_reset_diario():
     if st.session_state['data_api_usage'] != hoje_utc:
         st.session_state['api_usage']['used'] = 0
         st.session_state['data_api_usage'] = hoje_utc
-        # Reseta os alvos do dia também para não misturar
         st.session_state['alvos_do_dia'] = {}
         return True
     return False
@@ -659,7 +664,6 @@ if ROBO_LIGADO:
     df_vip_temp = st.session_state.get('df_vip', pd.DataFrame())
     ids_obs = df_vip_temp['id'].values if not df_vip_temp.empty and 'id' in df_vip_temp.columns else []
     
-    # Carrega os alvos do dia (Headshots)
     alvos = st.session_state.get('alvos_do_dia', {})
     
     candidatos_multipla = []; ids_no_radar = [] 
@@ -737,12 +741,10 @@ if ROBO_LIGADO:
                     if adicionar_historico(item):
                         prob_msg = buscar_inteligencia(sinal['tag'], j['league']['name'], f"{home} x {away}")
                         
-                        # --- VERIFICA SE É HEADSHOT (PREVISTO DE MANHÃ) ---
                         eh_headshot = False
                         if home in alvos and alvos[home] == sinal['tag']: eh_headshot = True
                         if away in alvos and alvos[away] == sinal['tag']: eh_headshot = True
                         
-                        # Define cabeçalho
                         if eh_headshot:
                             header_msg = "🎯 HEADSHOT | PREVISÃO CONFIRMADA 🎯"
                             tag_extra = f"\n🔥 {sinal['tag'].upper()} *(Validado pelo Relatório Matinal)*"
@@ -816,7 +818,6 @@ if ROBO_LIGADO:
             if not hist_hoje.empty: st.dataframe(hist_hoje.astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
-        # --- AQUI ESTÁ A NOVA SEÇÃO DE BI ---
         with abas[3]: 
             st.markdown("### 📊 Inteligência de Mercado")
             df_bi = st.session_state.get('historico_full', pd.DataFrame())
@@ -839,7 +840,6 @@ if ROBO_LIGADO:
                     m1.metric("Sinais", tot_bi); m2.metric("Greens", greens_bi); m3.metric("Reds", reds_bi); m4.metric("Assertividade", f"{wr_bi:.1f}%")
                     st.divider()
                     
-                    # GRÁFICO 1: Performance por Estratégia
                     stats_strat = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                     if not stats_strat.empty:
                         counts = stats_strat.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
@@ -860,6 +860,7 @@ if ROBO_LIGADO:
                     c_vol2.metric("Média Sinais/Jogo", f"{media_sinais:.1f}")
                     c_vol3.metric("Máx Sinais num Jogo", max_sinais)
                     
+                    # --- CORREÇÃO DO ERRO DE PANDAS AQUI (renomeando e resetando) ---
                     distribuicao = (
                         sinais_por_jogo.value_counts()
                         .sort_index()
