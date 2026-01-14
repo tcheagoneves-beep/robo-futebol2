@@ -42,16 +42,17 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* Ajuste para botões pequenos na sidebar */
+    /* CSS para botões de ícone limpos e alinhados */
     .stButton button {
-        width: 100%; 
-        white-space: nowrap !important; 
-        height: auto !important;        
-        min-height: 40px;                
-        font-size: 13px !important; 
-        font-weight: bold !important;
-        padding: 5px 5px !important;
-        line-height: 1.2 !important;
+        width: 100%;
+        height: auto !important;
+        min-height: 42px;
+        font-size: 22px !important; /* Ícone visível */
+        padding: 0px !important;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin-top: 5px;
     }
     
     .footer-timer { 
@@ -700,17 +701,14 @@ with st.sidebar:
         TG_CHAT = st.text_input("Chat IDs:")
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
         
-        c1, c2, c3 = st.columns([1,1,1])
+        c1, c2 = st.columns(2)
         with c1:
-            if st.button("🔄 Reenv"): 
-                reenviar_sinais(TG_TOKEN, TG_CHAT)
-        with c2:
-            if st.button("🧹 Cache"): 
+            if st.button("🧹", help="Limpar Cache"): 
                 st.cache_data.clear()
                 carregar_tudo(force=True)
                 st.session_state['last_db_update'] = 0
-        with c3:
-            if st.button("🗑️ BL"):
+        with c2:
+            if st.button("🚫", help="Limpar Blacklist"):
                 st.session_state['df_black'] = pd.DataFrame(columns=['id', 'País', 'Liga'])
                 salvar_aba("Blacklist", st.session_state['df_black'])
                 st.cache_data.clear()
@@ -818,7 +816,6 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         else: status_vis = "💤"
 
-        # LOGICA DE STRIKE APENAS SE FALTAR DADOS DE CHUTES (STATS)
         if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT':
             gerenciar_strikes(lid, j['league']['country'], j['league']['name'], fid)
         
