@@ -42,11 +42,11 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* CSS PARA O ÚNICO BOTÃO (CACHE) */
+    /* CSS PARA O ÚNICO BOTÃO (CACHE) - GRANDE E LIMPO */
     .stButton button {
         width: 100%;
         height: 55px !important;
-        font-size: 20px !important;
+        font-size: 18px !important;
         font-weight: bold !important;
         padding: 0px !important;
         border-radius: 8px !important;
@@ -102,8 +102,8 @@ def carregar_aba(nome_aba, colunas_esperadas):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    # Se faltar coluna, cria com valor padrão seguro
                     if col == 'Strikes': df[col] = '0'
+                    elif col == 'Jogos_Erro': df[col] = ''
                     else: df[col] = ""
         
         if df.empty or len(df.columns) < len(colunas_esperadas): 
@@ -118,45 +118,53 @@ def salvar_aba(nome_aba, df_para_salvar):
 
 def carregar_tudo(force=False):
     now = time.time()
-    if not force and 'df_black' in st.session_state:
-        if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
-            return 
-
-    if 'df_black' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
-        df = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
-        if not df.empty: df['id'] = df['id'].apply(normalizar_id)
-        st.session_state['df_black'] = df
-
-    if 'df_safe' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
-        df = carregar_aba("Seguras", COLS_SAFE)
-        if not df.empty: df['id'] = df['id'].apply(normalizar_id)
-        st.session_state['df_safe'] = df
-
-    if 'df_vip' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
-        df = carregar_aba("Obs", COLS_OBS)
-        if not df.empty: df['id'] = df['id'].apply(normalizar_id)
-        st.session_state['df_vip'] = df
     
-    if 'historico_full' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME:
-        df = carregar_aba("Historico", COLS_HIST)
-        if not df.empty and 'Data' in df.columns:
-            df['FID'] = df['FID'].apply(clean_fid)
-            try:
-                df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-                df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-            except: pass
-            st.session_state['historico_full'] = df
-            hoje = get_time_br().strftime('%Y-%m-%d')
-            st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
-            
-            if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
-            df_hoje = df[df['Data'] == hoje]
-            for _, row in df_hoje.iterrows():
-                id_blindagem = f"{row['FID']}_{row['Estrategia']}"
-                st.session_state['alertas_enviados'].add(id_blindagem)
-        else:
-            st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
-            st.session_state['historico_sinais'] = []
+    # Se forçado, ignora o tempo. Se não, verifica o cache.
+    if not force:
+        if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
+            # Verifica se as tabelas essenciais existem na memória
+            if 'df_black' in st.session_state and 'df_vip' in st.session_state:
+                return
+
+    # CARREGAMENTO REAL
+    
+    # 1. Blacklist
+    df = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
+    if not df.empty: df['id'] = df['id'].apply(normalizar_id)
+    st.session_state['df_black'] = df
+
+    # 2. Seguras
+    df = carregar_aba("Seguras", COLS_SAFE)
+    if not df.empty: df['id'] = df['id'].apply(normalizar_id)
+    st.session_state['df_safe'] = df
+
+    # 3. Obs (VIP)
+    df = carregar_aba("Obs", COLS_OBS)
+    if not df.empty: df['id'] = df['id'].apply(normalizar_id)
+    st.session_state['df_vip'] = df
+    
+    # 4. Histórico
+    df = carregar_aba("Historico", COLS_HIST)
+    if not df.empty and 'Data' in df.columns:
+        df['FID'] = df['FID'].apply(clean_fid)
+        try:
+            df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+            # Ordena para o BI pegar certo
+            df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+        except: pass
+        st.session_state['historico_full'] = df
+        
+        hoje = get_time_br().strftime('%Y-%m-%d')
+        st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
+        
+        if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+        df_hoje = df[df['Data'] == hoje]
+        for _, row in df_hoje.iterrows():
+            id_blindagem = f"{row['FID']}_{row['Estrategia']}"
+            st.session_state['alertas_enviados'].add(id_blindagem)
+    else:
+        st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
+        st.session_state['historico_sinais'] = []
 
     st.session_state['last_db_update'] = now
 
@@ -205,20 +213,16 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga):
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
 
-# --- GESTÃO DE ERROS (CORRIGIDO PARA EVITAR KEYERROR) ---
 def resetar_erros(id_liga):
     id_norm = normalizar_id(id_liga)
     
-    # 1. OBS
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     if not df_vip.empty and id_norm in df_vip['id'].values:
         df_new_vip = df_vip[df_vip['id'] != id_norm]
         if salvar_aba("Obs", df_new_vip): st.session_state['df_vip'] = df_new_vip
     
-    # 2. SEGURAS (COM PROTEÇÃO CONTRA KEYERROR)
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
-        # Garante que as colunas existem antes de tentar acessar
         if 'Strikes' not in df_safe.columns: df_safe['Strikes'] = '0'
         if 'Jogos_Erro' not in df_safe.columns: df_safe['Jogos_Erro'] = ''
         
@@ -235,7 +239,6 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     id_norm = normalizar_id(id_liga)
     fid_str = str(fid_jogo)
     
-    # --- VERIFICAÇÃO 1: ESTÁ NA SAFE? ---
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
         if 'Strikes' not in df_safe.columns: df_safe['Strikes'] = '0'
@@ -271,7 +274,6 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             st.toast(f"⚠️ Erro em Liga Segura: {strikes}/10")
         return
 
-    # --- VERIFICAÇÃO 2: OBS ---
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     strikes = 0
     jogos_erro = []
@@ -761,8 +763,6 @@ if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used':
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 
-carregar_tudo()
-
 # --- 7. SIDEBAR ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
@@ -979,6 +979,7 @@ if st.session_state.ROBO_LIGADO:
                 dias = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"])
                 h_bi = pd.to_datetime(get_time_br().date())
                 
+                # CORREÇÃO CRÍTICA DO BI (RESTAURADA)
                 if dias == "Tudo":
                     df_show = df_bi
                 elif 'Data_DT' in df_bi.columns:
@@ -1056,11 +1057,9 @@ if st.session_state.ROBO_LIGADO:
 
         with abas[4]: st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
         with abas[5]: 
-            # Esconde colunas técnicas da Safe (Strikes e Jogos_Erro)
             cols_safe_view = [c for c in st.session_state['df_safe'].columns if c not in ['id', 'Strikes', 'Jogos_Erro']]
             st.dataframe(st.session_state['df_safe'][cols_safe_view].astype(str), use_container_width=True, hide_index=True)
         with abas[6]: 
-            # Esconde colunas técnicas da Obs
             cols_obs_view = [c for c in st.session_state.get('df_vip', pd.DataFrame()).columns if c not in ['id', 'Jogos_Erro']]
             st.dataframe(st.session_state.get('df_vip', pd.DataFrame())[cols_obs_view].astype(str), use_container_width=True, hide_index=True)
 
