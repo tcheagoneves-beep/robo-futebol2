@@ -14,8 +14,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄️")
 
-# --- INICIALIZAÇÃO SEGURA DA VARIÁVEL (CORREÇÃO DO ERRO) ---
-# Garante que a variável exista antes de qualquer uso
+# INICIALIZAÇÃO SEGURA DA VARIÁVEL
 if 'ROBO_LIGADO' not in st.session_state:
     st.session_state.ROBO_LIGADO = False
 ROBO_LIGADO = False 
@@ -89,9 +88,23 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: return False
 
 def carregar_tudo():
-    if 'df_black' not in st.session_state: st.session_state['df_black'] = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
-    if 'df_safe' not in st.session_state: st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
-    if 'df_vip' not in st.session_state: st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
+    # --- CORREÇÃO DE IDS NA LEITURA ---
+    # Garante que IDs sejam lidos como texto limpo (sem .0 e sem espaços)
+    
+    if 'df_black' not in st.session_state: 
+        df = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
+        if not df.empty: df['id'] = df['id'].apply(lambda x: str(x).replace('.0', '').strip())
+        st.session_state['df_black'] = df
+
+    if 'df_safe' not in st.session_state: 
+        df = carregar_aba("Seguras", COLS_SAFE)
+        if not df.empty: df['id'] = df['id'].apply(lambda x: str(x).replace('.0', '').strip())
+        st.session_state['df_safe'] = df
+
+    if 'df_vip' not in st.session_state: 
+        df = carregar_aba("Obs", COLS_OBS)
+        if not df.empty: df['id'] = df['id'].apply(lambda x: str(x).replace('.0', '').strip())
+        st.session_state['df_vip'] = df
     
     if 'historico_full' not in st.session_state:
         df = carregar_aba("Historico", COLS_HIST)
@@ -99,7 +112,6 @@ def carregar_tudo():
             df['FID'] = df['FID'].apply(clean_fid)
             
             try:
-                # Limpeza segura da data
                 df['Data'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
                 df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
             except: pass
@@ -592,7 +604,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if tempo <= 30 and (gh+ga) >= 2: 
         SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"Placar: {gh}x{ga}"})
         
-    # ⚡ Gol Relâmpago (Regra: <=2min com 1 SOG ou <=10min com 2 Sh)
+    # ⚡ Gol Relâmpago
     if (gh + ga) == 0:
         if (tempo <= 2 and (sog_h + sog_a) >= 1) or (tempo <= 10 and (sh_h + sh_a) >= 2):
             SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": txt_stats})
@@ -631,7 +643,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
                 SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats})
             
-            # ❄️ Jogo Morno (Rank 10+ e 15 min exatos)
+            # ❄️ Jogo Morno
             is_bot_home_morno = rank_home >= 10
             is_bot_away_morno = rank_away >= 10
             if is_bot_home_morno and is_bot_away_morno:
@@ -681,13 +693,17 @@ with st.sidebar:
         perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
         st.progress(perc)
         st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
-    
-    # Checkbox que define a variável ROBO_LIGADO
     ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=False)
 
 # --- 8. DASHBOARD ---
 if ROBO_LIGADO:
     carregar_tudo()
+    
+    # Prepara lista de IDs seguros e Obs para uso global
+    ids_black = st.session_state['df_black']['id'].values
+    # Força lista de strings limpas para garantir o "in"
+    ids_safe = [str(x) for x in st.session_state['df_safe']['id'].values]
+    ids_obs = [str(x) for x in st.session_state['df_vip']['id'].values]
 
     hoje_real = get_time_br().strftime('%Y-%m-%d')
     st.session_state['historico_sinais'] = [
@@ -709,18 +725,14 @@ if ROBO_LIGADO:
         check_green_red_hibrido(jogos_live, TG_TOKEN, TG_CHAT, API_KEY)
         verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) 
 
-    radar = []; ids_black = st.session_state['df_black']['id'].values
-    ids_safe = st.session_state['df_safe']['id'].values
-    
-    df_vip_temp = st.session_state.get('df_vip', pd.DataFrame())
-    ids_obs = df_vip_temp['id'].values if not df_vip_temp.empty and 'id' in df_vip_temp.columns else []
+    radar = []
     
     alvos = st.session_state.get('alvos_do_dia', {})
-    
     candidatos_multipla = []; ids_no_radar = [] 
 
     for j in jogos_live:
-        lid = str(j['league']['id']); fid = j['fixture']['id']
+        lid = str(j['league']['id'])
+        fid = j['fixture']['id']
         if lid in ids_black: continue
         
         nome_liga_show = j['league']['name']
@@ -844,12 +856,14 @@ if ROBO_LIGADO:
                 pid = p['fixture']['id']
                 if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and pid not in ids_no_radar:
                     if datetime.fromisoformat(p['fixture']['date']) > agora:
-                        # --- ÍCONES NA AGENDA ---
-                        lid = str(p['league']['id'])
+                        # --- MODIFICAÇÃO AQUI: ADICIONANDO ÍCONES NA AGENDA ---
+                        lid_agenda = str(p['league']['id'])
                         nome_liga_agenda = p['league']['name']
-                        if lid in ids_safe:
+                        
+                        # Verifica se o ID (string limpa) está na lista de IDs seguros (lista de strings limpas)
+                        if lid_agenda in ids_safe:
                             nome_liga_agenda += " 🛡️"
-                        elif lid in ids_obs:
+                        elif lid_agenda in ids_obs:
                             nome_liga_agenda += " ⚠️"
                         
                         agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": nome_liga_agenda, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
