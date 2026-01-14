@@ -18,10 +18,6 @@ st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄�
 if 'ROBO_LIGADO' not in st.session_state:
     st.session_state.ROBO_LIGADO = False
 
-# CONTROLE DE CACHE DO BANCO DE DADOS (Para não travar as abas)
-if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
-DB_CACHE_TIME = 60  # Tempo em segundos para ler a planilha novamente
-
 # INICIALIZAÇÃO DE VARIÁVEIS DE CONTROLE DE API
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
@@ -85,7 +81,7 @@ def normalizar_id(val):
     except:
         return str(val).strip()
 
-# --- 3. BANCO DE DADOS (COM CACHE) ---
+# --- 3. BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
@@ -101,30 +97,26 @@ def salvar_aba(nome_aba, df_para_salvar):
     try: conn.update(worksheet=nome_aba, data=df_para_salvar); return True
     except: return False
 
-def carregar_tudo(force=False):
-    # CACHE INTELIGENTE: Só lê do Google se passou o tempo limite ou se for forçado
-    now = time.time()
-    if not force and 'df_black' in st.session_state:
-        if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
-            return # Usa a memória local (Rápido)
-
-    # Se passou do tempo ou forçado, lê do Google
-    if 'df_black' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
+def carregar_tudo():
+    if 'df_black' not in st.session_state: 
         df = carregar_aba("Blacklist", ['id', 'País', 'Liga'])
         if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_black'] = df
+    else: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
 
-    if 'df_safe' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
+    if 'df_safe' not in st.session_state: 
         df = carregar_aba("Seguras", COLS_SAFE)
         if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_safe'] = df
+    else: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
 
-    if 'df_vip' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME: 
+    if 'df_vip' not in st.session_state: 
         df = carregar_aba("Obs", COLS_OBS)
         if not df.empty: df['id'] = df['id'].apply(normalizar_id)
         st.session_state['df_vip'] = df
+    else: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
     
-    if 'historico_full' not in st.session_state or force or (now - st.session_state['last_db_update']) >= DB_CACHE_TIME:
+    if 'historico_full' not in st.session_state:
         df = carregar_aba("Historico", COLS_HIST)
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
@@ -135,8 +127,6 @@ def carregar_tudo(force=False):
             st.session_state['historico_full'] = df
             hoje = get_time_br().strftime('%Y-%m-%d')
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
-            
-            # Recarrega alertas enviados para evitar duplicidade
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             df_hoje = df[df['Data'] == hoje]
             for _, row in df_hoje.iterrows():
@@ -145,8 +135,6 @@ def carregar_tudo(force=False):
         else:
             st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
             st.session_state['historico_sinais'] = []
-
-    st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
     df_antigo = st.session_state.get('historico_full', pd.DataFrame(columns=COLS_HIST))
@@ -691,10 +679,7 @@ with st.sidebar:
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
         c1, c2 = st.columns(2)
         if c1.button("🔄 Reenviar"): reenviar_sinais(TG_TOKEN, TG_CHAT)
-        if c2.button("🧹 Cache"): 
-            st.cache_data.clear()
-            carregar_tudo(force=True)
-            st.session_state['last_db_update'] = 0
+        if c2.button("🧹 Cache"): st.cache_data.clear()
         st.write("---")
         if st.button("📊 Enviar Relatório BI"):
             enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
