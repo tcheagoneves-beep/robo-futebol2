@@ -104,11 +104,60 @@ def salvar_aba(nome_aba, df_para_salvar):
     try: conn.update(worksheet=nome_aba, data=df_para_salvar); return True
     except: return False
 
+def sanitizar_conflitos():
+    """FAXINEIRO: Garante que uma liga banida não exista em Obs ou Seguras"""
+    df_black = st.session_state['df_black']
+    df_vip = st.session_state['df_vip']
+    df_safe = st.session_state['df_safe']
+    
+    ids_banidos = df_black['id'].values.tolist()
+    alterou_black = False
+    alterou_vip = False
+    alterou_safe = False
+    
+    # 1. Varre Blacklist procurando conflitos
+    for idx, row in df_black.iterrows():
+        id_b = row['id']
+        motivo_atual = str(row['Motivo'])
+        
+        # Se está na Obs (Conflito!)
+        if id_b in df_vip['id'].values:
+            # Pega os strikes da Obs para salvar na Blacklist antes de apagar
+            row_vip = df_vip[df_vip['id'] == id_b].iloc[0]
+            strikes = str(row_vip['Strikes'])
+            
+            # Atualiza motivo se estiver vazio
+            if not motivo_atual or motivo_atual == "nan":
+                df_black.at[idx, 'Motivo'] = f"Banida ({strikes} Strikes)"
+                alterou_black = True
+            
+            # Marca para remover da Obs
+            df_vip = df_vip[df_vip['id'] != id_b]
+            alterou_vip = True
+            
+        # Se está na Segura (Conflito!)
+        if id_b in df_safe['id'].values:
+            df_safe = df_safe[df_safe['id'] != id_b]
+            alterou_safe = True
+
+    # Salva alterações
+    if alterou_black:
+        st.session_state['df_black'] = df_black
+        salvar_aba("Blacklist", df_black)
+        
+    if alterou_vip:
+        st.session_state['df_vip'] = df_vip
+        salvar_aba("Obs", df_vip)
+        
+    if alterou_safe:
+        st.session_state['df_safe'] = df_safe
+        salvar_aba("Seguras", df_safe)
+
 def carregar_tudo(force=False):
     now = time.time()
     if not force:
         if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
-            if 'df_black' in st.session_state and 'df_safe' in st.session_state and 'historico_full' in st.session_state: return
+            if 'df_black' in st.session_state: return
 
     df = carregar_aba("Blacklist", COLS_BLACK)
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
@@ -121,6 +170,9 @@ def carregar_tudo(force=False):
     df = carregar_aba("Obs", COLS_OBS)
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
     st.session_state['df_vip'] = df
+    
+    # RODA O FAXINEIRO APÓS CARREGAR
+    sanitizar_conflitos()
     
     df = carregar_aba("Historico", COLS_HIST)
     if not df.empty and 'Data' in df.columns:
@@ -162,10 +214,9 @@ def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
     id_norm = normalizar_id(id_liga)
     
-    # 1. ATUALIZA OU ADICIONA NA BLACKLIST
     if id_norm in df['id'].values:
         idx = df[df['id'] == id_norm].index[0]
-        df.at[idx, 'Motivo'] = str(motivo_ban) # Força atualização do motivo
+        df.at[idx, 'Motivo'] = str(motivo_ban)
     else:
         novo = pd.DataFrame([{
             'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga),
@@ -173,20 +224,9 @@ def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
         }])
         df = pd.concat([df, novo], ignore_index=True)
     
-    # Salva Blacklist
     st.session_state['df_black'] = df
     salvar_aba("Blacklist", df)
-    
-    # 2. REMOÇÃO IMEDIATA DA OBS
-    df_vip = st.session_state.get('df_vip', pd.DataFrame())
-    if not df_vip.empty:
-        # Filtra removendo o ID banido
-        df_vip_limpo = df_vip[df_vip['id'] != id_norm]
-        
-        # Só salva se houve alteração (evita chamadas API desnecessárias)
-        if len(df_vip_limpo) < len(df_vip):
-            st.session_state['df_vip'] = df_vip_limpo
-            salvar_aba("Obs", df_vip_limpo)
+    sanitizar_conflitos() # Chama limpeza
 
 def salvar_safe_league_basic(id_liga, pais, nome_liga):
     id_norm = normalizar_id(id_liga)
@@ -198,17 +238,15 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga):
         }])
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): st.session_state['df_safe'] = final
+        sanitizar_conflitos()
 
 def resetar_erros(id_liga):
     id_norm = normalizar_id(id_liga)
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
-    
-    # Se estava na Obs, remove
     if not df_vip.empty and id_norm in df_vip['id'].values:
         df_new_vip = df_vip[df_vip['id'] != id_norm]
         if salvar_aba("Obs", df_new_vip): st.session_state['df_vip'] = df_new_vip
     
-    # Zera erros na Segura
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
         idx = df_safe[df_safe['id'] == id_norm].index[0]
@@ -219,22 +257,17 @@ def resetar_erros(id_liga):
 def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     id_norm = normalizar_id(id_liga)
     fid_str = str(fid_jogo)
-    
-    # 1. VERIFICA SE É LIGA SEGURA FALHANDO
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
+    
     if not df_safe.empty and id_norm in df_safe['id'].values:
         idx = df_safe[df_safe['id'] == id_norm].index[0]
         jogos_erro = str(df_safe.at[idx, 'Jogos_Erro']).split(',') if str(df_safe.at[idx, 'Jogos_Erro']).strip() else []
         if fid_str in jogos_erro: return 
         jogos_erro.append(fid_str)
         strikes = len(jogos_erro)
-        
         if strikes >= 10:
-            # Remove das Seguras
             df_safe = df_safe.drop(idx)
             salvar_aba("Seguras", df_safe); st.session_state['df_safe'] = df_safe
-            
-            # Rebaixa para Obs
             df_vip = st.session_state.get('df_vip', pd.DataFrame())
             novo_obs = pd.DataFrame([{
                 'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
@@ -247,10 +280,8 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             salvar_aba("Seguras", df_safe); st.session_state['df_safe'] = df_safe
         return
 
-    # 2. VERIFICA SE ESTÁ EM OBS
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     strikes = 0; jogos_erro = []
-    
     if not df_vip.empty and id_norm in df_vip['id'].values:
         row = df_vip[df_vip['id'] == id_norm].iloc[0]
         val_jogos = str(row.get('Jogos_Erro', '')).strip()
@@ -261,15 +292,12 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     strikes = len(jogos_erro)
     
     if strikes >= 10:
-        # BANE E REMOVE DA OBS
         salvar_blacklist(id_liga, pais, nome_liga, f"Banida ({strikes} Jogos s/ Dados)")
         st.toast(f"🚫 {nome_liga} Banida!")
     else:
-        # ATUALIZA/CRIA NA OBS
         if id_norm in df_vip['id'].values:
             idx = df_vip[df_vip['id'] == id_norm].index[0]
-            df_vip.at[idx, 'Strikes'] = str(strikes)
-            df_vip.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
+            df_vip.at[idx, 'Strikes'] = str(strikes); df_vip.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
             df_vip.at[idx, 'Data_Erro'] = get_time_br().strftime('%Y-%m-%d')
             salvar_aba("Obs", df_vip); st.session_state['df_vip'] = df_vip
         else:
@@ -746,7 +774,7 @@ if st.session_state.ROBO_LIGADO:
         nome_liga_show = j['league']['name']
         if lid in ids_safe: nome_liga_show += " 🛡️"
         elif lid in df_obs['id'].values: nome_liga_show += " ⚠️"
-        else: nome_liga_show += " ❓" # Ícone para ligas não validadas ainda
+        else: nome_liga_show += " ❓" 
             
         ids_no_radar.append(fid)
         tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
