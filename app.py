@@ -20,7 +20,6 @@ if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] 
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
 DB_CACHE_TIME = 60
 
-# CSS VISUAL
 st.markdown("""
 <style>
     .stApp {background-color: #0E1117; color: white;}
@@ -205,7 +204,6 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             df_safe = df_safe.drop(idx)
             salvar_aba("Seguras", df_safe)
             st.session_state['df_safe'] = df_safe
-            # Move para OBS
             df_vip = st.session_state.get('df_vip', pd.DataFrame())
             novo_obs = pd.DataFrame([{
                 'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
@@ -328,6 +326,71 @@ def verificar_automacao_bi(token, chat_ids):
             enviar_relatorio_bi(token, chat_ids)
             st.session_state['bi_enviado_data'] = hoje_str
             st.toast("Relatório Automático Enviado!")
+
+def verificar_alerta_matinal(token, chat_ids, api_key):
+    agora = get_time_br()
+    hoje_str = agora.strftime('%Y-%m-%d')
+    chave = f'alerta_matinal_{hoje_str}'
+    
+    if chave in st.session_state: return 
+    if not (8 <= agora.hour < 12): return 
+
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return
+    
+    stats_ids = {} 
+    df_green = df[df['Resultado'].str.contains('GREEN', na=False)]
+    for index, row in df_green.iterrows():
+        try:
+            id_h = str(row.get('HomeID', '')).strip()
+            id_a = str(row.get('AwayID', '')).strip()
+            nomes = row['Jogo'].split(' x ')
+            nome_h = nomes[0].split('(')[0].strip(); nome_a = nomes[1].split('(')[0].strip()
+            
+            k_h = id_h if id_h and id_h != 'nan' else nome_h
+            if k_h not in stats_ids: stats_ids[k_h] = {'greens': 0, 'nome': nome_h}
+            stats_ids[k_h]['greens'] += 1
+            
+            k_a = id_a if id_a and id_a != 'nan' else nome_a
+            if k_a not in stats_ids: stats_ids[k_a] = {'greens': 0, 'nome': nome_a}
+            stats_ids[k_a]['greens'] += 1
+        except: pass
+    if not stats_ids: return
+    
+    top = sorted(stats_ids.items(), key=lambda x: x[1]['greens'], reverse=True)[:10]
+    ids_top = [x[0] for x in top]
+    
+    jogos = buscar_agenda_cached(api_key, hoje_str)
+    if not jogos: return
+    
+    if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
+    matches = []
+    for j in jogos:
+        try:
+            t1 = j['teams']['home']['name']; t1_id = str(j['teams']['home']['id'])
+            t2 = j['teams']['away']['name']; t2_id = str(j['teams']['away']['id'])
+            foco = None; fid_foco = None
+            if t1_id in ids_top: foco = t1; fid_foco = t1_id
+            elif t1 in ids_top: foco = t1; fid_foco = t1
+            elif t2_id in ids_top: foco = t2; fid_foco = t2_id
+            elif t2 in ids_top: foco = t2; fid_foco = t2
+            
+            if foco:
+                df_t = df[(df['HomeID']==fid_foco)|(df['AwayID']==fid_foco)] if fid_foco.isdigit() else df[df['Jogo'].str.contains(foco, na=False)]
+                m_strat = "Geral"; m_wr = 0
+                if not df_t.empty:
+                    for n, d in df_t.groupby('Estrategia'):
+                        if len(d)>=2:
+                            wr = (d['Resultado'].str.contains('GREEN').sum()/len(d))*100
+                            if wr > m_wr: m_wr = wr; m_strat = n
+                txt = f"🔥 <b>Oportunidade Sniper:</b> {foco} tem <b>{m_wr:.0f}%</b> na <b>{m_strat}</b>" if m_wr > 60 else f"💰 <b>Volume:</b> {foco} é máquina de Greens!"
+                if m_wr > 60: st.session_state['alvos_do_dia'][foco] = m_strat
+                matches.append(f"⏰ {j['fixture']['date'][11:16]} | {j['league']['country']} {j['league']['name']}\n⚽ {t1} 🆚 {t2}\n{txt}")
+        except: pass
+    if matches:
+        msg = "🌅 <b>BOM DIA! RADAR DE OPORTUNIDADES</b>\n\n" + "\n\n".join(matches) + "\n\n⚠️ <i>Dica: Se o robô mandar o sinal sugerido acima, a chance de Green é estatisticamente maior!</i> 🚀"
+        enviar_telegram(token, chat_ids, msg)
+    st.session_state[chave] = True 
 
 def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -608,7 +671,8 @@ with st.sidebar:
 # --- 8. DASHBOARD ---
 if st.session_state.ROBO_LIGADO:
     carregar_tudo()
-    verificar_automacao_bi(TG_TOKEN, TG_CHAT) # Checa hora do BI
+    verificar_automacao_bi(TG_TOKEN, TG_CHAT) # RELATÓRIO 23:30
+    verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY) # RADAR MANHÃ
     
     ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
     df_obs = st.session_state.get('df_vip', pd.DataFrame())
