@@ -93,7 +93,7 @@ def carregar_aba(nome_aba, colunas_esperadas):
                 if col not in df.columns:
                     if col == 'Strikes': df[col] = '0'
                     elif col == 'Jogos_Erro': df[col] = ''
-                    elif col == 'Motivo': df[col] = '' # Padrão vazio para não confundir
+                    elif col == 'Motivo': df[col] = ''
                     else: df[col] = ""
         if df.empty or len(df.columns) < len(colunas_esperadas): 
             return pd.DataFrame(columns=colunas_esperadas)
@@ -162,20 +162,29 @@ def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
     id_norm = normalizar_id(id_liga)
     
-    if id_norm not in df['id'].values:
+    # 1. ATUALIZA OU ADICIONA NA BLACKLIST
+    if id_norm in df['id'].values:
+        idx = df[df['id'] == id_norm].index[0]
+        df.at[idx, 'Motivo'] = str(motivo_ban) # Força atualização do motivo
+    else:
         novo = pd.DataFrame([{
             'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga),
             'Motivo': str(motivo_ban)
         }])
-        final = pd.concat([df, novo], ignore_index=True)
-        # Salva memoria e disco
-        st.session_state['df_black'] = final
-        salvar_aba("Blacklist", final)
+        df = pd.concat([df, novo], ignore_index=True)
+    
+    # Salva Blacklist
+    st.session_state['df_black'] = df
+    salvar_aba("Blacklist", df)
+    
+    # 2. REMOÇÃO IMEDIATA DA OBS
+    df_vip = st.session_state.get('df_vip', pd.DataFrame())
+    if not df_vip.empty:
+        # Filtra removendo o ID banido
+        df_vip_limpo = df_vip[df_vip['id'] != id_norm]
         
-        # Limpa Obs
-        df_vip = st.session_state.get('df_vip', pd.DataFrame())
-        if not df_vip.empty and id_norm in df_vip['id'].values:
-            df_vip_limpo = df_vip[df_vip['id'] != id_norm]
+        # Só salva se houve alteração (evita chamadas API desnecessárias)
+        if len(df_vip_limpo) < len(df_vip):
             st.session_state['df_vip'] = df_vip_limpo
             salvar_aba("Obs", df_vip_limpo)
 
@@ -193,10 +202,13 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga):
 def resetar_erros(id_liga):
     id_norm = normalizar_id(id_liga)
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
+    
+    # Se estava na Obs, remove
     if not df_vip.empty and id_norm in df_vip['id'].values:
         df_new_vip = df_vip[df_vip['id'] != id_norm]
         if salvar_aba("Obs", df_new_vip): st.session_state['df_vip'] = df_new_vip
     
+    # Zera erros na Segura
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
         idx = df_safe[df_safe['id'] == id_norm].index[0]
@@ -208,6 +220,7 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     id_norm = normalizar_id(id_liga)
     fid_str = str(fid_jogo)
     
+    # 1. VERIFICA SE É LIGA SEGURA FALHANDO
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
         idx = df_safe[df_safe['id'] == id_norm].index[0]
@@ -217,8 +230,11 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
         strikes = len(jogos_erro)
         
         if strikes >= 10:
+            # Remove das Seguras
             df_safe = df_safe.drop(idx)
             salvar_aba("Seguras", df_safe); st.session_state['df_safe'] = df_safe
+            
+            # Rebaixa para Obs
             df_vip = st.session_state.get('df_vip', pd.DataFrame())
             novo_obs = pd.DataFrame([{
                 'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
@@ -231,8 +247,10 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             salvar_aba("Seguras", df_safe); st.session_state['df_safe'] = df_safe
         return
 
+    # 2. VERIFICA SE ESTÁ EM OBS
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     strikes = 0; jogos_erro = []
+    
     if not df_vip.empty and id_norm in df_vip['id'].values:
         row = df_vip[df_vip['id'] == id_norm].iloc[0]
         val_jogos = str(row.get('Jogos_Erro', '')).strip()
@@ -243,12 +261,15 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     strikes = len(jogos_erro)
     
     if strikes >= 10:
+        # BANE E REMOVE DA OBS
         salvar_blacklist(id_liga, pais, nome_liga, f"Banida ({strikes} Jogos s/ Dados)")
         st.toast(f"🚫 {nome_liga} Banida!")
     else:
+        # ATUALIZA/CRIA NA OBS
         if id_norm in df_vip['id'].values:
             idx = df_vip[df_vip['id'] == id_norm].index[0]
-            df_vip.at[idx, 'Strikes'] = str(strikes); df_vip.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
+            df_vip.at[idx, 'Strikes'] = str(strikes)
+            df_vip.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
             df_vip.at[idx, 'Data_Erro'] = get_time_br().strftime('%Y-%m-%d')
             salvar_aba("Obs", df_vip); st.session_state['df_vip'] = df_vip
         else:
@@ -553,87 +574,87 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     rh, ra = momentum(fid, sog_h, sog_a)
     SINAIS = []
     
-    if tempo <= 30 and (gh+ga) >= 2:
+    if tempo <= 30 and (gh+ga) >= 2: 
         SINAIS.append({
-            "tag": "🟣 Porteira Aberta",
-            "ordem": "🔥 Over Gols (Tendência de Goleada)",
+            "tag": "🟣 Porteira Aberta", 
+            "ordem": "🔥 Over Gols (Tendência de Goleada)", 
             "stats": f"Placar: {gh}x{ga}"
         })
     if (gh + ga) == 0:
         if (tempo <= 2 and (sog_h + sog_a) >= 1) or (tempo <= 10 and (sh_h + sh_a) >= 2):
             SINAIS.append({
-                "tag": "⚡ Gol Relâmpago",
-                "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)",
+                "tag": "⚡ Gol Relâmpago", 
+                "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", 
                 "stats": txt_stats
             })
-    if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1:
+    if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: 
         SINAIS.append({
-            "tag": "💰 Janela de Ouro",
-            "ordem": "Over Gols (Gol no final)",
+            "tag": "💰 Janela de Ouro", 
+            "ordem": "Over Gols (Gol no final)", 
             "stats": txt_stats
         })
     if tempo <= 60:
-        if gh <= ga and (rh >= 2 or sh_h >= 8):
+        if gh <= ga and (rh >= 2 or sh_h >= 8): 
             SINAIS.append({
-                "tag": "🟢 Blitz Casa",
-                "ordem": "Over Gols (Gol do time que pressiona)",
+                "tag": "🟢 Blitz Casa", 
+                "ordem": "Over Gols (Gol do time que pressiona)", 
                 "stats": f"Pressão: {rh}"
             })
-        if ga <= gh and (ra >= 2 or sh_a >= 8):
+        if ga <= gh and (ra >= 2 or sh_a >= 8): 
             SINAIS.append({
-                "tag": "🟢 Blitz Visitante",
-                "ordem": "Over Gols (Gol do time que pressiona)",
+                "tag": "🟢 Blitz Visitante", 
+                "ordem": "Over Gols (Gol do time que pressiona)", 
                 "stats": f"Pressão: {ra}"
             })
     if rank_home and rank_away:
         is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
         if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
-            if tempo <= 5 and (sh_h + sh_a) >= 1:
+            if tempo <= 5 and (sh_h + sh_a) >= 1: 
                 SINAIS.append({
-                    "tag": "🔥 Massacre",
-                    "ordem": "Over 0.5 HT (Favorito deve marcar logo)",
+                    "tag": "🔥 Massacre", 
+                    "ordem": "Over 0.5 HT (Favorito deve marcar logo)", 
                     "stats": f"Rank: {rank_home}x{rank_away}"
                 })
         if 5 <= tempo <= 15:
-            if is_top_home and (rh >= 2 or sh_h >= 3):
+            if is_top_home and (rh >= 2 or sh_h >= 3): 
                 SINAIS.append({
-                    "tag": "🦁 Favorito",
-                    "ordem": "Over Gols (Favorito deve marcar)",
+                    "tag": "🦁 Favorito", 
+                    "ordem": "Over Gols (Favorito deve marcar)", 
                     "stats": f"Pressão: {rh}"
                 })
-            if is_top_away and (ra >= 2 or sh_a >= 3):
+            if is_top_away and (ra >= 2 or sh_a >= 3): 
                 SINAIS.append({
-                    "tag": "🦁 Favorito",
-                    "ordem": "Over Gols (Favorito deve marcar)",
+                    "tag": "🦁 Favorito", 
+                    "ordem": "Over Gols (Favorito deve marcar)", 
                     "stats": f"Pressão: {ra}"
                 })
         if is_top_home and is_top_away and tempo <= 7:
-            if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1:
+            if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: 
                 SINAIS.append({
-                    "tag": "⚔️ Choque Líderes",
-                    "ordem": "Over 0.5 HT (Jogo intenso)",
+                    "tag": "⚔️ Choque Líderes", 
+                    "ordem": "Over 0.5 HT (Jogo intenso)", 
                     "stats": txt_stats
                 })
         if is_mid_home and is_mid_away:
-            if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3:
+            if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: 
                 SINAIS.append({
-                    "tag": "🥊 Briga de Rua",
-                    "ordem": "Over 0.5 HT (Trocação franca)",
+                    "tag": "🥊 Briga de Rua", 
+                    "ordem": "Over 0.5 HT (Trocação franca)", 
                     "stats": txt_stats
                 })
             is_bot_home_morno = rank_home >= 10; is_bot_away_morno = rank_away >= 10
             if is_bot_home_morno and is_bot_away_morno:
-                if 15 <= tempo <= 16 and (sh_h + sh_a) == 0:
+                if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: 
                     SINAIS.append({
-                        "tag": "❄️ Jogo Morno",
-                        "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)",
+                        "tag": "❄️ Jogo Morno", 
+                        "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", 
                         "stats": "0 Chutes (Times Z-4)"
                     })
     if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
-        if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8:
+        if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: 
             SINAIS.append({
-                "tag": "💎 GOLDEN BET",
-                "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)",
+                "tag": "💎 GOLDEN BET", 
+                "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", 
                 "stats": "🔥 Pressão Máxima"
             })
     return SINAIS
