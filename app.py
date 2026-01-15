@@ -14,7 +14,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 
-# --- INICIALIZAÇÃO DE VARIÁVEIS (PREVENÇÃO DE ERROS) ---
+# --- INICIALIZAÇÃO DE VARIÁVEIS ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
@@ -123,7 +123,7 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: return False
 
 def sanitizar_conflitos():
-    """FAXINEIRO: Garante integridade e corrige textos"""
+    """FAXINEIRO NUCLEAR: Remove duplicidade e corrige texto"""
     df_black = st.session_state['df_black']
     df_vip = st.session_state['df_vip']
     df_safe = st.session_state['df_safe']
@@ -141,7 +141,7 @@ def sanitizar_conflitos():
         
         if mask_vip.any():
             strikes_raw = df_vip.loc[mask_vip, 'Strikes'].values[0]
-            strikes = formatar_inteiro_visual(strikes_raw) # Formata sem decimal
+            strikes = formatar_inteiro_visual(strikes_raw) 
             
             novo_motivo = f"Banida ({strikes} Jogos Sem Dados)"
             if motivo_atual != novo_motivo:
@@ -379,7 +379,7 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- 4. INTELIGÊNCIA ---
+# --- 4. INTELIGÊNCIA (REINSERIDA) ---
 def buscar_inteligencia(estrategia, liga, jogo):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
@@ -1026,12 +1026,8 @@ if st.session_state.ROBO_LIGADO:
             # REMOÇÃO VISUAL DA COLUNA ID NA BLACKLIST (PARA NÃO POLUIR)
             st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         with abas[5]: 
-            # AGORA APLICA O FORMATADOR NA COLUNA STRIKES ANTES DE EXIBIR
-            df_safe_show = st.session_state['df_safe'].copy()
-            if not df_safe_show.empty:
-                df_safe_show['Strikes'] = df_safe_show['Strikes'].apply(formatar_inteiro_visual)
-            
-            st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Strikes']], use_container_width=True, hide_index=True)
+            # REMOÇÃO VISUAL DA COLUNA STRIKES NA SEGURAS (V13.0)
+            st.dataframe(st.session_state['df_safe'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         with abas[6]: 
             # AGORA APLICA O FORMATADOR NA COLUNA STRIKES ANTES DE EXIBIR
             df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
