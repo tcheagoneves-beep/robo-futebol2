@@ -948,14 +948,14 @@ if st.session_state.ROBO_LIGADO:
                 except Exception as e: st.error(f"Erro ao carregar BI: {e}")
 
         with abas[4]: 
-            # REMOÇÃO VISUAL DA COLUNA ID NA BLACKLIST (PARA NÃO POLUIR)
-            st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
+            # AGORA SELECIONA COLUNAS EXPLICITAS NA BLACKLIST
+            st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         with abas[5]: 
-            cols_safe_view = [c for c in st.session_state['df_safe'].columns if c not in ['id', 'Strikes', 'Jogos_Erro']]
-            st.dataframe(st.session_state['df_safe'][cols_safe_view].astype(str), use_container_width=True, hide_index=True)
+            # SELECIONA COLUNAS EXPLICITAS NA SEGURAS
+            st.dataframe(st.session_state['df_safe'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         with abas[6]: 
-            cols_obs_view = [c for c in st.session_state.get('df_vip', pd.DataFrame()).columns if c not in ['id', 'Jogos_Erro']]
-            st.dataframe(st.session_state.get('df_vip', pd.DataFrame())[cols_obs_view].astype(str), use_container_width=True, hide_index=True)
+            # SELECIONA COLUNAS EXPLICITAS NA OBS (SEM ID)
+            st.dataframe(st.session_state['df_vip'][['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
