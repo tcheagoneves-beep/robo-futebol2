@@ -75,7 +75,6 @@ st.markdown("""
 # --- 1. CONEXÃO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# ADICIONEI 'Odd' NA LISTA DE COLUNAS DO HISTÓRICO
 COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
@@ -109,8 +108,7 @@ def carregar_aba(nome_aba, colunas_esperadas):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    # Inicializa novas colunas se não existirem
-                    if col == 'Odd': df[col] = "1.00"
+                    if col == 'Odd': df[col] = "0.0" # Inicializa com 0.0 para facilitar calculo
                     elif col == 'Strikes': df[col] = '0'
                     elif col == 'Jogos_Erro': df[col] = ''
                     elif col == 'Motivo': df[col] = ''
@@ -348,18 +346,16 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- NOVA FUNÇÃO: BUSCAR ODD AO VIVO ---
+# --- FUNÇÃO: BUSCAR ODD AO VIVO ---
 def get_live_odds(fixture_id, api_key):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
         params = {"fixture": fixture_id}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         if res.get('response'):
-            # Tenta pegar odds de 'Match Winner' (ID 1) ou 'Goals Over/Under' (ID 5)
             markets = res['response'][0]['odds']
-            # Pega a primeira odd disponível só para referência (simplificação)
             if len(markets) > 0:
-                 odd_val = markets[0]['values'][0]['odd'] # Pega a primeira odd que aparecer
+                 odd_val = markets[0]['values'][0]['odd']
                  return str(odd_val)
         return "N/A"
     except:
@@ -709,11 +705,10 @@ with st.sidebar:
         st.write("---")
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
 
-    # Configuração Financeira (Sidebar)
-    st.markdown("### 💰 Gestão de Banca")
-    stake_padrao = st.number_input("Valor da Entrada (R$)", value=10.0, step=5.0)
-    banca_inicial = st.number_input("Banca Inicial (R$)", value=100.0, step=50.0)
-    odd_media_hist = st.number_input("Odd Média (Histórico)", value=1.70, step=0.1, help="Usado para calcular lucro de sinais antigos sem odd gravada.")
+    # --- ABA FINANCEIRA NO SIDEBAR (RETRÁTIL AGORA) ---
+    with st.expander("💰 Gestão de Banca", expanded=False):
+        stake_padrao = st.number_input("Valor da Entrada (R$)", value=10.0, step=5.0)
+        banca_inicial = st.number_input("Banca Inicial (R$)", value=100.0, step=50.0)
         
     with st.expander("📶 Consumo API", expanded=False):
         verificar_reset_diario()
@@ -856,29 +851,39 @@ if st.session_state.ROBO_LIGADO:
             if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Sem jogos futuros hoje.")
         
-        # --- ABA FINANCEIRO (NOVA) ---
+        # --- ABA FINANCEIRO (COM CÁLCULO INTELIGENTE DE ODD MÉDIA) ---
         with abas[2]:
             st.markdown("### 💰 Evolução Financeira")
             df_fin = st.session_state.get('historico_full', pd.DataFrame())
+            
             if not df_fin.empty:
                 df_fin = df_fin.copy()
-                # Filtra apenas Green e Red
+                # 1. Converte Odd para numérico
+                df_fin['Odd_Num'] = pd.to_numeric(df_fin['Odd'], errors='coerce').fillna(0.0)
+                
+                # 2. Calcula Média por Estratégia (Ignorando zeros e N/A)
+                filtro_validas = df_fin['Odd_Num'] > 1.01
+                if filtro_validas.any():
+                    mapa_medias = df_fin[filtro_validas].groupby('Estrategia')['Odd_Num'].mean().to_dict()
+                else:
+                    mapa_medias = {}
+
+                # 3. Filtra apenas Green e Red para o cálculo
                 df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].reset_index(drop=True)
                 
                 if not df_fin.empty:
-                    # Lógica de Lucro
                     lucros = []
                     saldo_atual = banca_inicial
                     historico_saldo = [banca_inicial]
                     
                     for idx, row in df_fin.iterrows():
                         res = row['Resultado']
-                        odd_raw = row.get('Odd', '1.0')
-                        try:
-                            odd = float(odd_raw)
-                            if odd <= 1.0: odd = odd_media_hist # Usa odd média se não tiver live
-                        except:
-                            odd = odd_media_hist
+                        odd = row['Odd_Num']
+                        strat = row['Estrategia']
+                        
+                        # Se odd for inválida (0 ou 1.0), tenta usar a média da estratégia
+                        if odd <= 1.01:
+                            odd = mapa_medias.get(strat, 1.01) # Se não tiver média, usa 1.01 (Safety)
 
                         if 'GREEN' in res:
                             lucro = (stake_padrao * odd) - stake_padrao
@@ -890,8 +895,6 @@ if st.session_state.ROBO_LIGADO:
                         historico_saldo.append(saldo_atual)
                     
                     df_fin['Lucro'] = lucros
-                    
-                    # Métricas
                     total_lucro = sum(lucros)
                     roi = (total_lucro / (len(df_fin) * stake_padrao)) * 100
                     
@@ -901,10 +904,11 @@ if st.session_state.ROBO_LIGADO:
                     m3.metric("ROI Estimado", f"{roi:.1f}%")
                     m4.metric("Entradas", len(df_fin))
                     
-                    # Gráfico
                     fig_fin = px.line(y=historico_saldo, x=range(len(historico_saldo)), title="Crescimento da Banca")
                     fig_fin.update_layout(xaxis_title="Entradas", yaxis_title="Saldo (R$)", template="plotly_dark")
                     st.plotly_chart(fig_fin, use_container_width=True)
+                    
+                    st.caption(f"ℹ️ As odds médias calculadas automaticamente foram: {', '.join([f'{k}: {v:.2f}' for k,v in mapa_medias.items()])}")
                 else:
                     st.info("Aguardando fechamento de sinais para calcular financeiro.")
             else:
