@@ -84,9 +84,10 @@ def normalizar_id(val):
         return str(int(float(s_val)))
     except: return str(val).strip()
 
-def formatar_inteiro(val):
-    """Transforma 16.0 em 16"""
+def formatar_inteiro_visual(val):
+    """Remove decimal .0 visualmente"""
     try:
+        if str(val) == 'nan' or str(val) == '': return "0"
         return str(int(float(str(val))))
     except:
         return str(val)
@@ -112,7 +113,7 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: return False
 
 def sanitizar_conflitos():
-    """FAXINEIRO NUCLEAR: Remove duplicidade e corrige texto"""
+    """FAXINEIRO: Garante integridade e corrige textos"""
     df_black = st.session_state['df_black']
     df_vip = st.session_state['df_vip']
     df_safe = st.session_state['df_safe']
@@ -125,13 +126,12 @@ def sanitizar_conflitos():
         id_b = normalizar_id(row['id'])
         motivo_atual = str(row['Motivo'])
         
-        # Cria cópia temporária com ID normalizado para comparação
         df_vip['id_norm'] = df_vip['id'].apply(normalizar_id)
-        
         mask_vip = df_vip['id_norm'] == id_b
+        
         if mask_vip.any():
             strikes_raw = df_vip.loc[mask_vip, 'Strikes'].values[0]
-            strikes = formatar_inteiro(strikes_raw)
+            strikes = formatar_inteiro_visual(strikes_raw) # Formata sem decimal
             
             novo_motivo = f"Banida ({strikes} Jogos Sem Dados)"
             if motivo_atual != novo_motivo:
@@ -147,7 +147,6 @@ def sanitizar_conflitos():
             df_safe = df_safe[~mask_safe]
             alterou_safe = True
 
-    # LIMPEZA DAS COLUNAS TEMPORÁRIAS ANTES DE SALVAR (IMPORTANTE)
     if 'id_norm' in df_vip.columns: df_vip = df_vip.drop(columns=['id_norm'])
     if 'id_norm' in df_safe.columns: df_safe = df_safe.drop(columns=['id_norm'])
 
@@ -179,7 +178,6 @@ def carregar_tudo(force=False):
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
     st.session_state['df_vip'] = df
     
-    # RODA O FAXINEIRO
     sanitizar_conflitos()
     
     df = carregar_aba("Historico", COLS_HIST)
@@ -236,18 +234,28 @@ def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     salvar_aba("Blacklist", df)
     sanitizar_conflitos()
 
-def salvar_safe_league_basic(id_liga, pais, nome_liga):
+def salvar_safe_league_basic(id_liga, pais, nome_liga, tem_tabela=False):
     id_norm = normalizar_id(id_liga)
     df = st.session_state['df_safe']
+    
+    # Define o motivo detalhado
+    txt_motivo = "Validada (Chutes + Tabela)" if tem_tabela else "Validada (Chutes)"
+    
     if id_norm not in df['id'].values:
         novo = pd.DataFrame([{
             'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
-            'Motivo': 'Validada', 'Strikes': '0', 'Jogos_Erro': ''
+            'Motivo': txt_motivo, 'Strikes': '0', 'Jogos_Erro': ''
         }])
         final = pd.concat([df, novo], ignore_index=True)
         if salvar_aba("Seguras", final): 
             st.session_state['df_safe'] = final
             sanitizar_conflitos()
+    else:
+        # Se já existe, atualiza o motivo se mudou (ex: ganhou tabela depois)
+        idx = df[df['id'] == id_norm].index[0]
+        if df.at[idx, 'Motivo'] != txt_motivo:
+            df.at[idx, 'Motivo'] = txt_motivo
+            if salvar_aba("Seguras", df): st.session_state['df_safe'] = df
 
 def resetar_erros(id_liga):
     id_norm = normalizar_id(id_liga)
@@ -301,7 +309,7 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     strikes = len(jogos_erro)
     
     if strikes >= 10:
-        salvar_blacklist(id_liga, pais, nome_liga, f"Banida ({formatar_inteiro(strikes)} Jogos Sem Dados)")
+        salvar_blacklist(id_liga, pais, nome_liga, f"Banida ({formatar_inteiro_visual(strikes)} Jogos Sem Dados)")
         st.toast(f"🚫 {nome_liga} Banida!")
     else:
         if id_norm in df_vip['id'].values:
@@ -807,7 +815,7 @@ if st.session_state.ROBO_LIGADO:
         lista_sinais = []
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
-            salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'])
+            salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'], tem_tabela=(rank_h is not None))
             resetar_erros(lid)
             if st_short == 'HT' and gh == 0 and ga == 0:
                 try:
@@ -948,14 +956,22 @@ if st.session_state.ROBO_LIGADO:
                 except Exception as e: st.error(f"Erro ao carregar BI: {e}")
 
         with abas[4]: 
-            # AGORA SELECIONA COLUNAS EXPLICITAS NA BLACKLIST
+            # REMOÇÃO VISUAL DA COLUNA ID NA BLACKLIST (PARA NÃO POLUIR)
             st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         with abas[5]: 
-            # SELECIONA COLUNAS EXPLICITAS NA SEGURAS
-            st.dataframe(st.session_state['df_safe'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
+            # AGORA APLICA O FORMATADOR NA COLUNA STRIKES ANTES DE EXIBIR
+            df_safe_show = st.session_state['df_safe'].copy()
+            if not df_safe_show.empty:
+                df_safe_show['Strikes'] = df_safe_show['Strikes'].apply(formatar_inteiro_visual)
+            
+            st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Strikes']], use_container_width=True, hide_index=True)
         with abas[6]: 
-            # SELECIONA COLUNAS EXPLICITAS NA OBS (SEM ID)
-            st.dataframe(st.session_state['df_vip'][['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
+            # AGORA APLICA O FORMATADOR NA COLUNA STRIKES ANTES DE EXIBIR
+            df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
+            if not df_vip_show.empty:
+                df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
+            
+            st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
