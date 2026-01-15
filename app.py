@@ -81,8 +81,6 @@ def normalizar_id(val):
     try:
         s_val = str(val).strip()
         if not s_val or s_val.lower() == 'nan': return ""
-        # Remove .0 se existir
-        if s_val.endswith(".0"): return str(int(float(s_val)))
         return str(int(float(s_val)))
     except: return str(val).strip()
 
@@ -123,43 +121,36 @@ def sanitizar_conflitos():
     alterou_vip = False
     alterou_safe = False
     
-    # Lista de IDs banidos
     for idx, row in df_black.iterrows():
         id_b = normalizar_id(row['id'])
         motivo_atual = str(row['Motivo'])
         
-        # Procura em OBS (VIP)
-        # Normaliza ID no VIP para garantir match
+        # Cria cópia temporária com ID normalizado para comparação
         df_vip['id_norm'] = df_vip['id'].apply(normalizar_id)
         
         mask_vip = df_vip['id_norm'] == id_b
         if mask_vip.any():
-            # Recupera strikes para salvar no motivo correto
             strikes_raw = df_vip.loc[mask_vip, 'Strikes'].values[0]
             strikes = formatar_inteiro(strikes_raw)
             
-            # Se o motivo estiver errado/vazio ou antigo, atualiza
             novo_motivo = f"Banida ({strikes} Jogos Sem Dados)"
             if motivo_atual != novo_motivo:
                 df_black.at[idx, 'Motivo'] = novo_motivo
                 alterou_black = True
             
-            # REMOVE DA OBS
             df_vip = df_vip[~mask_vip]
             alterou_vip = True
             
-        # Procura em SEGURAS
         df_safe['id_norm'] = df_safe['id'].apply(normalizar_id)
         mask_safe = df_safe['id_norm'] == id_b
         if mask_safe.any():
             df_safe = df_safe[~mask_safe]
             alterou_safe = True
 
-    # Remove colunas auxiliares
+    # Limpa coluna temporária antes de salvar
     if 'id_norm' in df_vip.columns: df_vip = df_vip.drop(columns=['id_norm'])
     if 'id_norm' in df_safe.columns: df_safe = df_safe.drop(columns=['id_norm'])
 
-    # Salva alterações
     if alterou_black:
         st.session_state['df_black'] = df_black
         salvar_aba("Blacklist", df_black)
@@ -188,7 +179,6 @@ def carregar_tudo(force=False):
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
     st.session_state['df_vip'] = df
     
-    # RODA O FAXINEIRO IMEDIATAMENTE APÓS CARREGAR
     sanitizar_conflitos()
     
     df = carregar_aba("Historico", COLS_HIST)
@@ -231,7 +221,6 @@ def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
     id_norm = normalizar_id(id_liga)
     
-    # 1. Adiciona/Atualiza Blacklist
     if id_norm in df['id'].values:
         idx = df[df['id'] == id_norm].index[0]
         df.at[idx, 'Motivo'] = str(motivo_ban)
@@ -244,8 +233,6 @@ def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     
     st.session_state['df_black'] = df
     salvar_aba("Blacklist", df)
-    
-    # 2. Chama Faxineiro para limpar da Obs
     sanitizar_conflitos()
 
 def salvar_safe_league_basic(id_liga, pais, nome_liga):
@@ -263,7 +250,6 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga):
 
 def resetar_erros(id_liga):
     id_norm = normalizar_id(id_liga)
-    # Se deu sinal, tira da Obs
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     if not df_vip.empty and id_norm in df_vip['id'].values:
         df_new_vip = df_vip[df_vip['id'] != id_norm]
@@ -960,7 +946,9 @@ if st.session_state.ROBO_LIGADO:
                             st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
                 except Exception as e: st.error(f"Erro ao carregar BI: {e}")
 
-        with abas[4]: st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
+        with abas[4]: 
+            # REMOÇÃO VISUAL DA COLUNA ID NA BLACKLIST
+            st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
         with abas[5]: 
             cols_safe_view = [c for c in st.session_state['df_safe'].columns if c not in ['id', 'Strikes', 'Jogos_Erro']]
             st.dataframe(st.session_state['df_safe'][cols_safe_view].astype(str), use_container_width=True, hide_index=True)
