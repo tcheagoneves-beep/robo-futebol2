@@ -14,7 +14,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 
-# --- INICIALIZAÇÃO DE VARIÁVEIS ---
+# --- INICIALIZAÇÃO DE VARIÁVEIS (PREVENÇÃO DE ERROS) ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
@@ -136,6 +136,7 @@ def sanitizar_conflitos():
         id_b = normalizar_id(row['id'])
         motivo_atual = str(row['Motivo'])
         
+        # Cria cópia temporária para comparação
         df_vip['id_norm'] = df_vip['id'].apply(normalizar_id)
         mask_vip = df_vip['id_norm'] == id_b
         
@@ -143,11 +144,13 @@ def sanitizar_conflitos():
             strikes_raw = df_vip.loc[mask_vip, 'Strikes'].values[0]
             strikes = formatar_inteiro_visual(strikes_raw) 
             
+            # Atualiza o motivo se necessário
             novo_motivo = f"Banida ({strikes} Jogos Sem Dados)"
             if motivo_atual != novo_motivo:
                 df_black.at[idx, 'Motivo'] = novo_motivo
                 alterou_black = True
             
+            # Remove da Obs
             df_vip = df_vip[~mask_vip]
             alterou_vip = True
             
@@ -157,6 +160,7 @@ def sanitizar_conflitos():
             df_safe = df_safe[~mask_safe]
             alterou_safe = True
 
+    # Limpeza colunas temporárias
     if 'id_norm' in df_vip.columns: df_vip = df_vip.drop(columns=['id_norm'])
     if 'id_norm' in df_safe.columns: df_safe = df_safe.drop(columns=['id_norm'])
 
@@ -188,6 +192,7 @@ def carregar_tudo(force=False):
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
     st.session_state['df_vip'] = df
     
+    # RODA O FAXINEIRO IMEDIATAMENTE
     sanitizar_conflitos()
     
     df = carregar_aba("Historico", COLS_HIST)
@@ -379,7 +384,7 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- 4. INTELIGÊNCIA (REINSERIDA) ---
+# --- 4. INTELIGÊNCIA ---
 def buscar_inteligencia(estrategia, liga, jogo):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
