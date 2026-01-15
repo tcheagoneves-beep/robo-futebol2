@@ -75,7 +75,8 @@ st.markdown("""
 # --- 1. CONEXÃO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd']
+# Adicionado 'Odd_Atualizada' nas colunas do histórico para controle interno
+COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
@@ -108,10 +109,11 @@ def carregar_aba(nome_aba, colunas_esperadas):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    if col == 'Odd': df[col] = "0.0" 
+                    if col == 'Odd': df[col] = "0.00" 
                     elif col == 'Strikes': df[col] = '0'
                     elif col == 'Jogos_Erro': df[col] = ''
                     elif col == 'Motivo': df[col] = ''
+                    elif col == 'Odd_Atualizada': df[col] = '' # Inicializa vazio
                     else: df[col] = ""
         if df.empty or len(df.columns) < len(colunas_esperadas): 
             return pd.DataFrame(columns=colunas_esperadas)
@@ -346,7 +348,7 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- FUNÇÃO: BUSCAR ODD AO VIVO (CORRIGIDA PARA OVER GOLS) ---
+# --- FUNÇÃO: BUSCAR ODD AO VIVO (COM CORREÇÕES E FORMATAÇÃO 2 CASAS) ---
 def get_live_odds(fixture_id, api_key):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
@@ -355,23 +357,30 @@ def get_live_odds(fixture_id, api_key):
         
         if res.get('response'):
             markets = res['response'][0]['odds']
-            # Loop para encontrar o mercado de Gols (Geralmente ID 5 ou nome com 'Goals')
             for m in markets:
                 nome_mercado = m['name'].lower()
-                # Procura por "Goals Over/Under"
+                # Procura por mercado de Gols
                 if "goals" in nome_mercado and "over" in nome_mercado:
-                    # Encontrou o mercado de gols. Agora busca a odd "Over"
                     for v in m['values']:
                         if "over" in str(v['value']).lower():
-                            return str(v['odd'])
+                            raw_odd = float(v['odd'])
                             
-            # FALLBACK: Se não achar mercado de gols, tenta pegar a primeira odd disponível
+                            # --- CORREÇÃO DE ERRO DE LEITURA (EX: 1825.0 -> 1.82) ---
+                            if raw_odd > 50: 
+                                raw_odd = raw_odd / 1000
+                                
+                            # Formata para string com 2 casas decimais
+                            return "{:.2f}".format(raw_odd)
+                            
+            # FALLBACK
             if len(markets) > 0:
-                return str(markets[0]['values'][0]['odd'])
+                raw_odd = float(markets[0]['values'][0]['odd'])
+                if raw_odd > 50: raw_odd = raw_odd / 1000
+                return "{:.2f}".format(raw_odd)
                 
-        return "N/A"
+        return "0.00"
     except:
-        return "N/A"
+        return "0.00"
 
 # --- INTELIGÊNCIA ---
 def buscar_inteligencia(estrategia, liga, jogo):
@@ -576,7 +585,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
         return True
     return False
 
-# --- FUNÇÃO ATUALIZADA: CHECK GREEN/RED + ATUALIZAÇÃO DE ODD TARDIA ---
+# --- FUNÇÃO ATUALIZADA: CHECK GREEN/RED + ATUALIZAÇÃO DE ODD TARDIA (3 MIN) ---
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
     atualizou = False
     hist = st.session_state['historico_sinais']
@@ -594,7 +603,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
         
         fid = int(clean_fid(s.get('FID', 0)))
         
-        # --- LÓGICA NOVA: ATUALIZAÇÃO DE ODD (DELAY 2-5 MIN) ---
+        # --- LÓGICA NOVA: ATUALIZAÇÃO DE ODD (DELAY >= 3 MIN) ---
         if 'Odd_Atualizada' not in s: s['Odd_Atualizada'] = False
         
         try:
@@ -605,16 +614,17 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             
             minutos_passados = (agora - dt_sinal).total_seconds() / 60
             
-            # Se passou entre 2 e 5 minutos e ainda não atualizamos a odd
-            if 2 <= minutos_passados <= 5 and not s['Odd_Atualizada']:
+            # Se passou 3 minutos ou mais e ainda não atualizamos a odd
+            if minutos_passados >= 3 and not s['Odd_Atualizada']:
                 nova_odd = get_live_odds(fid, api_key)
-                if nova_odd != "N/A" and nova_odd != s['Odd']:
-                    s['Odd'] = nova_odd 
-                    s['Odd_Atualizada'] = True 
+                
+                # Só atualiza se a odd for válida
+                if nova_odd != "0.00":
+                    s['Odd'] = nova_odd  # Sobrescreve a odd antiga
+                    s['Odd_Atualizada'] = True # Marca como feita
                     atualizou = True
         except: 
             pass 
-            
         # --- FIM DA LÓGICA DE ODD ---
 
         jogo_encontrado = None
@@ -745,20 +755,41 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     return SINAIS
 
 def resetar_sistema_completo():
+    # 1. Cria DataFrames vazios apenas com os cabeçalhos
     st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
     st.session_state['historico_sinais'] = []
     st.session_state['df_black'] = pd.DataFrame(columns=COLS_BLACK)
     st.session_state['df_safe'] = pd.DataFrame(columns=COLS_SAFE)
     st.session_state['df_vip'] = pd.DataFrame(columns=COLS_OBS)
+    
+    # 2. Reseta variáveis de controle de sessão
     st.session_state['alvos_do_dia'] = {}
     st.session_state['alertas_enviados'] = set()
     st.session_state['multiplas_enviadas'] = set()
-    salvar_aba("Historico", st.session_state['historico_full'])
-    salvar_aba("Blacklist", st.session_state['df_black'])
-    salvar_aba("Seguras", st.session_state['df_safe'])
-    salvar_aba("Obs", st.session_state['df_vip'])
+    st.session_state['memoria_pressao'] = {}
+    st.session_state['controle_stats'] = {}
+    
+    # 3. Força a limpeza no Google Sheets
+    try:
+        conn.clear(worksheet="Historico") 
+        salvar_aba("Historico", st.session_state['historico_full'])
+        
+        conn.clear(worksheet="Blacklist")
+        salvar_aba("Blacklist", st.session_state['df_black'])
+        
+        conn.clear(worksheet="Seguras")
+        salvar_aba("Seguras", st.session_state['df_safe'])
+        
+        conn.clear(worksheet="Obs")
+        salvar_aba("Obs", st.session_state['df_vip'])
+    except:
+        salvar_aba("Historico", st.session_state['historico_full'])
+        salvar_aba("Blacklist", st.session_state['df_black'])
+        salvar_aba("Seguras", st.session_state['df_safe'])
+        salvar_aba("Obs", st.session_state['df_vip'])
+
     st.cache_data.clear()
-    st.toast("♻️ SISTEMA COMPLETAMENTE RESETADO!")
+    st.toast("♻️ SISTEMA COMPLETAMENTE RESETADO! (Verifique o Google Sheets)")
 
 # --- SIDEBAR E LAYOUT ---
 with st.sidebar:
@@ -870,7 +901,7 @@ if st.session_state.ROBO_LIGADO:
                 uid = f"{fid}_{s['tag']}"
                 if uid not in st.session_state['alertas_enviados']:
                     odd_atual = get_live_odds(fid, API_KEY)
-                    item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual}
+                    item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual, "Odd_Atualizada": ""}
                     if adicionar_historico(item):
                         prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
                         msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}\n\n💰 <b>Odd: @{odd_atual}</b>\n📊 <i>Dados: {s['stats']}</i>{prob}"
@@ -984,9 +1015,17 @@ if st.session_state.ROBO_LIGADO:
 
         with abas[3]: 
             if not hist_hj.empty: 
-                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT']
+                # Colunas que NÃO queremos mostrar (incluindo a 'Odd_Atualizada' que é interna)
+                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada']
                 cols_view = [c for c in hist_hj.columns if c not in colunas_esconder]
-                st.dataframe(hist_hj[cols_view].astype(str), use_container_width=True, hide_index=True)
+                
+                df_show = hist_hj[cols_view].copy()
+                try:
+                    df_show['Odd'] = df_show['Odd'].astype(float)
+                except: pass
+
+                # Exibe formatado com 2 casas decimais
+                st.dataframe(df_show.style.format({"Odd": "{:.2f}"}), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
         with abas[4]: 
