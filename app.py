@@ -576,16 +576,47 @@ def processar_resultado(sinal, jogo_api, token, chats):
         return True
     return False
 
+# --- FUNÇÃO ATUALIZADA: CHECK GREEN/RED + ATUALIZAÇÃO DE ODD TARDIA ---
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
     atualizou = False
     hist = st.session_state['historico_sinais']
     pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
+    
     if not pendentes: return
+    
     hoje_str = get_time_br().strftime('%Y-%m-%d')
+    agora = get_time_br() # Tempo atual com timezone
     ids_live = [j['fixture']['id'] for j in jogos_live]
+    
     for s in pendentes:
+        # Ignora sinais de dias anteriores
         if s.get('Data') != hoje_str: continue
+        
         fid = int(clean_fid(s.get('FID', 0)))
+        
+        # --- LÓGICA NOVA: ATUALIZAÇÃO DE ODD (DELAY 2-5 MIN) ---
+        if 'Odd_Atualizada' not in s: s['Odd_Atualizada'] = False
+        
+        try:
+            # Reconstrói a hora do sinal para comparar (com timezone)
+            hora_str = f"{s['Data']} {s['Hora']}"
+            dt_sinal = datetime.strptime(hora_str, '%Y-%m-%d %H:%M')
+            dt_sinal = pytz.timezone('America/Sao_Paulo').localize(dt_sinal)
+            
+            minutos_passados = (agora - dt_sinal).total_seconds() / 60
+            
+            # Se passou entre 2 e 5 minutos e ainda não atualizamos a odd
+            if 2 <= minutos_passados <= 5 and not s['Odd_Atualizada']:
+                nova_odd = get_live_odds(fid, api_key)
+                if nova_odd != "N/A" and nova_odd != s['Odd']:
+                    s['Odd'] = nova_odd 
+                    s['Odd_Atualizada'] = True 
+                    atualizou = True
+        except: 
+            pass 
+            
+        # --- FIM DA LÓGICA DE ODD ---
+
         jogo_encontrado = None
         if fid > 0 and fid in ids_live: jogo_encontrado = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
         elif fid > 0:
@@ -593,8 +624,10 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
                 res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
                 if res['response']: jogo_encontrado = res['response'][0]
             except: pass
+            
         if jogo_encontrado:
             if processar_resultado(s, jogo_encontrado, token, chats): atualizou = True
+            
     if atualizou: atualizar_historico_ram_disk(hist)
 
 def verificar_var_rollback(jogos_live, token, chats):
@@ -740,7 +773,7 @@ with st.sidebar:
         st.write("---")
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
 
-    # --- ABA FINANCEIRA NO SIDEBAR (RETRÁTIL AGORA) ---
+    # --- ABA FINANCEIRA NO SIDEBAR ---
     with st.expander("💰 Gestão de Banca", expanded=False):
         stake_padrao = st.number_input("Valor da Entrada (R$)", value=10.0, step=5.0)
         banca_inicial = st.number_input("Banca Inicial (R$)", value=100.0, step=50.0)
