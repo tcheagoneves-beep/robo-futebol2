@@ -12,9 +12,9 @@ import pytz
 from streamlit_gsheets import GSheetsConnection
 
 # --- 0. CONFIGURAÇÃO E CSS ---
-st.set_page_config(page_title="Neves Analytics", layout="wide", page_icon="❄️")
+st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 
-# INICIALIZAÇÃO DE VARIÁVEIS
+# INICIALIZAÇÃO DE VARIÁVEIS SEGURAS
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
@@ -37,22 +37,23 @@ st.markdown("""
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
-    /* BOTÕES GERAIS */
+    /* BOTÕES PADRÃO */
     .stButton button {
-        width: 100%; height: 55px !important; font-size: 18px !important; font-weight: bold !important;
-        background-color: #262730; border: 1px solid #4e4e4e; color: white; margin-top: 10px;
+        width: 100%; height: 50px !important; font-size: 16px !important; font-weight: bold !important;
+        background-color: #262730; border: 1px solid #4e4e4e; color: white;
     }
     .stButton button:hover { border-color: #00FF00; color: #00FF00; }
     
-    /* BOTÃO DE RESET (VERMELHO) */
-    div[data-testid="stButton"] > button[kind="primary"] {
-        background-color: #581111 !important;
-        border-color: #FF0000 !important;
-        color: #FFAAAA !important;
+    /* BOTÃO PERIGO (RESET) */
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"] {
+        background-color: #4A0E0E !important;
+        border: 1px solid #FF4B4B !important;
+        color: #FF4B4B !important;
     }
-    div[data-testid="stButton"] > button[kind="primary"]:hover {
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"]:hover {
         background-color: #FF0000 !important;
         color: white !important;
+        border-color: white !important;
     }
 
     .footer-timer { 
@@ -591,6 +592,7 @@ def resetar_sistema_completo():
     st.cache_data.clear()
     st.toast("♻️ SISTEMA COMPLETAMENTE RESETADO!")
 
+# --- LAYOUT PRINCIPAL (COM BOTÃO ZERAR NA SIDEBAR) ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     with st.expander("⚙️ Configurações", expanded=True):
@@ -606,8 +608,26 @@ with st.sidebar:
         verificar_reset_diario()
         u = st.session_state['api_usage']; perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
         st.progress(perc); st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
+    
     st.write("---")
     st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
+    
+    # --- BOTÃO DE RESET (ZONA DE PERIGO) ---
+    st.markdown("---")
+    st.markdown("### ⚠️ Zona de Perigo")
+    if st.button("☢️ ZERAR ROBÔ", type="primary", use_container_width=True):
+        st.session_state['confirmar_reset'] = True
+
+    if st.session_state.get('confirmar_reset'):
+        st.error("Tem certeza? Isso apaga TODO o histórico do Google Sheets.")
+        c1, c2 = st.columns(2)
+        if c1.button("✅ SIM"):
+            resetar_sistema_completo()
+            st.session_state['confirmar_reset'] = False
+            st.rerun()
+        if c2.button("❌ NÃO"):
+            st.session_state['confirmar_reset'] = False
+            st.rerun()
 
 if st.session_state.ROBO_LIGADO:
     carregar_tudo()
@@ -815,24 +835,6 @@ if st.session_state.ROBO_LIGADO:
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
         relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True); time.sleep(1)
-    
-    st.write("---")
-    col_danger = st.columns([1, 4])[0]
-    with col_danger:
-        if st.button("☢️ ZERAR ROBÔ", type="primary"):
-            st.session_state['confirmar_reset'] = True
-
-    if st.session_state['confirmar_reset']:
-        st.error("⚠️ ATENÇÃO: Isso apagará TODO o histórico, blacklist e estatísticas do Google Sheets. Não há como desfazer.")
-        col_conf1, col_conf2 = st.columns(2)
-        if col_conf1.button("✅ SIM, APAGAR TUDO"):
-            resetar_sistema_completo()
-            st.session_state['confirmar_reset'] = False
-            st.rerun()
-        if col_conf2.button("❌ CANCELAR"):
-            st.session_state['confirmar_reset'] = False
-            st.rerun()
-    
     st.rerun()
 else:
     st.title("❄️ Neves Analytics")
