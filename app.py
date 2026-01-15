@@ -14,11 +14,21 @@ from streamlit_gsheets import GSheetsConnection
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 
-# INICIALIZAÇÃO DE VARIÁVEIS
+# --- INICIALIZAÇÃO DE VARIÁVEIS (CORREÇÃO DO KEYERROR) ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
+
+# Variáveis de Controle e Memória
+if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
+if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
+if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
+if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
+if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
+if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
+
 DB_CACHE_TIME = 60
 
 st.markdown("""
@@ -238,7 +248,6 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga, tem_tabela=False):
     id_norm = normalizar_id(id_liga)
     df = st.session_state['df_safe']
     
-    # Define o motivo detalhado
     txt_motivo = "Validada (Chutes + Tabela)" if tem_tabela else "Validada (Chutes)"
     
     if id_norm not in df['id'].values:
@@ -251,7 +260,6 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga, tem_tabela=False):
             st.session_state['df_safe'] = final
             sanitizar_conflitos()
     else:
-        # Se já existe, atualiza o motivo se mudou (ex: ganhou tabela depois)
         idx = df[df['id'] == id_norm].index[0]
         if df.at[idx, 'Motivo'] != txt_motivo:
             df.at[idx, 'Motivo'] = txt_motivo
