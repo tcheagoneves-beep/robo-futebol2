@@ -147,7 +147,7 @@ def sanitizar_conflitos():
             df_safe = df_safe[~mask_safe]
             alterou_safe = True
 
-    # Limpa coluna temporária antes de salvar
+    # LIMPEZA DAS COLUNAS TEMPORÁRIAS ANTES DE SALVAR (IMPORTANTE)
     if 'id_norm' in df_vip.columns: df_vip = df_vip.drop(columns=['id_norm'])
     if 'id_norm' in df_safe.columns: df_safe = df_safe.drop(columns=['id_norm'])
 
@@ -179,6 +179,7 @@ def carregar_tudo(force=False):
     if not df.empty: df['id'] = df['id'].apply(normalizar_id)
     st.session_state['df_vip'] = df
     
+    # RODA O FAXINEIRO
     sanitizar_conflitos()
     
     df = carregar_aba("Historico", COLS_HIST)
@@ -947,7 +948,7 @@ if st.session_state.ROBO_LIGADO:
                 except Exception as e: st.error(f"Erro ao carregar BI: {e}")
 
         with abas[4]: 
-            # REMOÇÃO VISUAL DA COLUNA ID NA BLACKLIST
+            # REMOÇÃO VISUAL DA COLUNA ID NA BLACKLIST (PARA NÃO POLUIR)
             st.dataframe(st.session_state['df_black'].drop(columns=['id'], errors='ignore'), use_container_width=True, hide_index=True)
         with abas[5]: 
             cols_safe_view = [c for c in st.session_state['df_safe'].columns if c not in ['id', 'Strikes', 'Jogos_Erro']]
