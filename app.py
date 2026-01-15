@@ -14,7 +14,7 @@ from streamlit_gsheets import GSheetsConnection
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 
-# --- INICIALIZAÇÃO DE VARIÁVEIS (CORREÇÃO DO KEYERROR) ---
+# --- INICIALIZAÇÃO DE VARIÁVEIS (PREVENÇÃO DE ERROS) ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
@@ -378,6 +378,65 @@ def buscar_agenda_cached(api_key, date_str):
         url = "https://v3.football.api-sports.io/fixtures"
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
+
+# --- 4. INTELIGÊNCIA ---
+def buscar_inteligencia(estrategia, liga, jogo):
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
+    try:
+        times = jogo.split(' x ')
+        time_casa = times[0].split('(')[0].strip()
+        time_visitante = times[1].split('(')[0].strip()
+    except: return "\n🔮 <b>Prob: Erro Nome</b>"
+    
+    numerador = 0; denominador = 0; fontes = []
+    f_casa = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
+    f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
+    
+    if len(f_casa) >= 3 or len(f_vis) >= 3:
+        wr_c = (f_casa['Resultado'].str.contains('GREEN').sum()/len(f_casa)*100) if len(f_casa)>=3 else 0
+        wr_v = (f_vis['Resultado'].str.contains('GREEN').sum()/len(f_vis)*100) if len(f_vis)>=3 else 0
+        div = 2 if (len(f_casa)>=3 and len(f_vis)>=3) else 1
+        numerador += ((wr_c + wr_v)/div) * 5; denominador += 5; fontes.append("Time")
+
+    f_liga = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
+    if len(f_liga) >= 3:
+        wr_l = (f_liga['Resultado'].str.contains('GREEN').sum()/len(f_liga)*100)
+        numerador += wr_l * 3; denominador += 3; fontes.append("Liga")
+    
+    f_geral = df[df['Estrategia'] == estrategia]
+    if len(f_geral) >= 1:
+        wr_g = (f_geral['Resultado'].str.contains('GREEN').sum()/len(f_geral)*100)
+        numerador += wr_g * 1; denominador += 1
+        
+    if denominador == 0: return "\n🔮 <b>Prob: Calculando...</b>"
+    prob_final = numerador / denominador
+    str_fontes = "+".join(fontes) if fontes else "Geral"
+    
+    f_times = pd.concat([f_casa, f_vis])
+    try:
+        f_times['Data_Temp'] = pd.to_datetime(f_times['Data'], errors='coerce')
+        f_times = f_times.sort_values(by='Data_Temp', ascending=False)
+    except: pass
+
+    streak_msg = ""
+    if not f_times.empty:
+        last_results = f_times['Resultado'].head(5).tolist()
+        streak_count = 0; tipo_streak = None
+        for res in last_results:
+            if "GREEN" in res:
+                if tipo_streak == "RED": break
+                tipo_streak = "GREEN"; streak_count += 1
+            elif "RED" in res:
+                if tipo_streak == "GREEN": break
+                tipo_streak = "RED"; streak_count += 1
+        if streak_count >= 2:
+            streak_msg = f" | {'🔥' if tipo_streak == 'GREEN' else '❄️'} Vem de {streak_count} {tipo_streak.title()}s!"
+
+    emoji = "🔮"
+    if prob_final >= 80: emoji = "🔥"
+    elif prob_final <= 40: emoji = "⚠️"
+    return f"\n{emoji} <b>Prob: {prob_final:.0f}% ({str_fontes}){streak_msg}</b>"
 
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
