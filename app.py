@@ -108,7 +108,7 @@ def carregar_aba(nome_aba, colunas_esperadas):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    if col == 'Odd': df[col] = "0.0" # Inicializa com 0.0 para facilitar calculo
+                    if col == 'Odd': df[col] = "0.0" 
                     elif col == 'Strikes': df[col] = '0'
                     elif col == 'Jogos_Erro': df[col] = ''
                     elif col == 'Motivo': df[col] = ''
@@ -346,17 +346,29 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- FUNÇÃO: BUSCAR ODD AO VIVO ---
+# --- FUNÇÃO: BUSCAR ODD AO VIVO (CORRIGIDA PARA OVER GOLS) ---
 def get_live_odds(fixture_id, api_key):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
         params = {"fixture": fixture_id}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
+        
         if res.get('response'):
             markets = res['response'][0]['odds']
+            # Loop para encontrar o mercado de Gols (Geralmente ID 5 ou nome com 'Goals')
+            for m in markets:
+                nome_mercado = m['name'].lower()
+                # Procura por "Goals Over/Under"
+                if "goals" in nome_mercado and "over" in nome_mercado:
+                    # Encontrou o mercado de gols. Agora busca a odd "Over"
+                    for v in m['values']:
+                        if "over" in str(v['value']).lower():
+                            return str(v['odd'])
+                            
+            # FALLBACK: Se não achar mercado de gols, tenta pegar a primeira odd disponível
             if len(markets) > 0:
-                 odd_val = markets[0]['values'][0]['odd']
-                 return str(odd_val)
+                return str(markets[0]['values'][0]['odd'])
+                
         return "N/A"
     except:
         return "N/A"
@@ -634,6 +646,7 @@ def deve_buscar_stats(tempo, gh, ga, status):
     if status == 'HT' and gh == 0 and ga == 0: return True
     return False
 
+# --- LÓGICA DE DECISÃO DO ROBÔ (AJUSTADA PARA OVER GERAL) ---
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
@@ -648,32 +661,54 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     rh, ra = momentum(fid, sog_h, sog_a)
     SINAIS = []
     
+    # 1. PORTEIRA ABERTA (Muitos gols cedo) -> OVER GERAL
     if tempo <= 30 and (gh+ga) >= 2: 
         SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"Placar: {gh}x{ga}"})
+
+    # 2. GOL RELÂMPAGO (0x0 agitado) -> OVER HT GERAL
     if (gh + ga) == 0:
         if (tempo <= 2 and (sog_h + sog_a) >= 1) or (tempo <= 10 and (sh_h + sh_a) >= 2):
             SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": txt_stats})
+
+    # 3. JANELA DE OURO (Final de jogo) -> OVER LIMITE GERAL
     if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: 
-        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final)", "stats": txt_stats})
+        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final - Limite)", "stats": txt_stats})
+
+    # 4. BLITZ (Pressão de um lado) -> OVER GERAL (INDIFERENTE)
     if tempo <= 60:
-        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol do time que pressiona)", "stats": f"Pressão: {rh}"})
-        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol do time que pressiona)", "stats": f"Pressão: {ra}"})
+        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}"})
+        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}"})
+
+    # 5. RANKING (Favorito/Zebras) -> OVER GERAL
     if rank_home and rank_away:
         is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
+        
+        # Massacre (Favorito contra Zebra) -> OVER HT
         if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
-            if tempo <= 5 and (sh_h + sh_a) >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve marcar logo)", "stats": f"Rank: {rank_home}x{rank_away}"})
+            if tempo <= 5 and (sh_h + sh_a) >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve abrir placar)", "stats": f"Rank: {rank_home}x{rank_away}"})
+        
+        # Favorito Pressionando -> OVER GERAL
         if 5 <= tempo <= 15:
-            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Favorito deve marcar)", "stats": f"Pressão: {rh}"})
-            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Favorito deve marcar)", "stats": f"Pressão: {ra}"})
+            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {rh}"})
+            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {ra}"})
+        
+        # Choque de Líderes -> OVER HT
         if is_top_home and is_top_away and tempo <= 7:
             if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": txt_stats})
+        
+        # Briga de Rua (Meio de Tabela) -> OVER HT
         if is_mid_home and is_mid_away:
             if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats})
+            
+            # Jogo Morno (Única exceção de Under)
             is_bot_home_morno = rank_home >= 10; is_bot_away_morno = rank_away >= 10
             if is_bot_home_morno and is_bot_away_morno:
                 if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)"})
+    
+    # 6. GOLDEN BET (Super Pressão no Final)
     if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
         if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima"})
+    
     return SINAIS
 
 def resetar_sistema_completo():
