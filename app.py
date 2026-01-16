@@ -900,12 +900,17 @@ if st.session_state.ROBO_LIGADO:
             for s in lista_sinais:
                 uid = f"{fid}_{s['tag']}"
                 if uid not in st.session_state['alertas_enviados']:
+                    # BLOQUEIO IMEDIATO PARA EVITAR DUPLICADOS
+                    st.session_state['alertas_enviados'].add(uid)
+                    
                     odd_atual = get_live_odds(fid, API_KEY)
                     item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual, "Odd_Atualizada": ""}
+                    
                     if adicionar_historico(item):
                         prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
                         msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}\n\n💰 <b>Odd: @{odd_atual}</b>\n📊 <i>Dados: {s['stats']}</i>{prob}"
-                        enviar_telegram(TG_TOKEN, TG_CHAT, msg); st.session_state['alertas_enviados'].add(uid); st.toast(f"Sinal: {s['tag']}")
+                        enviar_telegram(TG_TOKEN, TG_CHAT, msg)
+                        st.toast(f"Sinal: {s['tag']}")
         radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
     if candidatos_multipla:
