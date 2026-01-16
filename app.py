@@ -76,7 +76,6 @@ st.markdown("""
 # --- 1. CONEXÃO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Adicionado 'Odd_Atualizada' nas colunas do histórico para controle interno
 COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
@@ -114,7 +113,7 @@ def carregar_aba(nome_aba, colunas_esperadas):
                     elif col == 'Strikes': df[col] = '0'
                     elif col == 'Jogos_Erro': df[col] = ''
                     elif col == 'Motivo': df[col] = ''
-                    elif col == 'Odd_Atualizada': df[col] = '' # Inicializa vazio
+                    elif col == 'Odd_Atualizada': df[col] = ''
                     else: df[col] = ""
         if df.empty or len(df.columns) < len(colunas_esperadas): 
             return pd.DataFrame(columns=colunas_esperadas)
@@ -267,7 +266,6 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
         if fid_str in jogos_erro: return 
         jogos_erro.append(fid_str)
         strikes = len(jogos_erro)
-        # --- REGRA: Só bane se strikes >= 10 ---
         if strikes >= 10:
             df_safe = df_safe.drop(idx)
             salvar_aba("Seguras", df_safe); st.session_state['df_safe'] = df_safe
@@ -291,7 +289,6 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     jogos_erro.append(fid_str)
     strikes = len(jogos_erro)
     
-    # --- REGRA: Só bane se strikes >= 10 ---
     if strikes >= 10:
         salvar_blacklist(id_liga, pais, nome_liga, f"Banida ({formatar_inteiro_visual(strikes)} Jogos Sem Dados)")
         st.toast(f"🚫 {nome_liga} Banida!")
@@ -352,42 +349,52 @@ def buscar_agenda_cached(api_key, date_str):
     except: return []
 
 # --- NOVA FUNÇÃO DE ODD INTELIGENTE ---
-def get_live_odds(fixture_id, api_key, total_gols_atual=0):
+# Agora recebe 'strategy' e 'total_gols' para buscar a linha correta (HT ou FT)
+def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
         params = {"fixture": fixture_id}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         
-        # O ALVO É SEMPRE: Gols Atuais + 0.5 (Ex: Se tá 2x0, alvo é Over 2.5)
+        # 1. Definir se a estratégia é HT ou FT
+        ht_strategies = ["Relâmpago", "Massacre", "Choque", "Briga", "Morno"]
+        is_ht = any(x in strategy_name for x in ht_strategies)
+        
+        # Palavras-chave para filtrar o mercado correto
+        target_markets = ["1st half", "first half"] if is_ht else ["match goals", "goals over/under"]
+        
+        # A linha alvo é sempre Gols Atuais + 0.5 (Ex: 1x0 -> Over 1.5)
+        # Se for "Morno", a lógica seria Under, mas aqui mantemos o padrão de Over para captura
         target_line = total_gols_atual + 0.5
+        
         best_odd = "0.00"
         
         if res.get('response'):
             markets = res['response'][0]['odds']
             for m in markets:
-                nome_mercado = m['name'].lower()
-                if "goals" in nome_mercado and "over" in nome_mercado:
+                m_name = m['name'].lower()
+                
+                # Verifica se o mercado é o correto (HT ou FT)
+                if any(tm in m_name for tm in target_markets) and "over" in m_name:
                     
-                    # 1. TENTA ACHAR A LINHA EXATA (PRIORIDADE MÁXIMA)
+                    # 1. Tenta achar a linha EXATA (Ex: Over 1.5 se o jogo tá 1x0)
                     for v in m['values']:
                         try:
-                            # Tenta extrair o número da linha (Ex: "Over 2.5" -> 2.5)
                             line_raw = str(v['value']).lower().replace("over", "").strip()
                             line_val = float(line_raw)
                             
-                            # Se for a linha que queremos (Diferença pequena para float)
                             if abs(line_val - target_line) < 0.1:
                                 raw_odd = float(v['odd'])
                                 if raw_odd > 50: raw_odd = raw_odd / 1000
                                 return "{:.2f}".format(raw_odd)
                         except: pass
                     
-                    # 2. SE NÃO ACHOU A EXATA, PEGA A PRIMEIRA "JOGÁVEL" (> 1.40)
+                    # 2. Se não achar a exata, pega a primeira JOGÁVEL (> 1.40)
                     for v in m['values']:
                         try:
                             raw_odd = float(v['odd'])
                             if raw_odd > 50: raw_odd = raw_odd / 1000
-                            if raw_odd > 1.40: # Filtro anti-derretimento
+                            if raw_odd > 1.40:
                                 if best_odd == "0.00": best_odd = "{:.2f}".format(raw_odd)
                         except: pass
                         
@@ -453,7 +460,7 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
-# --- NOVO: FUNÇÃO PARA ENVIAR RELATÓRIO FINANCEIRO ---
+# --- NOVA FUNÇÃO: RELATÓRIO FINANCEIRO (ADICIONADA) ---
 def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
     msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro Líquido:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}\n\n<i>Cálculo baseado na gestão configurada.</i>"
     enviar_telegram(token, chat_ids, msg)
@@ -634,14 +641,16 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             
             # Se passou 3 minutos ou mais e ainda não atualizamos a odd
             if minutos_passados >= 3 and not s['Odd_Atualizada']:
-                # CALCULA PLACAR AO VIVO PARA PEGAR ODD JUSTA
+                # Pega placar atual para buscar a linha correta
                 jogo_live = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
                 total_gols = 0
                 if jogo_live:
                     total_gols = (jogo_live['goals']['home'] or 0) + (jogo_live['goals']['away'] or 0)
                 
-                nova_odd = get_live_odds(fid, api_key, total_gols)
+                # CHAMA A NOVA FUNÇÃO INTELIGENTE
+                nova_odd = get_live_odds(fid, api_key, s['Estrategia'], total_gols)
                 
+                # Só atualiza se a odd for válida
                 if nova_odd != "0.00":
                     s['Odd'] = nova_odd  # Sobrescreve a odd antiga
                     s['Odd_Atualizada'] = True # Marca como feita
@@ -935,7 +944,9 @@ if st.session_state.ROBO_LIGADO:
                 if uid not in st.session_state['alertas_enviados']:
                     st.session_state['alertas_enviados'].add(uid) # BLOQUEIO ANTES DO SHEETS
                     
-                    odd_atual = get_live_odds(fid, API_KEY, gh + ga) # Passa o total de gols
+                    # --- CHAMA FUNÇÃO INTELIGENTE DE ODDS ---
+                    odd_atual = get_live_odds(fid, API_KEY, s['tag'], gh+ga)
+                    
                     item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual, "Odd_Atualizada": ""}
                     if adicionar_historico(item):
                         prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
@@ -1026,8 +1037,9 @@ if st.session_state.ROBO_LIGADO:
                         odd = row['Odd_Num']
                         strat = row['Estrategia']
                         
+                        # Se odd for inválida (0 ou 1.0), tenta usar a média da estratégia
                         if odd <= 1.01:
-                            odd = mapa_medias.get(strat, 1.01)
+                            odd = mapa_medias.get(strat, 1.01) # Se não tiver média, usa 1.01 (Safety)
 
                         if 'GREEN' in res:
                             lucro = (stake_padrao * odd) - stake_padrao
