@@ -109,11 +109,7 @@ def carregar_aba(nome_aba, colunas_esperadas):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    if col == 'Odd': df[col] = "0.00" 
-                    elif col == 'Strikes': df[col] = '0'
-                    elif col == 'Jogos_Erro': df[col] = ''
-                    elif col == 'Motivo': df[col] = ''
-                    elif col == 'Odd_Atualizada': df[col] = ''
+                    if col == 'Odd': df[col] = "1.10" # Default visual
                     else: df[col] = ""
         if df.empty or len(df.columns) < len(colunas_esperadas): 
             return pd.DataFrame(columns=colunas_esperadas)
@@ -125,9 +121,12 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: return False
 
 def sanitizar_conflitos():
-    df_black = st.session_state['df_black']
-    df_vip = st.session_state['df_vip']
-    df_safe = st.session_state['df_safe']
+    df_black = st.session_state.get('df_black', pd.DataFrame())
+    df_vip = st.session_state.get('df_vip', pd.DataFrame())
+    df_safe = st.session_state.get('df_safe', pd.DataFrame())
+    
+    if df_black.empty or df_vip.empty or df_safe.empty: return
+
     alterou_black, alterou_vip, alterou_safe = False, False, False
     
     for idx, row in df_black.iterrows():
@@ -165,51 +164,44 @@ def carregar_tudo(force=False):
         if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
             if 'df_black' in st.session_state: return
 
-    df = carregar_aba("Blacklist", COLS_BLACK)
-    if not df.empty: df['id'] = df['id'].apply(normalizar_id)
-    st.session_state['df_black'] = df
-
-    df = carregar_aba("Seguras", COLS_SAFE)
-    if not df.empty: df['id'] = df['id'].apply(normalizar_id)
-    st.session_state['df_safe'] = df
-
-    df = carregar_aba("Obs", COLS_OBS)
-    if not df.empty: df['id'] = df['id'].apply(normalizar_id)
-    st.session_state['df_vip'] = df
+    # Carrega tabelas auxiliares
+    st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
+    st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
+    st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
+    
+    # Normaliza IDs
+    if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
+    if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
+    if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
     
     sanitizar_conflitos()
     
+    # Carrega Histórico Completo
     df = carregar_aba("Historico", COLS_HIST)
     if not df.empty and 'Data' in df.columns:
-        # --- CORREÇÃO DE FORMATO DE DATA E CARREGAMENTO ---
-        # Força converter para string YYYY-MM-DD para garantir match
         df['FID'] = df['FID'].apply(clean_fid)
         
+        # Garante formato de data YYYY-MM-DD
         try:
-            # Tenta converter para datetime e depois volta para string para padronizar
             df['Data_Temp'] = pd.to_datetime(df['Data'], errors='coerce')
             df['Data'] = df['Data_Temp'].dt.strftime('%Y-%m-%d').fillna(df['Data'])
             df = df.drop(columns=['Data_Temp'])
         except: pass
         
         st.session_state['historico_full'] = df
-        hoje = get_time_br().strftime('%Y-%m-%d')
         
-        # Carrega TUDO que tem a data de hoje
-        sinais_hoje = df[df['Data'] == hoje].to_dict('records')[::-1]
-        st.session_state['historico_sinais'] = sinais_hoje
+        # Filtra apenas hoje para exibição, mas mantendo histórico full em memória
+        hoje = get_time_br().strftime('%Y-%m-%d')
+        st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
         
         if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
         
-        # Popula os alertas já enviados para não duplicar
-        for item in sinais_hoje:
+        # Popula cache de envio para evitar duplicidade
+        for item in st.session_state['historico_sinais']:
             fid_strat = f"{item['FID']}_{item['Estrategia']}"
             st.session_state['alertas_enviados'].add(fid_strat)
-            
-            if 'GREEN' in str(item['Resultado']):
-                st.session_state['alertas_enviados'].add(f"RES_GREEN_{fid_strat}")
-            if 'RED' in str(item['Resultado']):
-                st.session_state['alertas_enviados'].add(f"RES_RED_{fid_strat}")
+            if 'GREEN' in str(item['Resultado']): st.session_state['alertas_enviados'].add(f"RES_GREEN_{fid_strat}")
+            if 'RED' in str(item['Resultado']): st.session_state['alertas_enviados'].add(f"RES_RED_{fid_strat}")
     else:
         st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
         st.session_state['historico_sinais'] = []
@@ -217,27 +209,47 @@ def carregar_tudo(force=False):
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
-    if 'historico_full' not in st.session_state: st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
+    # Carrega a versão mais recente da planilha para não perder dados de outras instâncias
+    df_atual_sheet = carregar_aba("Historico", COLS_HIST)
+    
     df_novo = pd.DataFrame([item])
-    st.session_state['historico_full'] = pd.concat([df_novo, st.session_state['historico_full']], ignore_index=True)
+    # Concatena o novo item com TUDO que estava na planilha
+    df_final = pd.concat([df_novo, df_atual_sheet], ignore_index=True)
+    
+    st.session_state['historico_full'] = df_final
     st.session_state['historico_sinais'].insert(0, item)
-    return salvar_aba("Historico", st.session_state['historico_full'])
+    return salvar_aba("Historico", df_final)
 
-def atualizar_historico_ram_disk(lista_atualizada):
-    df_hoje = pd.DataFrame(lista_atualizada)
-    df_disk = st.session_state['historico_full']
-    hoje = get_time_br().strftime('%Y-%m-%d')
+def atualizar_historico_ram_disk(lista_atualizada_hoje):
+    # 1. Carrega tudo da planilha para garantir que temos o histórico antigo
+    df_disk = carregar_aba("Historico", COLS_HIST)
     
-    if not df_disk.empty and 'Data' in df_disk.columns:
-          # Remove dados de hoje do disco para substituir pelos atualizados
-          df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
-          df_disk = df_disk[df_disk['Data'] != hoje]
-          
-    df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
-    df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
+    # 2. Converte a lista de hoje (que tem as odds atualizadas/resultados) em DF
+    df_hoje_memoria = pd.DataFrame(lista_atualizada_hoje)
     
-    st.session_state['historico_full'] = df_final 
-    salvar_aba("Historico", df_final)
+    if df_hoje_memoria.empty: return
+
+    # 3. Atualiza os registros no DF Disk usando os dados da memória (hoje)
+    # Criamos um dicionário de busca para performance
+    mapa_atualizacao = {}
+    for _, row in df_hoje_memoria.iterrows():
+        chave = f"{row['FID']}_{row['Estrategia']}"
+        mapa_atualizacao[chave] = row
+
+    # Função para atualizar linha a linha
+    def atualizar_linha(row):
+        chave = f"{row['FID']}_{row['Estrategia']}"
+        if chave in mapa_atualizacao:
+            return mapa_atualizacao[chave] # Substitui pela versão atualizada (com Green/Odd)
+        return row
+
+    if not df_disk.empty:
+        df_disk = df_disk.apply(atualizar_linha, axis=1)
+        # Se houver novos que não estavam no disco, adiciona (embora adicionar_historico ja faça isso)
+        # O foco aqui é atualizar status GREEN/RED e ODDS
+    
+    st.session_state['historico_full'] = df_disk
+    salvar_aba("Historico", df_disk)
 
 def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
@@ -372,7 +384,7 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- FUNÇÃO DE ODD INTELIGENTE (CORRIGIDA PARA NÃO RETORNAR 0.00) ---
+# --- FUNÇÃO DE ODD INTELIGENTE (COM PADRÃO 1.10) ---
 def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
@@ -384,11 +396,9 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
         
         # Define Targets
         if "Relâmpago" in strategy_name and total_gols_atual == 0:
-            target_markets = ["1st half", "first half"]
-            target_line = 0.5
+            target_markets = ["1st half", "first half"]; target_line = 0.5
         elif "Golden" in strategy_name and total_gols_atual == 1:
-            target_markets = ["match goals", "goals over/under"]
-            target_line = 1.5
+            target_markets = ["match goals", "goals over/under"]; target_line = 1.5
         else:
             ht_strategies = ["Relâmpago", "Massacre", "Choque", "Briga", "Morno"]
             is_ht = any(x in strategy_name for x in ht_strategies)
@@ -407,9 +417,7 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
                     for v in m['values']:
                         try:
                             line_raw = str(v['value']).lower().replace("over", "").strip()
-                            # Extrai numero mesmo se tiver texto
                             line_val = float(''.join(c for c in line_raw if c.isdigit() or c == '.'))
-                            
                             if abs(line_val - target_line) < 0.1:
                                 raw_odd = float(v['odd'])
                                 if raw_odd > 50: raw_odd = raw_odd / 1000
@@ -425,9 +433,11 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
                                 if best_odd == "0.00": best_odd = "{:.2f}".format(raw_odd)
                         except: pass
         
+        # SE NÃO ACHOU NADA, RETORNA O DEFAULT DO USUÁRIO
+        if best_odd == "0.00": return "1.10"
         return best_odd
     except:
-        return "0.00"
+        return "1.10"
 
 # --- INTELIGÊNCIA ---
 def buscar_inteligencia(estrategia, liga, jogo):
@@ -602,7 +612,7 @@ def enviar_relatorio_bi(token, chat_ids):
                 buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
             plt.close(fig)
 
-# --- PROCESSAR RESULTADO (COM TRAVA E CORREÇÃO DE ODDS 0.00) ---
+# --- PROCESSAR RESULTADO (COM TRAVA E CORREÇÃO DE ODDS 1.10) ---
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0
     ga = jogo_api['goals']['away'] or 0
@@ -687,12 +697,13 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             dt_sinal = pytz.timezone('America/Sao_Paulo').localize(dt_sinal)
             minutos_passados = (agora - dt_sinal).total_seconds() / 60
             
-            # Tenta atualizar Odd se for 0.00 ou se passou 3 mins
-            if (minutos_passados >= 3 and not s['Odd_Atualizada']) or (str(s['Odd']) == "0.00"):
+            # Tenta atualizar Odd se for 0.00 ou 1.10 (padrão) ou se passou 3 mins
+            if (minutos_passados >= 3 and not s['Odd_Atualizada']) or (str(s['Odd']) == "0.00") or (str(s['Odd']) == "1.10"):
                 jogo_live = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
                 total_gols = (jogo_live['goals']['home'] or 0) + (jogo_live['goals']['away'] or 0) if jogo_live else 0
                 nova_odd = get_live_odds(fid, api_key, s['Estrategia'], total_gols)
-                if nova_odd != "0.00":
+                # Se nova odd for diferente do que temos, atualiza
+                if nova_odd != s['Odd']:
                     s['Odd'] = nova_odd
                     s['Odd_Atualizada'] = True
                     atualizou = True
@@ -1027,7 +1038,7 @@ if st.session_state.ROBO_LIGADO:
                     lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]
                     for idx, row in df_fin.iterrows():
                         res = row['Resultado']; odd = row['Odd_Num']; strat = row['Estrategia']
-                        if odd <= 1.01: odd = mapa_medias.get(strat, 1.01)
+                        if odd <= 1.01: odd = mapa_medias.get(strat, 1.10)
                         if 'GREEN' in res: lucro = (stake_padrao * odd) - stake_padrao
                         else: lucro = -stake_padrao
                         saldo_atual += lucro; lucros.append(lucro); historico_saldo.append(saldo_atual)
