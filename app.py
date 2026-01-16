@@ -257,7 +257,7 @@ def resetar_erros(id_liga):
             df_safe.at[idx, 'Strikes'] = '0'; df_safe.at[idx, 'Jogos_Erro'] = ''
             if salvar_aba("Seguras", df_safe): st.session_state['df_safe'] = df_safe
 
-# --- FUNÇÃO CORRIGIDA PARA BLINDAR CONTAGEM DE STRIKES ---
+# --- FUNÇÃO: GERENCIAR ERROS (COM CORREÇÃO DE VÍRGULAS) ---
 def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     id_norm = normalizar_id(id_liga)
     fid_str = str(fid_jogo).strip() # Limpeza extra
@@ -1169,11 +1169,37 @@ if st.session_state.ROBO_LIGADO:
                 except Exception as e: st.error(f"Erro ao carregar BI: {e}")
 
         with abas[5]: st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
-        with abas[6]: st.dataframe(st.session_state['df_safe'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
+        
+        # --- ATUALIZAÇÃO 1: ABA SEGURAS COM COLUNA DE RISCO ---
+        with abas[6]: 
+            df_safe_show = st.session_state.get('df_safe', pd.DataFrame()).copy()
+            if not df_safe_show.empty:
+                # Função interna para gerar o texto do status
+                def get_status(row):
+                    try: s = int(float(str(row['Strikes'])))
+                    except: s = 0
+                    if s == 0: return "🟢 100% Estável"
+                    return f"⚠️ Atenção ({s}/10)"
+                
+                df_safe_show['Status Risco'] = df_safe_show.apply(get_status, axis=1)
+                st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
+            else:
+                st.caption("Nenhuma liga segura validada ainda.")
+
+        # --- ATUALIZAÇÃO 2: ABA OBS ORDENADA POR STRIKES (DESC) ---
         with abas[7]: 
             df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
-            if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
-            st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
+            if not df_vip_show.empty:
+                # Cria coluna numérica temporária para ordenação
+                df_vip_show['Strikes_Num'] = pd.to_numeric(df_vip_show['Strikes'], errors='coerce').fillna(0)
+                # Ordena do maior para o menor
+                df_vip_show = df_vip_show.sort_values(by='Strikes_Num', ascending=False)
+                # Formata visualmente a coluna original
+                df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
+                
+                st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
+            else:
+                st.caption("Nenhuma liga em observação.")
 
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
