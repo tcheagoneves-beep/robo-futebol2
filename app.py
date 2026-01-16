@@ -1056,11 +1056,24 @@ if st.session_state.ROBO_LIGADO:
 
         with abas[3]: 
             if not hist_hj.empty: 
-                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada']
-                cols_view = [c for c in hist_hj.columns if c not in colunas_esconder]
-                df_show = hist_hj[cols_view].copy()
+                # Cópia para manipulação visual (NÃO afeta o banco de dados)
+                df_show = hist_hj.copy()
+                
+                # --- AQUI: CONCATENA JOGO + PLACAR ---
+                # Verifica se as colunas existem para evitar erro
+                if 'Jogo' in df_show.columns and 'Placar_Sinal' in df_show.columns:
+                    df_show['Jogo'] = df_show['Jogo'] + " (" + df_show['Placar_Sinal'].astype(str) + ")"
+                
+                # Define colunas para esconder (incluindo Placar_Sinal agora redundante)
+                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada', 'Placar_Sinal']
+                
+                # Filtra colunas
+                cols_view = [c for c in df_show.columns if c not in colunas_esconder]
+                df_show = df_show[cols_view]
+                
                 try: df_show['Odd'] = df_show['Odd'].astype(float)
                 except: pass
+                
                 st.dataframe(df_show.style.format({"Odd": "{:.2f}"}), use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
         
