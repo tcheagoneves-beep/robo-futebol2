@@ -349,23 +349,33 @@ def buscar_agenda_cached(api_key, date_str):
     except: return []
 
 # --- NOVA FUNÇÃO DE ODD INTELIGENTE ---
-# Agora recebe 'strategy' e 'total_gols' para buscar a linha correta (HT ou FT)
+# MODIFICADA: Lógica para Gol Relâmpago (Over 0.5 HT) e Golden Bet (Over 1.5 FT)
 def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
         params = {"fixture": fixture_id}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         
-        # 1. Definir se a estratégia é HT ou FT
-        ht_strategies = ["Relâmpago", "Massacre", "Choque", "Briga", "Morno"]
-        is_ht = any(x in strategy_name for x in ht_strategies)
+        # --- LÓGICA DE ALVO ---
+        target_markets = []
+        target_line = 0.0
+
+        # Caso 1: Gol Relâmpago (HT) e 0x0 -> Caça Over 0.5 HT
+        if "Relâmpago" in strategy_name and total_gols_atual == 0:
+            target_markets = ["1st half", "first half"]
+            target_line = 0.5
         
-        # Palavras-chave para filtrar o mercado correto
-        target_markets = ["1st half", "first half"] if is_ht else ["match goals", "goals over/under"]
+        # Caso 2: Golden Bet (FT) e 0x1 ou 1x0 -> Caça Over 1.5 FT
+        elif "Golden" in strategy_name and total_gols_atual == 1:
+            target_markets = ["match goals", "goals over/under"]
+            target_line = 1.5
         
-        # A linha alvo é sempre Gols Atuais + 0.5 (Ex: 1x0 -> Over 1.5)
-        # Se for "Morno", a lógica seria Under, mas aqui mantemos o padrão de Over para captura
-        target_line = total_gols_atual + 0.5
+        # Caso Padrão: Mantém a lógica anterior
+        else:
+            ht_strategies = ["Relâmpago", "Massacre", "Choque", "Briga", "Morno"]
+            is_ht = any(x in strategy_name for x in ht_strategies)
+            target_markets = ["1st half", "first half"] if is_ht else ["match goals", "goals over/under"]
+            target_line = total_gols_atual + 0.5
         
         best_odd = "0.00"
         
@@ -374,10 +384,10 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
             for m in markets:
                 m_name = m['name'].lower()
                 
-                # Verifica se o mercado é o correto (HT ou FT)
+                # Verifica se o mercado é o correto (HT ou FT) e se é OVER
                 if any(tm in m_name for tm in target_markets) and "over" in m_name:
                     
-                    # 1. Tenta achar a linha EXATA (Ex: Over 1.5 se o jogo tá 1x0)
+                    # 1. Tenta achar a linha EXATA definida acima
                     for v in m['values']:
                         try:
                             line_raw = str(v['value']).lower().replace("over", "").strip()
@@ -389,12 +399,13 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
                                 return "{:.2f}".format(raw_odd)
                         except: pass
                     
-                    # 2. Se não achar a exata, pega a primeira JOGÁVEL (> 1.40)
+                    # 2. Se não achar a exata, pega a primeira JOGÁVEL (> 1.20) - AJUSTE FEITO
                     for v in m['values']:
                         try:
                             raw_odd = float(v['odd'])
                             if raw_odd > 50: raw_odd = raw_odd / 1000
-                            if raw_odd > 1.40:
+                            # Antes era 1.40, agora ajustado para 1.20 para não zerar
+                            if raw_odd > 1.20:
                                 if best_odd == "0.00": best_odd = "{:.2f}".format(raw_odd)
                         except: pass
                         
