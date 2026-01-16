@@ -190,6 +190,12 @@ def carregar_tudo(force=False):
         df_hoje = df[df['Data'] == hoje]
         for _, row in df_hoje.iterrows():
             st.session_state['alertas_enviados'].add(f"{row['FID']}_{row['Estrategia']}")
+            # ADICIONADO: Também popula os resultados já salvos para evitar reenvio no refresh
+            if 'GREEN' in str(row['Resultado']):
+                st.session_state['alertas_enviados'].add(f"RES_GREEN_{row['FID']}_{row['Estrategia']}")
+            if 'RED' in str(row['Resultado']):
+                st.session_state['alertas_enviados'].add(f"RES_RED_{row['FID']}_{row['Estrategia']}")
+
     else:
         st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
         st.session_state['historico_sinais'] = []
@@ -208,8 +214,8 @@ def atualizar_historico_ram_disk(lista_atualizada):
     df_disk = st.session_state['historico_full']
     hoje = get_time_br().strftime('%Y-%m-%d')
     if not df_disk.empty and 'Data' in df_disk.columns:
-         df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
-         df_disk = df_disk[df_disk['Data'] != hoje]
+          df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
+          df_disk = df_disk[df_disk['Data'] != hoje]
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
     st.session_state['historico_full'] = df_final 
@@ -586,39 +592,69 @@ def enviar_relatorio_bi(token, chat_ids):
                 buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
             plt.close(fig)
 
+# --- FUNÇÃO CORRIGIDA DE RESULTADOS (COM TRAVA DE DUPLICIDADE) ---
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0
     ga = jogo_api['goals']['away'] or 0
     st_short = jogo_api['fixture']['status']['short']
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque Líderes", "Briga de Rua"]
+    
     if "Múltipla" in sinal['Estrategia']: return False
+    
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
+    # --- CORREÇÃO: CRIAÇÃO DE CHAVES ÚNICAS PARA CONTROLE DE ENVIO ---
+    fid = str(sinal['FID'])
+    strat = str(sinal['Estrategia'])
+    key_green = f"RES_GREEN_{fid}_{strat}"
+    key_red = f"RES_RED_{fid}_{strat}"
+
+    # Garante que a variável de controle existe
+    if 'alertas_enviados' not in st.session_state: 
+        st.session_state['alertas_enviados'] = set()
+
+    # LÓGICA DE GREEN
     if (gh+ga) > (ph+pa):
         if "Morno" in sinal['Estrategia']: 
             sinal['Resultado'] = '❌ RED'
-            enviar_telegram(token, chats, f"❌ <b>RED | GOL SAIU</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
+            if key_red not in st.session_state['alertas_enviados']:
+                enviar_telegram(token, chats, f"❌ <b>RED | GOL SAIU</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
+                st.session_state['alertas_enviados'].add(key_red)
             return True
         else:
             sinal['Resultado'] = '✅ GREEN'
-            enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
+            # SÓ ENVIA SE AINDA NÃO ENVIOU O GREEN DESTE SINAL
+            if key_green not in st.session_state['alertas_enviados']:
+                enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
+                st.session_state['alertas_enviados'].add(key_green)
             return True
 
     eh_ht_strat = any(x in sinal['Estrategia'] for x in STRATS_HT_ONLY)
+    
+    # LÓGICA DE RED (HT)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
-        enviar_telegram(token, chats, f"❌ <b>RED | INTERVALO (HT)</b>\n⚽ {sinal['Jogo']}\n📉 Placar HT: {gh}x{ga}\n🎯 {sinal['Estrategia']} (Não bateu no 1º Tempo)")
+        if key_red not in st.session_state['alertas_enviados']:
+            enviar_telegram(token, chats, f"❌ <b>RED | INTERVALO (HT)</b>\n⚽ {sinal['Jogo']}\n📉 Placar HT: {gh}x{ga}\n🎯 {sinal['Estrategia']} (Não bateu no 1º Tempo)")
+            st.session_state['alertas_enviados'].add(key_red)
         return True
 
+    # LÓGICA DE RED (FT) ou GREEN (UNDER)
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
         if "Morno" in sinal['Estrategia'] and (gh+ga) <= 1:
              sinal['Resultado'] = '✅ GREEN'
-             enviar_telegram(token, chats, f"✅ <b>GREEN | UNDER BATIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}")
+             if key_green not in st.session_state['alertas_enviados']:
+                enviar_telegram(token, chats, f"✅ <b>GREEN | UNDER BATIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}")
+                st.session_state['alertas_enviados'].add(key_green)
              return True
+        
         sinal['Resultado'] = '❌ RED'
-        enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
+        if key_red not in st.session_state['alertas_enviados']:
+            enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
+            st.session_state['alertas_enviados'].add(key_red)
         return True
+
     return False
 
 # --- FUNÇÃO ATUALIZADA: CHECK GREEN/RED + ATUALIZAÇÃO DE ODD TARDIA (3 MIN) ---
