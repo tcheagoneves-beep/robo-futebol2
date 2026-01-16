@@ -1094,7 +1094,7 @@ if st.session_state.ROBO_LIGADO:
 
         with abas[5]: st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         
-        # --- ABA SEGURAS (CORRIGIDA COM COLUNA DE RISCO) ---
+        # --- ABA SEGURAS (CORRIGIDA COM COLUNA DE RISCO E REMOÇÃO DE JOGOS_ERRO) ---
         with abas[6]: 
             df_safe_show = st.session_state.get('df_safe', pd.DataFrame()).copy()
             if not df_safe_show.empty:
@@ -1106,8 +1106,8 @@ if st.session_state.ROBO_LIGADO:
                 
                 df_safe_show['Status Risco'] = df_safe_show['Strikes'].apply(calc_risco)
                 
-                # Exibe a coluna calculada e as outras originais
-                st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco', 'Jogos_Erro']], use_container_width=True, hide_index=True)
+                # Exibe a coluna calculada e as outras originais, MAS SEM 'Jogos_Erro'
+                st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhuma liga segura ainda.")
 
