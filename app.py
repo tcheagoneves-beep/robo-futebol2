@@ -209,8 +209,8 @@ def atualizar_historico_ram_disk(lista_atualizada):
     df_disk = st.session_state['historico_full']
     hoje = get_time_br().strftime('%Y-%m-%d')
     if not df_disk.empty and 'Data' in df_disk.columns:
-         df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
-         df_disk = df_disk[df_disk['Data'] != hoje]
+          df_disk['Data'] = df_disk['Data'].astype(str).str.replace(' 00:00:00', '', regex=False)
+          df_disk = df_disk[df_disk['Data'] != hoje]
     df_final = pd.concat([df_hoje, df_disk], ignore_index=True)
     df_final = df_final.drop_duplicates(subset=['FID', 'Estrategia'], keep='first')
     st.session_state['historico_full'] = df_final 
@@ -257,52 +257,93 @@ def resetar_erros(id_liga):
             df_safe.at[idx, 'Strikes'] = '0'; df_safe.at[idx, 'Jogos_Erro'] = ''
             if salvar_aba("Seguras", df_safe): st.session_state['df_safe'] = df_safe
 
+# --- FUNÇÃO CORRIGIDA PARA BLINDAR CONTAGEM DE STRIKES ---
 def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     id_norm = normalizar_id(id_liga)
-    fid_str = str(fid_jogo)
+    fid_str = str(fid_jogo).strip() # Limpeza extra
+    
+    # --- 1. VERIFICA SE ESTÁ NA ABA SEGURAS ---
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
         idx = df_safe[df_safe['id'] == id_norm].index[0]
-        jogos_erro = str(df_safe.at[idx, 'Jogos_Erro']).split(',') if str(df_safe.at[idx, 'Jogos_Erro']).strip() else []
+        
+        # Correção: Limpa itens vazios da lista
+        raw_jogos = str(df_safe.at[idx, 'Jogos_Erro']).split(',')
+        jogos_erro = [x.strip() for x in raw_jogos if x.strip()] 
+        
         if fid_str in jogos_erro: return 
         jogos_erro.append(fid_str)
         strikes = len(jogos_erro)
+        
         if strikes >= 10:
             df_safe = df_safe.drop(idx)
-            salvar_aba("Seguras", df_safe); st.session_state['df_safe'] = df_safe
+            salvar_aba("Seguras", df_safe)
+            st.session_state['df_safe'] = df_safe
+            
+            # Move para OBS
             df_vip = st.session_state.get('df_vip', pd.DataFrame())
-            novo_obs = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Data_Erro': get_time_br().strftime('%Y-%m-%d'), 'Strikes': '1', 'Jogos_Erro': fid_str}])
+            novo_obs = pd.DataFrame([{
+                'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
+                'Data_Erro': get_time_br().strftime('%Y-%m-%d'), 
+                'Strikes': '1', 'Jogos_Erro': fid_str
+            }])
             final_vip = pd.concat([df_vip, novo_obs], ignore_index=True)
-            salvar_aba("Obs", final_vip); st.session_state['df_vip'] = final_vip
+            salvar_aba("Obs", final_vip)
+            st.session_state['df_vip'] = final_vip
         else:
-            df_safe.at[idx, 'Strikes'] = str(strikes); df_safe.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
-            salvar_aba("Seguras", df_safe); st.session_state['df_safe'] = df_safe
+            df_safe.at[idx, 'Strikes'] = str(strikes)
+            df_safe.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
+            salvar_aba("Seguras", df_safe)
+            st.session_state['df_safe'] = df_safe
         return
 
+    # --- 2. VERIFICA SE ESTÁ NA ABA OBS (VIP) ---
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
-    strikes = 0; jogos_erro = []
+    strikes = 0
+    jogos_erro = []
+    
     if not df_vip.empty and id_norm in df_vip['id'].values:
-        row = df_vip[df_vip['id'] == id_norm].iloc[0]
+        idx = df_vip[df_vip['id'] == id_norm].index[0]
+        row = df_vip.iloc[idx]
+        
         val_jogos = str(row.get('Jogos_Erro', '')).strip()
-        if val_jogos: jogos_erro = val_jogos.split(',')
+        # Correção: List comprehension para remover vazios
+        if val_jogos: 
+            jogos_erro = [x.strip() for x in val_jogos.split(',') if x.strip()]
     
     if fid_str in jogos_erro: return
     jogos_erro.append(fid_str)
     strikes = len(jogos_erro)
     
+    # --- VERIFICAÇÃO FINAL DE BANIMENTO ---
     if strikes >= 10:
         salvar_blacklist(id_liga, pais, nome_liga, f"Banida ({formatar_inteiro_visual(strikes)} Jogos Sem Dados)")
+        
+        # Remove da aba Obs se foi banida para evitar conflitos
+        if not df_vip.empty and id_norm in df_vip['id'].values:
+             df_vip = df_vip[df_vip['id'] != id_norm]
+             salvar_aba("Obs", df_vip)
+             st.session_state['df_vip'] = df_vip
+             
         st.toast(f"🚫 {nome_liga} Banida!")
     else:
+        # Atualiza contagem na aba OBS
         if id_norm in df_vip['id'].values:
             idx = df_vip[df_vip['id'] == id_norm].index[0]
-            df_vip.at[idx, 'Strikes'] = str(strikes); df_vip.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
+            df_vip.at[idx, 'Strikes'] = str(strikes)
+            df_vip.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
             df_vip.at[idx, 'Data_Erro'] = get_time_br().strftime('%Y-%m-%d')
-            salvar_aba("Obs", df_vip); st.session_state['df_vip'] = df_vip
+            salvar_aba("Obs", df_vip)
+            st.session_state['df_vip'] = df_vip
         else:
-            novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Data_Erro': get_time_br().strftime('%Y-%m-%d'), 'Strikes': '1', 'Jogos_Erro': fid_str}])
+            novo = pd.DataFrame([{
+                'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 
+                'Data_Erro': get_time_br().strftime('%Y-%m-%d'), 
+                'Strikes': '1', 'Jogos_Erro': fid_str
+            }])
             final = pd.concat([df_vip, novo], ignore_index=True)
-            salvar_aba("Obs", final); st.session_state['df_vip'] = final
+            salvar_aba("Obs", final)
+            st.session_state['df_vip'] = final
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
