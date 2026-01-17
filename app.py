@@ -163,10 +163,27 @@ def extrair_dados_completos(stats_api):
         return texto
     except: return "Erro stats."
 
-# --- FUNÇÕES DE BANCO DE DADOS ---
-def carregar_aba(nome_aba, colunas_esperadas):
+# --- FUNÇÕES DE BANCO DE DADOS OTIMIZADAS ---
+
+# Nova função cacheada para carregar tabelas estáticas (Blacklist, Safe, Obs)
+@st.cache_data(ttl=600) # Cache de 10 minutos (Grande ganho de performance)
+def carregar_configs_cached():
     try:
-        df = conn.read(worksheet=nome_aba, ttl=0)
+        df_b = conn.read(worksheet="Blacklist", ttl=600).fillna("").astype(str)
+        df_s = conn.read(worksheet="Seguras", ttl=600).fillna("").astype(str)
+        df_o = conn.read(worksheet="Obs", ttl=600).fillna("").astype(str)
+        
+        # Garante colunas mínimas
+        if df_b.empty: df_b = pd.DataFrame(columns=COLS_BLACK)
+        if df_s.empty: df_s = pd.DataFrame(columns=COLS_SAFE)
+        if df_o.empty: df_o = pd.DataFrame(columns=COLS_OBS)
+        
+        return df_b, df_s, df_o
+    except: return pd.DataFrame(columns=COLS_BLACK), pd.DataFrame(columns=COLS_SAFE), pd.DataFrame(columns=COLS_OBS)
+
+def carregar_aba(nome_aba, colunas_esperadas, ttl_val=0):
+    try:
+        df = conn.read(worksheet=nome_aba, ttl=ttl_val)
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
@@ -195,6 +212,7 @@ def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
         df = pd.concat([df, novo], ignore_index=True)
     st.session_state['df_black'] = df
     salvar_aba("Blacklist", df)
+    st.cache_data.clear() # Limpa cache para atualizar configs
     sanitizar_conflitos()
 
 def sanitizar_conflitos():
@@ -224,9 +242,10 @@ def sanitizar_conflitos():
             alterou_safe = True
     if 'id_norm' in df_vip.columns: df_vip = df_vip.drop(columns=['id_norm'])
     if 'id_norm' in df_safe.columns: df_safe = df_safe.drop(columns=['id_norm'])
-    if alterou_black: st.session_state['df_black'] = df_black; salvar_aba("Blacklist", df_black)
-    if alterou_vip: st.session_state['df_vip'] = df_vip; salvar_aba("Obs", df_vip)
-    if alterou_safe: st.session_state['df_safe'] = df_safe; salvar_aba("Seguras", df_safe)
+    if alterou_black: salvar_aba("Blacklist", df_black)
+    if alterou_vip: salvar_aba("Obs", df_vip)
+    if alterou_safe: salvar_aba("Seguras", df_safe)
+    if alterou_black or alterou_vip or alterou_safe: st.cache_data.clear()
 
 def salvar_safe_league_basic(id_liga, pais, nome_liga, tem_tabela=False):
     id_norm = normalizar_id(id_liga)
@@ -235,12 +254,17 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga, tem_tabela=False):
     if id_norm not in df['id'].values:
         novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Motivo': txt_motivo, 'Strikes': '0', 'Jogos_Erro': ''}])
         final = pd.concat([df, novo], ignore_index=True)
-        if salvar_aba("Seguras", final): st.session_state['df_safe'] = final; sanitizar_conflitos()
+        if salvar_aba("Seguras", final): 
+            st.session_state['df_safe'] = final
+            st.cache_data.clear()
+            sanitizar_conflitos()
     else:
         idx = df[df['id'] == id_norm].index[0]
         if df.at[idx, 'Motivo'] != txt_motivo:
             df.at[idx, 'Motivo'] = txt_motivo
-            if salvar_aba("Seguras", df): st.session_state['df_safe'] = df
+            if salvar_aba("Seguras", df): 
+                st.session_state['df_safe'] = df
+                st.cache_data.clear()
 
 def resetar_erros(id_liga):
     id_norm = normalizar_id(id_liga)
@@ -249,7 +273,9 @@ def resetar_erros(id_liga):
         idx = df_safe[df_safe['id'] == id_norm].index[0]
         if str(df_safe.at[idx, 'Strikes']) != '0':
             df_safe.at[idx, 'Strikes'] = '0'; df_safe.at[idx, 'Jogos_Erro'] = ''
-            if salvar_aba("Seguras", df_safe): st.session_state['df_safe'] = df_safe
+            if salvar_aba("Seguras", df_safe): 
+                st.session_state['df_safe'] = df_safe
+                st.cache_data.clear()
 
 def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
     id_norm = normalizar_id(id_liga)
@@ -268,6 +294,7 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             novo_obs = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Data_Erro': get_time_br().strftime('%Y-%m-%d'), 'Strikes': '1', 'Jogos_Erro': fid_str}])
             final_vip = pd.concat([df_vip, novo_obs], ignore_index=True)
             salvar_aba("Obs", final_vip); st.session_state['df_vip'] = final_vip
+            st.cache_data.clear()
         else:
             df_safe.at[idx, 'Strikes'] = str(strikes); df_safe.at[idx, 'Jogos_Erro'] = ",".join(jogos_erro)
             salvar_aba("Seguras", df_safe); st.session_state['df_safe'] = df_safe
@@ -297,24 +324,33 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
 
 def carregar_tudo(force=False):
     now = time.time()
-    if force or (now - st.session_state['last_static_update']) > STATIC_CACHE_TIME or 'df_black' not in st.session_state:
-        st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
-        st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
-        st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
-        # --- Carregar cache do BigData para evitar duplicidade ---
-        df_bd_load = carregar_aba("BigData", COLS_BIGDATA)
-        if not df_bd_load.empty:
-            st.session_state['jogos_salvos_bigdata'] = set(df_bd_load['FID'].astype(str).values)
-        # -----------------------------------------------------------------
+    
+    # --- 1. CARREGAMENTO DE CONFIGS (OTIMIZADO - A CADA 10 MIN OU SE FORÇADO) ---
+    if force or 'df_black' not in st.session_state or (now - st.session_state.get('last_static_update', 0) > STATIC_CACHE_TIME):
+        df_b, df_s, df_o = carregar_configs_cached()
+        st.session_state['df_black'] = df_b
+        st.session_state['df_safe'] = df_s
+        st.session_state['df_vip'] = df_o
+        
+        # Normalização IDs
         if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
         if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
+        
+        # Carregar Cache do BigData (Apenas os IDs para evitar duplicidade)
+        try:
+            df_bd_load = carregar_aba("BigData", ["FID"], ttl_val=600)
+            if not df_bd_load.empty:
+                st.session_state['jogos_salvos_bigdata'] = set(df_bd_load['FID'].astype(str).values)
+        except: pass
+        
         sanitizar_conflitos()
         st.session_state['last_static_update'] = now
+
+    # --- 2. CARREGAMENTO DO HISTÓRICO (SOMENTE SE NECESSÁRIO) ---
+    # Só carrega do Google se passou 60s E se não tivermos a versão RAM
     if 'historico_full' not in st.session_state or force:
-        df = carregar_aba("Historico", COLS_HIST)
-        if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
-            df = st.session_state['historico_full'] 
+        df = carregar_aba("Historico", COLS_HIST, ttl_val=0) # Esse precisa ser fresco
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
             try:
@@ -335,6 +371,7 @@ def carregar_tudo(force=False):
             if 'historico_full' not in st.session_state:
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
+    
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
@@ -530,7 +567,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, winrate_info=""):
         else: st.session_state['ia_bloqueada_ate'] = None
     dados_ricos = extrair_dados_completos(stats_raw)
     
-    # --- NOVO PROMPT FOCADO EM LONGO PRAZO ---
+    # --- PROMPT OTIMIZADO PARA HISTÓRICO GLOBAL ---
     prompt = f"""
     Aja como um Trader Esportivo Profissional.
     JOGO: {dados_jogo['jogo']} | TEMPO: {dados_jogo['tempo']}'
@@ -1165,6 +1202,7 @@ if st.session_state.ROBO_LIGADO:
         if not api_error:
             jogos_para_baixar = []
             contagem_ft_baixar = 0
+            # --- OTIMIZAÇÃO: Limitar batch de download para evitar gargalo ---
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
                 if lid in ids_black: continue
@@ -1173,13 +1211,12 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                # --- LÓGICA DE BIG DATA ---
+                # Big Data (FT) - Limitado a 2 por ciclo para performance
                 if st_short in ['FT', 'AET', 'PEN']:
                     if str(fid) not in st.session_state['jogos_salvos_bigdata']:
-                        if contagem_ft_baixar < 5: 
+                        if contagem_ft_baixar < 2: 
                              jogos_para_baixar.append(j)
                              contagem_ft_baixar += 1
-                # --------------------------
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
 
@@ -1250,11 +1287,10 @@ if st.session_state.ROBO_LIGADO:
                                 if IA_ATIVADA:
                                     try:
                                         time.sleep(1)
-                                        # --- CÁLCULO HISTÓRICO GLOBAL PARA A IA ---
+                                        # --- IA OTIMIZADA COM DADOS GLOBAIS ---
                                         win_info = "Sem dados suficientes."
                                         if 'historico_full' in st.session_state:
                                             dff = st.session_state['historico_full']
-                                            # Filtra TODAS as ocorrências dessa estratégia na história
                                             df_strat = dff[dff['Estrategia'] == s['tag']]
                                             if not df_strat.empty:
                                                 gr = df_strat['Resultado'].str.contains('GREEN').sum()
@@ -1269,7 +1305,7 @@ if st.session_state.ROBO_LIGADO:
                                             stats,
                                             winrate_info=win_info
                                         )
-                                        # -----------------------------------------------
+                                        # --------------------------------------
                                     except: pass
                                 msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
                                 enviar_telegram(safe_token, safe_chat, msg)
