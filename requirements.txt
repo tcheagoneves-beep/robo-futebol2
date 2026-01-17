@@ -5,3 +5,4 @@ pytz
 st-gsheets-connection
 matplotlib
 plotly
+google-generativeai
