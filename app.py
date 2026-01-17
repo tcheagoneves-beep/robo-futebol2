@@ -26,7 +26,7 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # Modelo 2.0 Flash (Mais rápido e eficiente)
+        # Modelo 2.0 Flash (Ideal para análise rápida e grandes volumes de dados do BI)
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -43,7 +43,7 @@ if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 
-# Variáveis de Controle e COTA INTELIGENTE
+# Variáveis de Controle e Cota
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
@@ -52,8 +52,7 @@ if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_env
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
 
-# VARIÁVEL DO DISJUNTOR (Circuit Breaker)
-# Se der erro 429, guardamos a hora aqui para não tentar de novo por um tempo
+# Disjuntor Inteligente (Circuit Breaker)
 if 'ia_bloqueada_ate' not in st.session_state: st.session_state['ia_bloqueada_ate'] = None
 
 # CACHE CONFIG
@@ -141,53 +140,86 @@ def gerar_barra_pressao(rh, ra):
             return ""
     except: return ""
 
+# --- IA FUNCTIONS ---
 def consultar_ia_gemini(dados_jogo, estrategia):
     """
-    Função INTELIGENTE com Disjuntor (Circuit Breaker).
-    Se a cota estourar, ela desliga a IA por 1 hora para não travar o robô.
+    IA para validar SINAIS ao vivo.
     """
     if not IA_ATIVADA: return ""
     
-    # 1. Verifica se o disjuntor está desarmado (bloqueio ativo)
+    # Verifica disjuntor
     if st.session_state['ia_bloqueada_ate']:
         agora = datetime.now()
         if agora < st.session_state['ia_bloqueada_ate']:
-            # Ainda está no tempo de castigo, não chama a IA
-            tempo_restante = int((st.session_state['ia_bloqueada_ate'] - agora).total_seconds() / 60)
-            return f"\n🤖 <b>IA:</b> (Em pausa por {tempo_restante}min - Cota)"
+            m_rest = int((st.session_state['ia_bloqueada_ate'] - agora).total_seconds() / 60)
+            return f"\n🤖 <b>IA:</b> (Pausa Cota - {m_rest}m)"
         else:
-            # Tempo acabou, desarma o disjuntor e tenta de novo
             st.session_state['ia_bloqueada_ate'] = None
 
     prompt = f"""
-    Aja como analista de futebol. Jogo AO VIVO:
+    Aja como Trader Esportivo Profissional. Jogo AO VIVO:
     PARTIDA: {dados_jogo['jogo']} ({dados_jogo['liga']})
     TEMPO: {dados_jogo['tempo']}' | PLACAR: {dados_jogo['placar']}
     STATS: {dados_jogo['stats']}
     SINAL DO ROBÔ: "{estrategia}"
     
-    Responda em 1 frase curta (máx 15 palavras): Aprova a entrada com base na pressão?
+    Responda em 1 frase curta (máx 15 palavras): Aprova a entrada com base na pressão? Seja direto.
     """
     
     try:
-        # Tenta gerar a resposta (timeout curto para não travar)
         response = model_ia.generate_content(prompt, request_options={"timeout": 8})
         return f"\n🤖 <b>IA:</b> {response.text.strip()}"
     except Exception as e:
         erro_str = str(e)
         if "429" in erro_str or "quota" in erro_str.lower():
-            # ERRO DE COTA DETECTADO!
-            # Ativa o disjuntor: Bloqueia IA por 60 minutos
-            bloqueio = datetime.now() + timedelta(minutes=60)
-            st.session_state['ia_bloqueada_ate'] = bloqueio
-            
-            # Retorna msg de erro com o motivo real para o Telegram ver
-            if "quota" in erro_str.lower():
-                return "\n🤖 <b>IA:</b> (Cota Diária Esgotada - Voltando em 1h)"
-            else:
-                return "\n🤖 <b>IA:</b> (Muitos Pedidos - Pausa de 1h)"
-        else:
-            return ""
+            st.session_state['ia_bloqueada_ate'] = datetime.now() + timedelta(minutes=60)
+            return "\n🤖 <b>IA:</b> (Cota Esgotada - Pausa 1h)"
+        return ""
+
+def analisar_bi_com_ia():
+    """
+    IA para analisar o HISTÓRICO (BI) e dar dicas de gestão.
+    """
+    if not IA_ATIVADA: return "IA Desconectada."
+    
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return "Sem dados suficientes para análise."
+    
+    try:
+        # Prepara o resumo dos dados para a IA ler
+        df_f = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        total = len(df_f)
+        greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
+        reds = len(df_f[df_f['Resultado'].str.contains('RED')])
+        winrate = (greens/total*100) if total > 0 else 0
+        
+        # Resumo por Estratégia
+        resumo_strat = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}% WR ({len(x)} jogos)").to_dict()
+        
+        prompt_bi = f"""
+        Aja como um Consultor de Data Science para Apostas Esportivas.
+        Analise os resultados do meu Robô "Neves Analytics":
+        
+        TOTAL DE SINAIS: {total}
+        GREENS: {greens}
+        REDS: {reds}
+        ASSERTIVIDADE GERAL: {winrate:.1f}%
+        
+        PERFORMANCE POR ESTRATÉGIA:
+        {json.dumps(resumo_strat, indent=2)}
+        
+        Sua missão:
+        1. Identifique a estratégia que está dando PREJUÍZO (se houver) e sugira parar ou ajustar.
+        2. Identifique a melhor estratégia (Ouro) e sugira aumentar a mão nela.
+        3. Dê uma dica geral de gestão de banca baseada nesses números.
+        
+        Seja curto, direto e motivador. Use emojis.
+        """
+        
+        response = model_ia.generate_content(prompt_bi)
+        return response.text
+    except Exception as e:
+        return f"Erro ao analisar BI: {e}"
 
 # --- 3. BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
@@ -946,6 +978,18 @@ with st.sidebar:
         if st.button("🧹 Limpar Cache"): 
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
         st.write("---")
+        
+        # --- NOVO BOTÃO DE CONSULTORIA DA IA ---
+        if st.button("🧠 Pedir Análise do BI"):
+            if IA_ATIVADA:
+                with st.spinner("🤖 O Consultor Neves está analisando seus dados..."):
+                    analise = analisar_bi_com_ia()
+                    st.markdown("### 📝 Relatório do Consultor")
+                    st.info(analise)
+            else:
+                st.error("IA Desconectada.")
+        # ---------------------------------------
+
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
         if st.button("💰 Enviar Relatório Financeiro"):
             if 'last_fin_stats' in st.session_state:
@@ -1113,9 +1157,13 @@ if st.session_state.ROBO_LIGADO:
                                 
                                 opiniao_ia = ""
                                 if IA_ATIVADA:
-                                    # CHAMA A FUNÇÃO INTELIGENTE (COM DISJUNTOR)
-                                    dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
-                                    opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
+                                    try:
+                                        # FREIO DE SEGURANÇA OBRIGATÓRIO (4s)
+                                        # Para evitar bater em 4 jogos ao mesmo tempo e travar a API
+                                        time.sleep(4)
+                                        dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
+                                        opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
+                                    except: pass
 
                                 msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
                                 enviar_telegram(TG_TOKEN, TG_CHAT, msg)
