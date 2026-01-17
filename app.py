@@ -26,7 +26,7 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # Modelo 2.0 Flash (Ideal para ler grandes volumes de dados do dia)
+        # Modelo 2.0 Flash (Perfeito para ler muitos dados de uma vez)
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -39,6 +39,7 @@ except Exception as e:
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 
+if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 
@@ -50,11 +51,12 @@ if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviado
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
+if 'jogos_salvos_bigdata' not in st.session_state: st.session_state['jogos_salvos_bigdata'] = set()
 
 # Disjuntor Inteligente (Circuit Breaker)
 if 'ia_bloqueada_ate' not in st.session_state: st.session_state['ia_bloqueada_ate'] = None
 
-# Controle de Envios Diários (23:30 e 23:35)
+# Controle de Envios Diários
 if 'last_check_date' not in st.session_state: st.session_state['last_check_date'] = ""
 if 'bi_enviado' not in st.session_state: st.session_state['bi_enviado'] = False
 if 'ia_enviada' not in st.session_state: st.session_state['ia_enviada'] = False
@@ -104,6 +106,8 @@ COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia'
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
+# NOVA COLUNA PARA BIG DATA
+COLS_BIGDATA = ['FID', 'Data', 'Liga', 'Jogo', 'Placar_Final', 'Chutes_Total', 'Chutes_Gol', 'Escanteios', 'Posse_Casa', 'Cartoes']
 
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 
@@ -144,9 +148,9 @@ def gerar_barra_pressao(rh, ra):
             return ""
     except: return ""
 
-# --- IA FUNCTIONS ---
+# --- IA FUNCTIONS (MODULO INTELIGENTE) ---
 def consultar_ia_gemini(dados_jogo, estrategia):
-    """ IA para validar SINAIS ao vivo. """
+    """ Validação de Sinais em Tempo Real """
     if not IA_ATIVADA: return ""
     
     if st.session_state['ia_bloqueada_ate']:
@@ -158,13 +162,12 @@ def consultar_ia_gemini(dados_jogo, estrategia):
             st.session_state['ia_bloqueada_ate'] = None
 
     prompt = f"""
-    Aja como Trader Esportivo Profissional. Jogo AO VIVO:
+    Aja como Trader Esportivo. Jogo AO VIVO:
     PARTIDA: {dados_jogo['jogo']} ({dados_jogo['liga']})
     TEMPO: {dados_jogo['tempo']}' | PLACAR: {dados_jogo['placar']}
     STATS: {dados_jogo['stats']}
     SINAL DO ROBÔ: "{estrategia}"
-    
-    Responda em 1 frase curta (máx 15 palavras): Aprova a entrada com base na pressão? Seja direto.
+    Responda em 1 frase curta: Aprova a entrada?
     """
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 8})
@@ -177,54 +180,61 @@ def consultar_ia_gemini(dados_jogo, estrategia):
         return ""
 
 def analisar_bi_com_ia():
-    """ IA para analisar o HISTÓRICO (BI) e dar dicas de gestão. """
+    """ Relatório de Performance do Robô """
     if not IA_ATIVADA: return "IA Desconectada."
-    
     df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Sem dados suficientes para análise."
-    
+    if df.empty: return "Sem dados."
     try:
-        # Filtra apenas o dia de hoje para o relatório noturno
         hoje_str = get_time_br().strftime('%Y-%m-%d')
         df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
         df_hoje = df[df['Data_Str'] == hoje_str]
-        
-        if df_hoje.empty: return "Sem sinais operados hoje."
-
+        if df_hoje.empty: return "Sem sinais hoje."
         df_f = df_hoje[df_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-        total = len(df_f)
-        greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
-        reds = len(df_f[df_f['Resultado'].str.contains('RED')])
-        winrate = (greens/total*100) if total > 0 else 0
+        total = len(df_f); greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
+        resumo = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}%").to_dict()
         
-        resumo_strat = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}% WR ({len(x)} jogos)").to_dict()
+        prompt = f"""
+        Analise o dia do meu robô ({hoje_str}):
+        Total: {total}, Greens: {greens}
+        Estratégias: {json.dumps(resumo)}
+        Dê 3 dicas curtas para amanhã.
+        """
+        response = model_ia.generate_content(prompt)
+        return response.text
+    except Exception as e: return f"Erro BI: {e}"
+
+def criar_estrategia_nova_ia():
+    """ 
+    A MÁGICA: Lê o Big Data e sugere novas estratégias (ex: cantos).
+    """
+    if not IA_ATIVADA: return "IA Desconectada."
+    
+    # Carrega o Big Data
+    df_bd = carregar_aba("BigData", COLS_BIGDATA)
+    if df_bd.empty: return "Ainda não temos Big Data suficiente. Aguarde alguns jogos terminarem."
+    
+    try:
+        # Pega amostra dos últimos 50 jogos
+        amostra = df_bd.tail(50).to_csv(index=False)
         
-        prompt_bi = f"""
-        Aja como um Consultor Sênior de Apostas Esportivas.
-        Analise o desempenho DO DIA DE HOJE ({hoje_str}) do meu robô:
+        prompt_criacao = f"""
+        Você é um Cientista de Dados de Futebol.
+        Eu tenho um banco de dados de jogos finalizados (CSV abaixo).
         
-        RESUMO DO DIA:
-        - Total Sinais: {total}
-        - Greens: {greens}
-        - Reds: {reds}
-        - Assertividade: {winrate:.1f}%
+        Analise esses dados e ENCONTRE UM PADRÃO LUCRATIVO que eu não estou vendo.
+        Olhe especificamente para Chutes, Escanteios e Cartões.
         
-        DETALHE POR ESTRATÉGIA:
-        {json.dumps(resumo_strat, indent=2)}
+        CSV DADOS:
+        {amostra}
         
-        Sua missão (Responda para ser enviado no Telegram):
-        1. Dê uma nota para o dia (0 a 10).
-        2. Qual foi a melhor estratégia hoje?
-        3. Qual estratégia deu prejuízo e deve ser evitada amanhã?
-        4. Uma frase curta motivacional ou de cautela para o trader encerrar o dia.
-        
-        Use emojis. Seja profissional e direto.
+        Sua Tarefa:
+        Crie uma NOVA regra de estratégia (ex: "Se tiver 10 cantos e time casa perdendo, apostar em X").
+        Explique o porquê baseado nos dados.
         """
         
-        response = model_ia.generate_content(prompt_bi)
+        response = model_ia.generate_content(prompt_criacao)
         return response.text
-    except Exception as e:
-        return f"Erro ao analisar BI: {e}"
+    except Exception as e: return f"Erro na criação: {e}"
 
 # --- 3. BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
@@ -242,11 +252,44 @@ def carregar_aba(nome_aba, colunas_esperadas):
 
 def salvar_aba(nome_aba, df_para_salvar):
     try: 
-        if nome_aba == "Historico" and df_para_salvar.empty:
-            return False
+        if nome_aba == "Historico" and df_para_salvar.empty: return False
         conn.update(worksheet=nome_aba, data=df_para_salvar)
         return True
     except: return False
+
+def salvar_bigdata(jogo_api, stats):
+    """ Salva o jogo finalizado na aba BigData para a IA ler depois """
+    try:
+        fid = str(jogo_api['fixture']['id'])
+        if fid in st.session_state['jogos_salvos_bigdata']: return # Já salvo
+        
+        # Extrai dados ricos
+        home = jogo_api['teams']['home']['name']; away = jogo_api['teams']['away']['name']
+        placar = f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}"
+        
+        s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
+        def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
+        
+        chutes = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
+        gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
+        cantos = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
+        cartoes = gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards')
+        posse = gv(s1, 'Ball Possession') # String "50%"
+        
+        novo_item = {
+            'FID': fid, 'Data': get_time_br().strftime('%Y-%m-%d'), 
+            'Liga': jogo_api['league']['name'], 'Jogo': f"{home} x {away}",
+            'Placar_Final': placar, 'Chutes_Total': chutes, 'Chutes_Gol': gol,
+            'Escanteios': cantos, 'Posse_Casa': str(posse), 'Cartoes': cartoes
+        }
+        
+        # Carrega, Adiciona e Salva
+        df_bd = carregar_aba("BigData", COLS_BIGDATA)
+        df_bd = pd.concat([df_bd, pd.DataFrame([novo_item])], ignore_index=True)
+        salvar_aba("BigData", df_bd)
+        
+        st.session_state['jogos_salvos_bigdata'].add(fid)
+    except: pass
 
 def sanitizar_conflitos():
     df_black = st.session_state.get('df_black', pd.DataFrame())
@@ -286,16 +329,13 @@ def sanitizar_conflitos():
 
 def carregar_tudo(force=False):
     now = time.time()
-    
     if force or (now - st.session_state['last_static_update']) > STATIC_CACHE_TIME or 'df_black' not in st.session_state:
         st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
         st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
         st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
-        
         if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
         if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
-        
         sanitizar_conflitos()
         st.session_state['last_static_update'] = now
 
@@ -303,7 +343,6 @@ def carregar_tudo(force=False):
         df = carregar_aba("Historico", COLS_HIST)
         if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
             df = st.session_state['historico_full'] 
-            
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
             try:
@@ -311,11 +350,9 @@ def carregar_tudo(force=False):
                 df['Data'] = df['Data_Temp'].dt.strftime('%Y-%m-%d').fillna(df['Data'])
                 df = df.drop(columns=['Data_Temp'])
             except: pass
-            
             st.session_state['historico_full'] = df
             hoje = get_time_br().strftime('%Y-%m-%d')
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
-            
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             for item in st.session_state['historico_sinais']:
                 fid_strat = f"{item['FID']}_{item['Estrategia']}"
@@ -326,17 +363,13 @@ def carregar_tudo(force=False):
             if 'historico_full' not in st.session_state:
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
-
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
-    if 'historico_full' not in st.session_state:
-        st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
-    
+    if 'historico_full' not in st.session_state: st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
     df_memoria = st.session_state['historico_full']
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_memoria], ignore_index=True)
-    
     st.session_state['historico_full'] = df_final
     st.session_state['historico_sinais'].insert(0, item)
     st.session_state['precisa_salvar'] = True 
@@ -344,17 +377,13 @@ def adicionar_historico(item):
 
 def atualizar_historico_ram(lista_atualizada_hoje):
     if 'historico_full' not in st.session_state: return
-        
     df_memoria = st.session_state['historico_full']
     df_hoje_updates = pd.DataFrame(lista_atualizada_hoje)
-    
     if df_hoje_updates.empty or df_memoria.empty: return
-
     mapa_atualizacao = {}
     for _, row in df_hoje_updates.iterrows():
         chave = f"{row['FID']}_{row['Estrategia']}"
         mapa_atualizacao[chave] = row
-
     def atualizar_linha(row):
         chave = f"{row['FID']}_{row['Estrategia']}"
         if chave in mapa_atualizacao:
@@ -363,7 +392,6 @@ def atualizar_historico_ram(lista_atualizada_hoje):
                 st.session_state['precisa_salvar'] = True
             return nova_linha
         return row
-
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
 
@@ -972,12 +1000,14 @@ def resetar_sistema_completo():
     st.session_state['multiplas_enviadas'] = set()
     st.session_state['memoria_pressao'] = {}
     st.session_state['controle_stats'] = {}
+    st.session_state['jogos_salvos_bigdata'] = set()
     
     try:
         conn.clear(worksheet="Historico"); salvar_aba("Historico", st.session_state['historico_full'])
         conn.clear(worksheet="Blacklist"); salvar_aba("Blacklist", st.session_state['df_black'])
         conn.clear(worksheet="Seguras"); salvar_aba("Seguras", st.session_state['df_safe'])
         conn.clear(worksheet="Obs"); salvar_aba("Obs", st.session_state['df_vip'])
+        conn.clear(worksheet="BigData") # Limpa BigData ao resetar
     except:
         salvar_aba("Historico", st.session_state['historico_full'])
         salvar_aba("Blacklist", st.session_state['df_black'])
@@ -999,16 +1029,23 @@ with st.sidebar:
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
         st.write("---")
         
-        # --- NOVO BOTÃO DE CONSULTORIA DA IA ---
+        # --- BOTOES IA ---
         if st.button("🧠 Pedir Análise do BI"):
             if IA_ATIVADA:
                 with st.spinner("🤖 O Consultor Neves está analisando seus dados..."):
                     analise = analisar_bi_com_ia()
                     st.markdown("### 📝 Relatório do Consultor")
                     st.info(analise)
-            else:
-                st.error("IA Desconectada.")
-        # ---------------------------------------
+            else: st.error("IA Desconectada.")
+            
+        if st.button("🧪 Criar Nova Estratégia (Big Data)"):
+            if IA_ATIVADA:
+                with st.spinner("🤖 Analisando o Big Data em busca de padrões ocultos..."):
+                    sugestao = criar_estrategia_nova_ia()
+                    st.markdown("### 💡 Sugestão da IA")
+                    st.success(sugestao)
+            else: st.error("IA Desconectada.")
+        # -------------------
 
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(TG_TOKEN, TG_CHAT); st.toast("Relatório Enviado!")
         if st.button("💰 Enviar Relatório Financeiro"):
@@ -1016,8 +1053,7 @@ with st.sidebar:
                 s = st.session_state['last_fin_stats']
                 enviar_relatorio_financeiro(TG_TOKEN, TG_CHAT, s['cenario'], s['lucro'], s['roi'], s['entradas'])
                 st.toast("Relatório Financeiro Enviado!")
-            else:
-                st.error("Abra a aba Financeiro primeiro.")
+            else: st.error("Abra a aba Financeiro primeiro.")
 
     with st.expander("💰 Gestão de Banca", expanded=False):
         stake_padrao = st.number_input("Valor da Entrada (R$)", value=10.0, step=5.0)
@@ -1038,12 +1074,9 @@ with st.sidebar:
             if ag < st.session_state['ia_bloqueada_ate']:
                 m_rest = int((st.session_state['ia_bloqueada_ate'] - ag).total_seconds()/60)
                 st.markdown(f'<div class="status-warning">⚠️ IA PAUSADA (Cota Esgotada) - Volta em {m_rest} min</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="status-error">❌ IA DESCONECTADA</div>', unsafe_allow_html=True)
+            else: st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
+        else: st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
+    else: st.markdown('<div class="status-error">❌ IA DESCONECTADA</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("### ⚠️ Zona de Perigo")
@@ -1101,14 +1134,27 @@ if st.session_state.ROBO_LIGADO:
                 gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
-                if deve_buscar_stats(tempo, gh, ga, st_short):
+                
+                # COLETA DE BIG DATA (JOGO ACABOU - FT)
+                if st_short == 'FT':
+                    if fid not in st.session_state['jogos_salvos_bigdata']:
+                        jogos_para_baixar.append(j)
+                
+                # COLETA NORMAL DE SINAIS
+                elif deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
 
             if jogos_para_baixar:
                 novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, API_KEY)
                 for fid, stats in novas_stats.items():
-                    st.session_state['controle_stats'][fid] = datetime.now()
-                    st.session_state[f"st_{fid}"] = stats
+                    # Se for FT, salva no BigData
+                    jogo_ft = next((x for x in jogos_para_baixar if x['fixture']['id'] == fid and x['fixture']['status']['short'] == 'FT'), None)
+                    if jogo_ft:
+                        salvar_bigdata(jogo_ft, stats)
+                    else:
+                        # Se for jogo rolando, atualiza cache normal
+                        st.session_state['controle_stats'][fid] = datetime.now()
+                        st.session_state[f"st_{fid}"] = stats
 
             candidatos_multipla = []; ids_no_radar = []
             
@@ -1127,6 +1173,8 @@ if st.session_state.ROBO_LIGADO:
                 home = j['teams']['home']['name']; away = j['teams']['away']['name']
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 
+                if st_short == 'FT': continue # Pula jogos acabados no radar
+
                 stats = st.session_state.get(f"st_{fid}", [])
                 status_vis = "👁️" if stats else "💤"
                 
@@ -1178,8 +1226,6 @@ if st.session_state.ROBO_LIGADO:
                                 opiniao_ia = ""
                                 if IA_ATIVADA:
                                     try:
-                                        # FREIO DE SEGURANÇA OBRIGATÓRIO (4s)
-                                        # Para evitar bater em 4 jogos ao mesmo tempo e travar a API
                                         time.sleep(4)
                                         dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
                                         opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
@@ -1235,7 +1281,7 @@ if st.session_state.ROBO_LIGADO:
         c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{count_safe}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
         
         st.write("")
-        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})"])
+        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})", "💾 Big Data"])
         
         with abas[0]: 
             if radar: st.dataframe(pd.DataFrame(radar)[['Liga', 'Jogo', 'Tempo', 'Status']].astype(str), use_container_width=True, hide_index=True)
@@ -1379,6 +1425,15 @@ if st.session_state.ROBO_LIGADO:
             df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
             if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
+
+        with abas[8]:
+            df_big = carregar_aba("BigData", COLS_BIGDATA)
+            st.markdown(f"### 💾 Banco de Dados de Partidas ({len(df_big)} Jogos Salvos)")
+            st.caption("A IA usa esses dados para criar novas estratégias. Eles são salvos automaticamente quando um jogo termina.")
+            if not df_big.empty:
+                st.dataframe(df_big, use_container_width=True)
+            else:
+                st.info("Aguardando o primeiro jogo terminar para salvar os dados...")
 
         for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
