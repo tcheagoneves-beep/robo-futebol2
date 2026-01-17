@@ -12,9 +12,21 @@ import io
 from datetime import datetime, timedelta
 import pytz
 from streamlit_gsheets import GSheetsConnection
+import google.generativeai as genai
+import json
 
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
+
+# --- CONFIGURAÇÃO DA IA (GEMINI) ---
+IA_ATIVADA = False
+try:
+    if "GEMINI_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GEMINI_KEY"])
+        model_ia = genai.GenerativeModel('gemini-1.5-flash')
+        IA_ATIVADA = True
+except Exception as e:
+    pass # Segue sem IA se der erro
 
 # --- INICIALIZAÇÃO DE VARIÁVEIS ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
@@ -116,6 +128,25 @@ def gerar_barra_pressao(rh, ra):
         else:
             return ""
     except: return ""
+
+def consultar_ia_gemini(dados_jogo, estrategia):
+    if not IA_ATIVADA: return ""
+    try:
+        prompt = f"""
+        Analise rápido para apostas esportivas.
+        Jogo: {dados_jogo['jogo']} | Liga: {dados_jogo['liga']} | Tempo: {dados_jogo['tempo']}'
+        Placar: {dados_jogo['placar']}
+        Estatísticas: {dados_jogo['stats']}
+        
+        Sinal do Robô: {estrategia}
+        
+        Com base apenas nos números, essa entrada faz sentido?
+        Responda com uma frase curta de no máximo 10 palavras. Exemplo: "Aprovado, pressão alta." ou "Arriscado, poucos chutes."
+        """
+        response = model_ia.generate_content(prompt)
+        return f"\n🤖 <b>IA:</b> {response.text.strip()}"
+    except:
+        return ""
 
 # --- 3. BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
@@ -607,7 +638,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
 
     if (gh+ga) > (ph+pa):
         if "Morno" in sinal['Estrategia']: 
-            if (gh+ga) >= 2: # SÓ DÁ RED SE TIVER 2 OU MAIS GOLS
+            if (gh+ga) >= 2: # CORREÇÃO: Só dá RED se tiver 2+ gols
                 sinal['Resultado'] = '❌ RED'
                 if key_red not in st.session_state['alertas_enviados']:
                     enviar_telegram(token, chats, f"❌ <b>RED | OVER 1.5 BATIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
@@ -615,7 +646,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
                     st.session_state['precisa_salvar'] = True
                 return True
             else:
-                return False # Saiu 1 gol, mas ainda está vivo
+                return False 
         else:
             sinal['Resultado'] = '✅ GREEN'
             if key_green in st.session_state['alertas_enviados']: return True
@@ -775,11 +806,12 @@ def fetch_stats_single(fid, api_key):
 
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
+    # REDUZIDO PARA 3 E COM DELAY PARA EVITAR O ERRO 'TOO MANY REQUESTS'
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {}
         for j in jogos_alvo:
             futures[executor.submit(fetch_stats_single, j['fixture']['id'], api_key)] = j
-            time.sleep(0.2)
+            time.sleep(0.2) # Respiro para a API
         
         for future in as_completed(futures):
             fid, stats, headers = future.result()
@@ -1022,7 +1054,14 @@ if st.session_state.ROBO_LIGADO:
                         
                         if adicionar_historico(item):
                             prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                            msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}"
+                            
+                            # CONSULTA IA (VALIDADOR)
+                            opiniao_ia = ""
+                            if IA_ATIVADA:
+                                dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
+                                opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
+
+                            msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
                             enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                             st.toast(f"Sinal: {s['tag']}")
 
