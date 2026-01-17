@@ -18,39 +18,6 @@ import json
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 
-# ==============================================================================
-# 🕵️ BLOCO DE DIAGNÓSTICO (TEMPORÁRIO PARA DEBUG)
-# ==============================================================================
-with st.expander("🕵️ DIAGNÓSTICO DO GEMINI (Clique para ver)", expanded=True):
-    st.write(f"📚 **Versão da Biblioteca Instalada:** `{genai.__version__}`")
-    
-    if "GEMINI_KEY" in st.secrets:
-        st.success("✅ Chave 'GEMINI_KEY' encontrada nos Secrets.")
-        try:
-            genai.configure(api_key=st.secrets["GEMINI_KEY"])
-            st.write("🔍 **Testando acesso aos modelos...**")
-            
-            # Tenta listar os modelos disponíveis para sua chave
-            modelos_disponiveis = []
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    modelos_disponiveis.append(m.name)
-            
-            st.code(modelos_disponiveis)
-            
-            if 'models/gemini-1.5-flash' in modelos_disponiveis:
-                st.success("✅ O modelo 'gemini-1.5-flash' ESTÁ disponível!")
-            else:
-                st.warning("⚠️ O modelo 'gemini-1.5-flash' NÃO apareceu na lista. Tente usar 'gemini-pro'.")
-                
-        except Exception as e_diag:
-            st.error(f"❌ Erro ao testar conexão com o Google: {e_diag}")
-    else:
-        st.error("❌ Chave 'GEMINI_KEY' NÃO encontrada nos Secrets!")
-    st.divider()
-# ==============================================================================
-
-
 # --- CONTAINER MESTRE (SOLUÇÃO FINAL DO BUG VISUAL) ---
 # Tudo o que é visual será renderizado aqui dentro.
 # Isso garante que a tela anterior seja sempre limpa antes da nova.
@@ -61,13 +28,15 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # MUDANÇA IMPORTANTE: Usando o modelo Flash 1.5 que é mais rápido para Live
-        model_ia = genai.GenerativeModel('gemini-1.5-flash') 
+        # ATUALIZADO: Trocado para 'gemini-1.5-flash' para evitar erro 404 e melhorar velocidade
+        model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
-        st.error("⚠️ Chave GEMINI_KEY não encontrada nos Secrets!")
+        # Adicionado aviso caso a chave não seja encontrada
+        st.error("⚠️ Chave GEMINI_KEY não encontrada no secrets.toml!")
 except Exception as e:
-    st.error(f"❌ Erro ao conectar na IA (Bloco Principal): {e}")
+    # Exibe o erro real em vez de silenciar
+    st.error(f"❌ Erro na conexão com Gemini: {e}")
     IA_ATIVADA = False
 
 # --- INICIALIZAÇÃO DE VARIÁVEIS ---
@@ -198,7 +167,7 @@ def consultar_ia_gemini(dados_jogo, estrategia):
         Responda em UMA ÚNICA FRASE curta e direta (máx 15 palavras) dando seu veredito e o motivo principal.
         Exemplo: "Aprovado, o time da casa está amassando." ou "Arriscado, jogo muito travado no meio campo."
         """
-        response = model_ia.generate_content(prompt, request_options={"timeout": 10})
+        response = model_ia.generate_content(prompt)
         return f"\n🤖 <b>IA:</b> {response.text.strip()}"
     except:
         return ""
@@ -1326,3 +1295,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
