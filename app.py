@@ -4,7 +4,7 @@ import requests
 import time
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed # MÓDULO DE VELOCIDADE
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
@@ -682,6 +682,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
+# --- CORREÇÃO DO VAR DUPLICADO (ADD CHAVE ÚNICA) ---
 def verificar_var_rollback(jogos_live, token, chats):
     hist = st.session_state['historico_sinais']
     greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
@@ -697,11 +698,18 @@ def verificar_var_rollback(jogos_live, token, chats):
             try:
                 ph, pa = map(int, s['Placar_Sinal'].split('x'))
                 if (gh + ga) <= (ph + pa):
-                    s['Resultado'] = 'Pendente'; s['Placar_Sinal'] = f"{gh}x{ga}"
-                    msg = (f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n\n⚽ {s['Jogo']}\n📉 Placar voltou para: <b>{gh}x{ga}</b>\n🔄 Status revertido para <b>PENDENTE</b>.")
-                    enviar_telegram(token, chats, msg)
+                    # CHAVE ÚNICA PARA O VAR
+                    key_var = f"VAR_{fid}_{s['Estrategia']}_{gh}x{ga}"
+                    
+                    s['Resultado'] = 'Pendente'
                     st.session_state['precisa_salvar'] = True
                     updates_buffer.append(s)
+                    
+                    # SÓ ENVIA SE AINDA NÃO ENVIOU ESTE VAR ESPECÍFICO
+                    if key_var not in st.session_state['alertas_enviados']:
+                        msg = (f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n\n⚽ {s['Jogo']}\n📉 Placar voltou para: <b>{gh}x{ga}</b>\n🔄 Status revertido para <b>PENDENTE</b>.")
+                        enviar_telegram(token, chats, msg)
+                        st.session_state['alertas_enviados'].add(key_var)
             except: pass
             
     if updates_buffer: atualizar_historico_ram(updates_buffer)
@@ -735,6 +743,27 @@ def deve_buscar_stats(tempo, gh, ga, status):
     if status == 'HT' and gh == 0 and ga == 0: return True
     return False
 
+# --- FUNÇÃO AUXILIAR DE MULTI-THREADING (TURBO) ---
+def fetch_stats_single(fid, api_key):
+    try:
+        url = "https://v3.football.api-sports.io/fixtures/statistics"
+        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
+        return fid, r.json().get('response', []), r.headers
+    except:
+        return fid, [], None
+
+def atualizar_stats_em_paralelo(jogos_alvo, api_key):
+    resultados = {}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
+        for future in as_completed(futures):
+            fid, stats, headers = future.result()
+            if stats:
+                resultados[fid] = stats
+                update_api_usage(headers)
+    return resultados
+
+# --- DECISÃO DO ROBÔ ---
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
@@ -808,26 +837,6 @@ def resetar_sistema_completo():
 
     st.cache_data.clear()
     st.toast("♻️ SISTEMA COMPLETAMENTE RESETADO!")
-
-# --- FUNÇÃO AUXILIAR DE MULTI-THREADING (TURBO) ---
-def fetch_stats_single(fid, api_key):
-    try:
-        url = "https://v3.football.api-sports.io/fixtures/statistics"
-        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
-        return fid, r.json().get('response', []), r.headers
-    except:
-        return fid, [], None
-
-def atualizar_stats_em_paralelo(jogos_alvo, api_key):
-    resultados = {}
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
-        for future in as_completed(futures):
-            fid, stats, headers = future.result()
-            if stats:
-                resultados[fid] = stats
-                update_api_usage(headers)
-    return resultados
 
 # --- SIDEBAR E LAYOUT ---
 with st.sidebar:
