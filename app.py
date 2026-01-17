@@ -4,6 +4,7 @@ import requests
 import time
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed # MÓDULO DE VELOCIDADE
 import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
@@ -21,7 +22,7 @@ if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] 
 if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
-if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False # NOVO CONTROLE
+if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 
 # Variáveis de Controle
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
@@ -98,7 +99,7 @@ def formatar_inteiro_visual(val):
         return str(int(float(str(val))))
     except: return str(val)
 
-# --- 3. BANCO DE DADOS (COM TRAVA DE SEGURANÇA E FLAG DE SALVAMENTO) ---
+# --- 3. BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
@@ -114,10 +115,8 @@ def carregar_aba(nome_aba, colunas_esperadas):
 
 def salvar_aba(nome_aba, df_para_salvar):
     try: 
-        # ESCUDO ANTI-APAGÃO: Não salva histórico se estiver vazio
         if nome_aba == "Historico" and df_para_salvar.empty:
             return False
-            
         conn.update(worksheet=nome_aba, data=df_para_salvar)
         return True
     except: return False
@@ -161,7 +160,6 @@ def sanitizar_conflitos():
 def carregar_tudo(force=False):
     now = time.time()
     
-    # Cache longo para estáticas (10 min)
     if force or (now - st.session_state['last_static_update']) > STATIC_CACHE_TIME or 'df_black' not in st.session_state:
         st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
         st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
@@ -174,12 +172,10 @@ def carregar_tudo(force=False):
         sanitizar_conflitos()
         st.session_state['last_static_update'] = now
 
-    # Carrega histórico apenas na inicialização ou se forçado.
-    # Depois confiamos na memória RAM e só salvamos se houver mudanças.
     if 'historico_full' not in st.session_state or force:
         df = carregar_aba("Historico", COLS_HIST)
         if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
-            df = st.session_state['historico_full'] # Anti-wipe
+            df = st.session_state['historico_full'] 
             
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
@@ -216,13 +212,10 @@ def adicionar_historico(item):
     
     st.session_state['historico_full'] = df_final
     st.session_state['historico_sinais'].insert(0, item)
-    
-    # MARCA PARA SALVAR
     st.session_state['precisa_salvar'] = True 
     return True
 
 def atualizar_historico_ram(lista_atualizada_hoje):
-    # Atualiza APENAS a memória. O salvamento ocorre no final do loop se 'precisa_salvar' for True.
     if 'historico_full' not in st.session_state: return
         
     df_memoria = st.session_state['historico_full']
@@ -238,7 +231,6 @@ def atualizar_historico_ram(lista_atualizada_hoje):
     def atualizar_linha(row):
         chave = f"{row['FID']}_{row['Estrategia']}"
         if chave in mapa_atualizacao:
-            # Detecta mudança real para ativar o salvamento
             nova_linha = mapa_atualizacao[chave]
             if str(row['Resultado']) != str(nova_linha['Resultado']) or str(row['Odd']) != str(nova_linha['Odd']):
                 st.session_state['precisa_salvar'] = True
@@ -817,6 +809,26 @@ def resetar_sistema_completo():
     st.cache_data.clear()
     st.toast("♻️ SISTEMA COMPLETAMENTE RESETADO!")
 
+# --- FUNÇÃO AUXILIAR DE MULTI-THREADING (TURBO) ---
+def fetch_stats_single(fid, api_key):
+    try:
+        url = "https://v3.football.api-sports.io/fixtures/statistics"
+        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
+        return fid, r.json().get('response', []), r.headers
+    except:
+        return fid, [], None
+
+def atualizar_stats_em_paralelo(jogos_alvo, api_key):
+    resultados = {}
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
+        for future in as_completed(futures):
+            fid, stats, headers = future.result()
+            if stats:
+                resultados[fid] = stats
+                update_api_usage(headers)
+    return resultados
+
 # --- SIDEBAR E LAYOUT ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
@@ -888,32 +900,54 @@ if st.session_state.ROBO_LIGADO:
         verificar_var_rollback(jogos_live, TG_TOKEN, TG_CHAT)
 
     radar = []; alvos = st.session_state.get('alvos_do_dia', {}); candidatos_multipla = []; ids_no_radar = []
+    
+    # --- PRÉ-PROCESSAMENTO: IDENTIFICA QUAIS JOGOS PRECISAM DE STATS ---
+    jogos_para_baixar = []
     for j in jogos_live:
         lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
         if lid in ids_black: continue
+        
+        tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
+        gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
+        
+        # Filtros básicos para não gastar API à toa
+        t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
+        ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
+        
+        if deve_buscar_stats(tempo, gh, ga, st_short):
+            if (datetime.now() - ult_chk).total_seconds() > t_esp:
+                jogos_para_baixar.append(j)
+
+    # --- DOWNLOAD PARALELO (TURBO) ---
+    if jogos_para_baixar:
+        novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, API_KEY)
+        for fid, stats in novas_stats.items():
+            st.session_state['controle_stats'][fid] = datetime.now()
+            st.session_state[f"st_{fid}"] = stats
+
+    # --- PROCESSAMENTO PRINCIPAL ---
+    for j in jogos_live:
+        lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
+        if lid in ids_black: continue
+        
         nome_liga_show = j['league']['name']
         if lid in ids_safe: nome_liga_show += " 🛡️"
         elif lid in df_obs['id'].values: nome_liga_show += " ⚠️"
         else: nome_liga_show += " ❓" 
         ids_no_radar.append(fid)
+        
         tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
         home = j['teams']['home']['name']; away = j['teams']['away']['name']
         placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-        stats = []; status_vis = "👁️"
+        
+        stats = st.session_state.get(f"st_{fid}", [])
+        status_vis = "👁️" if stats else "💤"
+        
         rank_h = None; rank_a = None
         if j['league']['id'] in LIGAS_TABELA:
             rk = buscar_ranking(API_KEY, j['league']['id'], j['league']['season'])
             rank_h = rk.get(home); rank_a = rk.get(away)
-        t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
-        ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
-        if deve_buscar_stats(tempo, gh, ga, st_short):
-            if (datetime.now() - ult_chk).total_seconds() > t_esp:
-                try:
-                    r_st = requests.get("https://v3.football.api-sports.io/fixtures/statistics", headers={"x-apisports-key": API_KEY}, params={"fixture": fid}, timeout=5)
-                    update_api_usage(r_st.headers); stats = r_st.json().get('response', [])
-                    if stats: st.session_state['controle_stats'][fid] = datetime.now(); st.session_state[f"st_{fid}"] = stats
-                except: stats = []
-            else: stats = st.session_state.get(f"st_{fid}", [])
+        
         lista_sinais = []
         if stats:
             lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
@@ -928,8 +962,7 @@ if st.session_state.ROBO_LIGADO:
                     sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
                     if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
                 except: pass
-        else: status_vis = "💤"
-        if not lista_sinais and not stats and tempo >= 45 and st_short != 'HT': gerenciar_erros(lid, j['league']['country'], j['league']['name'], fid)
+        
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
             for s in lista_sinais:
@@ -943,6 +976,7 @@ if st.session_state.ROBO_LIGADO:
                         msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}\n\n💰 <b>Odd: @{odd_atual}</b>\n📊 <i>Dados: {s['stats']}</i>{prob}"
                         enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                         st.toast(f"Sinal: {s['tag']}")
+        
         radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
     if candidatos_multipla:
@@ -1137,6 +1171,7 @@ if st.session_state.ROBO_LIGADO:
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
     relogio = st.empty()
+    # TIMER SUAVE: Reduz chamadas de redraw
     for i in range(INTERVALO, 0, -1):
         relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
         time.sleep(1)
