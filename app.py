@@ -624,8 +624,10 @@ def processar_resultado(sinal, jogo_api, token, chats):
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
-    fid = str(sinal['FID'])
+    # CORREÇÃO: Limpa o FID para garantir que a chave seja sempre igual
+    fid = clean_fid(sinal['FID'])
     strat = str(sinal['Estrategia'])
+    
     key_green = f"RES_GREEN_{fid}_{strat}"
     key_red = f"RES_RED_{fid}_{strat}"
 
@@ -642,9 +644,12 @@ def processar_resultado(sinal, jogo_api, token, chats):
             return True
         else:
             sinal['Resultado'] = '✅ GREEN'
-            if key_green not in st.session_state['alertas_enviados']:
-                enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
-                st.session_state['alertas_enviados'].add(key_green)
+            # CORREÇÃO CRÍTICA: Se já enviou, SÓ retorna True para salvar, mas NÃO envia msg
+            if key_green in st.session_state['alertas_enviados']:
+                return True
+                
+            enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
+            st.session_state['alertas_enviados'].add(key_green)
             return True
 
     eh_ht_strat = any(x in sinal['Estrategia'] for x in STRATS_HT_ONLY)
@@ -689,6 +694,15 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
         if s.get('Data') != hoje_str: continue
         fid = int(clean_fid(s.get('FID', 0)))
         
+        # CORREÇÃO: Verifica se já foi pago (mesmo se planilha disser Pendente)
+        strat = str(s.get('Estrategia', ''))
+        key_green = f"RES_GREEN_{str(fid)}_{strat}"
+        
+        if key_green in st.session_state.get('alertas_enviados', set()):
+            s['Resultado'] = '✅ GREEN'
+            atualizou = True
+            continue # Pula processamento para não enviar msg dupla
+
         # --- ATUALIZAÇÃO DE ODD TARDIA ---
         if 'Odd_Atualizada' not in s: s['Odd_Atualizada'] = False
         try:
