@@ -99,6 +99,24 @@ def formatar_inteiro_visual(val):
         return str(int(float(str(val))))
     except: return str(val)
 
+def gerar_barra_pressao(rh, ra):
+    try:
+        max_blocos = 5
+        nivel_h = min(int(rh), max_blocos)
+        nivel_a = min(int(ra), max_blocos)
+        
+        if nivel_h > nivel_a:
+            barra = "🟩" * nivel_h + "⬜" * (max_blocos - nivel_h)
+            return f"\n📊 Pressão: {barra} (Casa)"
+        elif nivel_a > nivel_h:
+            barra = "🟥" * nivel_a + "⬜" * (max_blocos - nivel_a)
+            return f"\n📊 Pressão: {barra} (Visitante)"
+        elif nivel_h > 0 and nivel_a > 0:
+            return f"\n📊 Pressão: 🟨🟨 Jogo Aberto"
+        else:
+            return ""
+    except: return ""
+
 # --- 3. BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
@@ -779,36 +797,36 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     SINAIS = []
     
     if tempo <= 30 and (gh+ga) >= 2: 
-        SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"Placar: {gh}x{ga}"})
+        SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"Placar: {gh}x{ga}", "rh": rh, "ra": ra})
 
     if (gh + ga) == 0:
         if (tempo <= 2 and (sog_h + sog_a) >= 1) or (tempo <= 10 and (sh_h + sh_a) >= 2):
-            SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": txt_stats})
+            SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": txt_stats, "rh": rh, "ra": ra})
 
     if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: 
-        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final - Limite)", "stats": txt_stats})
+        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final - Limite)", "stats": txt_stats, "rh": rh, "ra": ra})
 
     if tempo <= 60:
-        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}"})
-        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}"})
+        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
+        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
 
     if rank_home and rank_away:
         is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
         if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
-            if tempo <= 5 and (sh_h + sh_a) >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve abrir placar)", "stats": f"Rank: {rank_home}x{rank_away}"})
+            if tempo <= 5 and (sh_h + sh_a) >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve abrir placar)", "stats": f"Rank: {rank_home}x{rank_away}", "rh": rh, "ra": ra})
         if 5 <= tempo <= 15:
-            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {rh}"})
-            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {ra}"})
+            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
+            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
         if is_top_home and is_top_away and tempo <= 7:
-            if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": txt_stats})
+            if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": txt_stats, "rh": rh, "ra": ra})
         if is_mid_home and is_mid_away:
-            if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats})
+            if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats, "rh": rh, "ra": ra})
             is_bot_home_morno = rank_home >= 10; is_bot_away_morno = rank_away >= 10
             if is_bot_home_morno and is_bot_away_morno:
-                if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)"})
+                if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
     
     if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
-        if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima"})
+        if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
     
     return SINAIS
 
@@ -974,17 +992,53 @@ if st.session_state.ROBO_LIGADO:
         
         if lista_sinais:
             status_vis = f"✅ {len(lista_sinais)} Sinais"
+            
             for s in lista_sinais:
-                uid = f"{fid}_{s['tag']}"
-                if uid not in st.session_state['alertas_enviados']:
-                    st.session_state['alertas_enviados'].add(uid)
-                    odd_atual = get_live_odds(fid, API_KEY, s['tag'], gh+ga)
-                    item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual, "Odd_Atualizada": ""}
+                rh = s.get('rh', 0); ra = s.get('ra', 0)
+                txt_pressao = gerar_barra_pressao(rh, ra) 
+
+                uid_normal = f"{fid}_{s['tag']}"
+                uid_super = f"SUPER_ODD_{fid}_{s['tag']}"
+                
+                odd_atual_str = get_live_odds(fid, API_KEY, s['tag'], gh+ga)
+                try: odd_val = float(odd_atual_str)
+                except: odd_val = 0.0
+
+                # --- CENÁRIO 1: SINAL NOVO ---
+                if uid_normal not in st.session_state['alertas_enviados']:
+                    
+                    destaque_odd = ""
+                    if odd_val >= 1.80:
+                        destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
+                        st.session_state['alertas_enviados'].add(uid_super) # Marca como enviada
+                    
+                    st.session_state['alertas_enviados'].add(uid_normal)
+                    
+                    item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": ""}
+                    
                     if adicionar_historico(item):
                         prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                        msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}\n\n💰 <b>Odd: @{odd_atual}</b>\n📊 <i>Dados: {s['stats']}</i>{prob}"
+                        
+                        msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}"
+                        
                         enviar_telegram(TG_TOKEN, TG_CHAT, msg)
                         st.toast(f"Sinal: {s['tag']}")
+
+                # --- CENÁRIO 2: REPESCAGEM (Sinal antigo, odd subiu) ---
+                elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
+                    
+                    st.session_state['alertas_enviados'].add(uid_super)
+                    
+                    msg_super = (
+                        f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n"
+                        f"⚽ {home} 🆚 {away}\n"
+                        f"📈 <b>A Odd subiu!</b> Entrada valorizada.\n"
+                        f"🔥 <b>Estratégia:</b> {s['tag']}\n"
+                        f"💰 <b>Nova Odd: @{odd_atual_str}</b>\n"
+                        f"<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}"
+                    )
+                    enviar_telegram(TG_TOKEN, TG_CHAT, msg_super)
+                    st.toast(f"💎 Odd Subiu: {s['tag']}")
         
         radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
 
@@ -1157,19 +1211,15 @@ if st.session_state.ROBO_LIGADO:
 
         with abas[5]: st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         
-        # --- ABA SEGURAS (CORRIGIDA COM COLUNA DE RISCO E SEM JOGOS_ERRO) ---
         with abas[6]: 
             df_safe_show = st.session_state.get('df_safe', pd.DataFrame()).copy()
             if not df_safe_show.empty:
-                # Helper para criar a coluna visual de risco
                 def calc_risco(x):
                     try: v = int(float(str(x)))
                     except: v = 0
                     return "🟢 100% Estável" if v == 0 else f"⚠️ Atenção ({v}/10)"
                 
                 df_safe_show['Status Risco'] = df_safe_show['Strikes'].apply(calc_risco)
-                
-                # Exibe a coluna calculada e as outras originais (SEM 'Jogos_Erro' agora)
                 st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhuma liga segura ainda.")
@@ -1180,7 +1230,6 @@ if st.session_state.ROBO_LIGADO:
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
     relogio = st.empty()
-    # TIMER SUAVE: Reduz chamadas de redraw
     for i in range(INTERVALO, 0, -1):
         relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
         time.sleep(1)
