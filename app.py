@@ -26,7 +26,7 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # Modelo 2.0 Flash (Perfeito para ler muitos dados de uma vez)
+        # Modelo 2.0 Flash (Rápido e capaz de analisar grandes volumes de dados)
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -60,6 +60,7 @@ if 'ia_bloqueada_ate' not in st.session_state: st.session_state['ia_bloqueada_at
 if 'last_check_date' not in st.session_state: st.session_state['last_check_date'] = ""
 if 'bi_enviado' not in st.session_state: st.session_state['bi_enviado'] = False
 if 'ia_enviada' not in st.session_state: st.session_state['ia_enviada'] = False
+if 'bigdata_enviado' not in st.session_state: st.session_state['bigdata_enviado'] = False
 
 # CACHE CONFIG
 DB_CACHE_TIME = 60   
@@ -106,7 +107,6 @@ COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia'
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
-# NOVA COLUNA PARA BIG DATA
 COLS_BIGDATA = ['FID', 'Data', 'Liga', 'Jogo', 'Placar_Final', 'Chutes_Total', 'Chutes_Gol', 'Escanteios', 'Posse_Casa', 'Cartoes']
 
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
@@ -205,31 +205,39 @@ def analisar_bi_com_ia():
 
 def criar_estrategia_nova_ia():
     """ 
-    A MÁGICA: Lê o Big Data e sugere novas estratégias (ex: cantos).
+    A MÁGICA: Lê o Big Data e sugere novas estratégias GLOBAIS.
     """
     if not IA_ATIVADA: return "IA Desconectada."
     
-    # Carrega o Big Data
     df_bd = carregar_aba("BigData", COLS_BIGDATA)
-    if df_bd.empty: return "Ainda não temos Big Data suficiente. Aguarde alguns jogos terminarem."
+    if len(df_bd) < 5: return "Coletando dados... Preciso de mais jogos finalizados."
     
     try:
-        # Pega amostra dos últimos 50 jogos
-        amostra = df_bd.tail(50).to_csv(index=False)
+        # Pega amostra dos últimos 100 jogos
+        amostra = df_bd.tail(100).to_csv(index=False)
         
         prompt_criacao = f"""
-        Você é um Cientista de Dados de Futebol.
-        Eu tenho um banco de dados de jogos finalizados (CSV abaixo).
-        
-        Analise esses dados e ENCONTRE UM PADRÃO LUCRATIVO que eu não estou vendo.
-        Olhe especificamente para Chutes, Escanteios e Cartões.
+        Você é um Cientista de Dados de Futebol Sênior.
+        Abaixo estão dados de jogos finalizados (CSV).
         
         CSV DADOS:
         {amostra}
         
-        Sua Tarefa:
-        Crie uma NOVA regra de estratégia (ex: "Se tiver 10 cantos e time casa perdendo, apostar em X").
-        Explique o porquê baseado nos dados.
+        SUA MISSÃO:
+        Encontre um padrão ESTATÍSTICO GLOBAL (que funcione para qualquer time/liga).
+        NÃO cite nomes de times específicos.
+        
+        Analise correlações como:
+        - Muitos chutes no gol levam a gol no final?
+        - Muitos escanteios indicam gol?
+        - Cartão vermelho muda o resultado?
+        
+        Saída esperada:
+        1. Nome da Nova Estratégia Sugerida.
+        2. A Regra (Ex: "Se tiver +10 escanteios e placar 0x0, entrar em Over 0.5").
+        3. A Lógica (Por que funciona matematicamente?).
+        
+        Seja técnico e direto.
         """
         
         response = model_ia.generate_content(prompt_criacao)
@@ -620,6 +628,21 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
+def enviar_analise_estrategia(token, chat_ids):
+    """ Lê o BigData e manda SUGESTÃO DE ESTRATÉGIA em texto """
+    df_bd = carregar_aba("BigData", COLS_BIGDATA)
+    if len(df_bd) < 10: return # Poucos dados para análise
+    
+    # Pede para IA criar estratégia
+    sugestao = criar_estrategia_nova_ia()
+    
+    # Envia texto
+    ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+    msg = f"🧪 <b>LABORATÓRIO DE ESTRATÉGIAS (IA)</b>\n\n{sugestao}"
+    
+    for cid in ids:
+        enviar_telegram(token, cid, msg)
+
 def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
     msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro Líquido:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}\n\n<i>Cálculo baseado na gestão configurada.</i>"
     enviar_telegram(token, chat_ids, msg)
@@ -665,6 +688,7 @@ def verificar_automacao_bi(token, chat_ids):
     if st.session_state['last_check_date'] != hoje_str:
         st.session_state['bi_enviado'] = False
         st.session_state['ia_enviada'] = False
+        st.session_state['bigdata_enviado'] = False
         st.session_state['last_check_date'] = hoje_str
 
     # 23:30 - Relatório Gráfico (BI)
@@ -680,6 +704,12 @@ def verificar_automacao_bi(token, chat_ids):
         enviar_telegram(token, chat_ids, msg_ia)
         st.session_state['ia_enviada'] = True
         st.toast("🤖 Relatório IA Enviado!")
+        
+    # 23:55 - Sugestão de Nova Estratégia (Sem arquivo, só texto)
+    if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
+        enviar_analise_estrategia(token, chat_ids)
+        st.session_state['bigdata_enviado'] = True
+        st.toast("🧪 Sugestão de Estratégia Enviada!")
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
@@ -1040,7 +1070,7 @@ with st.sidebar:
             
         if st.button("🧪 Criar Nova Estratégia (Big Data)"):
             if IA_ATIVADA:
-                with st.spinner("🤖 Analisando o Big Data em busca de padrões ocultos..."):
+                with st.spinner("🤖 Analisando padrões globais no Big Data..."):
                     sugestao = criar_estrategia_nova_ia()
                     st.markdown("### 💡 Sugestão da IA")
                     st.success(sugestao)
