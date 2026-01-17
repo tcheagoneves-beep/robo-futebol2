@@ -26,7 +26,7 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # MODELO VALIDADO: gemini-2.0-flash (Mais rápido e compatível com sua chave)
+        # MODELO: gemini-2.0-flash (Rápido e Eficiente)
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -138,35 +138,42 @@ def gerar_barra_pressao(rh, ra):
 
 def consultar_ia_gemini(dados_jogo, estrategia):
     """
-    Função que envia o contexto do jogo para a IA e pede uma validação estratégica.
+    Função BLINDADA com Retry Inteligente para evitar Erro 429.
+    Se der erro de cota, ela espera e tenta de novo automaticamente.
     """
     if not IA_ATIVADA: return ""
-    try:
-        # Prompt de Engenharia para o Gemini
-        prompt = f"""
-        Aja como um analista profissional de futebol e apostas esportivas.
-        Analise o seguinte cenário de jogo AO VIVO:
-        
-        PARTIDA: {dados_jogo['jogo']}
-        CAMPEONATO: {dados_jogo['liga']}
-        MOMENTO: {dados_jogo['tempo']}' do jogo.
-        PLACAR ATUAL: {dados_jogo['placar']}
-        
-        ESTATÍSTICAS TÉCNICAS:
-        {dados_jogo['stats']}
-        
-        O ROBÔ INDICOU A ESTRATÉGIA: "{estrategia}"
-        
-        Sua tarefa: Avalie se essa entrada faz sentido com base nos números apresentados.
-        Considere pressão, finalizações e o tempo de jogo.
-        
-        Responda em UMA ÚNICA FRASE curta e direta (máx 15 palavras) dando seu veredito e o motivo principal.
-        Exemplo: "Aprovado, o time da casa está amassando." ou "Arriscado, jogo muito travado no meio campo."
-        """
-        response = model_ia.generate_content(prompt, request_options={"timeout": 10})
-        return f"\n🤖 <b>IA:</b> {response.text.strip()}"
-    except:
-        return ""
+    
+    # Prompt Otimizado
+    prompt = f"""
+    Aja como analista de futebol. Jogo AO VIVO:
+    PARTIDA: {dados_jogo['jogo']} ({dados_jogo['liga']})
+    TEMPO: {dados_jogo['tempo']}' | PLACAR: {dados_jogo['placar']}
+    STATS: {dados_jogo['stats']}
+    SINAL DO ROBÔ: "{estrategia}"
+    
+    Responda em 1 frase curta (máx 15 palavras): Aprova a entrada com base na pressão?
+    """
+    
+    max_tentativas = 3
+    espera_base = 10 # Começa esperando 10s se der erro
+    
+    for tentativa in range(max_tentativas):
+        try:
+            # Tenta gerar a resposta
+            response = model_ia.generate_content(prompt)
+            return f"\n🤖 <b>IA:</b> {response.text.strip()}"
+        except Exception as e:
+            erro_str = str(e)
+            if "429" in erro_str:
+                # Se for erro 429 (Muitos Pedidos), entra no modo de espera
+                tempo_wait = espera_base * (tentativa + 1) # 10s, depois 20s...
+                time.sleep(tempo_wait)
+                continue # Tenta de novo
+            else:
+                # Se for outro erro, não adianta insistir
+                return ""
+                
+    return "\n🤖 <b>IA:</b> (Indisponível - Cota Diária)"
 
 # --- 3. BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
@@ -1080,14 +1087,11 @@ if st.session_state.ROBO_LIGADO:
                             if adicionar_historico(item):
                                 prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
                                 
+                                # AQUI ESTÁ A MUDANÇA: Usando a função blindada
                                 opiniao_ia = ""
                                 if IA_ATIVADA:
-                                    try:
-                                        # FREIO PARA CONTA GRÁTIS (Evita Erro 429)
-                                        time.sleep(15) # AUMENTADO PARA 15s PARA GARANTIR SEGURANÇA NA COTA
-                                        dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
-                                        opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
-                                    except: pass # Se der erro no sleep ou na chamada, segue sem IA
+                                    dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
+                                    opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
 
                                 msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
                                 enviar_telegram(TG_TOKEN, TG_CHAT, msg)
