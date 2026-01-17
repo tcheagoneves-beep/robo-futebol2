@@ -772,8 +772,13 @@ def fetch_stats_single(fid, api_key):
 
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
+    # REDUZIDO PARA 3 E COM DELAY PARA EVITAR O ERRO 'TOO MANY REQUESTS'
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {}
+        for j in jogos_alvo:
+            futures[executor.submit(fetch_stats_single, j['fixture']['id'], api_key)] = j
+            time.sleep(0.2) # Respiro para a API
+        
         for future in as_completed(futures):
             fid, stats, headers = future.result()
             if stats:
@@ -902,15 +907,12 @@ if st.session_state.ROBO_LIGADO:
     verificar_automacao_bi(TG_TOKEN, TG_CHAT)
     verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY)
     
-    # -------------------------------------------------------------
-    # SOLUÇÃO DEFINITIVA PARA ESPELHAMENTO: O PLACEHOLDER MESTRE
-    # -------------------------------------------------------------
-    # Todo o conteúdo visual do ciclo será desenhado DENTRO deste container.
-    # Quando o loop reiniciar, o 'st.empty()' cria um novo container vazio,
-    # substituindo o antigo e garantindo que não haja duplicação.
-    placeholder_geral = st.empty()
+    # --- AQUI É O SEGREDO: CONTAINER ÚNICO DEFINIDO NO TOPO ---
+    # Criamos o placeholder antes de tudo e limpamos ele explicitamente
+    main_placeholder = st.empty()
+    timer_placeholder = st.empty()
+    main_placeholder.empty() 
     
-    # Processamento de dados (invisível ao usuário, fora do container visual se quiser, mas pode ficar dentro também)
     ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
     df_obs = st.session_state.get('df_vip', pd.DataFrame()); count_obs = len(df_obs)
     df_safe_show = st.session_state.get('df_safe', pd.DataFrame()); count_safe = len(df_safe_show)
@@ -937,9 +939,7 @@ if st.session_state.ROBO_LIGADO:
 
     radar = []; agenda = []
     
-    # Lógica de processamento e envio de sinais (Telegram)
     if not api_error:
-        # Pré-processamento Stats
         jogos_para_baixar = []
         for j in jogos_live:
             lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
@@ -1049,7 +1049,6 @@ if st.session_state.ROBO_LIGADO:
                         agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
             except: pass
 
-    # Salvamento final
     if st.session_state.get('precisa_salvar') and 'historico_full' in st.session_state:
         df_memoria = st.session_state['historico_full']
         if not df_memoria.empty:
@@ -1058,10 +1057,8 @@ if st.session_state.ROBO_LIGADO:
                 st.session_state['precisa_salvar'] = False
                 st.toast("💾 Dados salvos com sucesso!")
 
-    # -------------------------------------------------------------
-    # RENDERIZAÇÃO VISUAL (DENTRO DO CONTAINER MESTRE)
-    # -------------------------------------------------------------
-    with placeholder_geral.container():
+    # --- RENDERIZAÇÃO VISUAL DENTRO DO CONTAINER MESTRE ---
+    with main_placeholder.container():
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
         else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
@@ -1218,9 +1215,10 @@ if st.session_state.ROBO_LIGADO:
             if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
-    relogio = st.empty()
+    # Timer separado, desenhado em seu próprio container (limpo a cada loop)
     for i in range(INTERVALO, 0, -1):
-        relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
+        with timer_placeholder.container():
+            st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
         time.sleep(1)
     st.rerun()
 else:
