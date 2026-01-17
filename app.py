@@ -301,6 +301,11 @@ def carregar_tudo(force=False):
         st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
         st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
         st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
+        # --- NOVO: Carregar cache do BigData para evitar duplicidade ---
+        df_bd_load = carregar_aba("BigData", COLS_BIGDATA)
+        if not df_bd_load.empty:
+            st.session_state['jogos_salvos_bigdata'] = set(df_bd_load['FID'].astype(str).values)
+        # -----------------------------------------------------------------
         if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
         if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
@@ -1139,7 +1144,9 @@ if st.session_state.ROBO_LIGADO:
         jogos_live = []
         try:
             url = "https://v3.football.api-sports.io/fixtures"
-            resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
+            # --- CORREÇÃO AQUI: Mudança para buscar TODOS os jogos do dia (date) ao invés de apenas live ---
+            resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"date": hoje_real, "timezone": "America/Sao_Paulo"}, timeout=10)
+            # ------------------------------------------------------------------------------------------------
             update_api_usage(resp.headers); res = resp.json()
             jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
@@ -1153,6 +1160,7 @@ if st.session_state.ROBO_LIGADO:
         radar = []; agenda = []
         if not api_error:
             jogos_para_baixar = []
+            contagem_ft_baixar = 0
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
                 if lid in ids_black: continue
@@ -1160,18 +1168,27 @@ if st.session_state.ROBO_LIGADO:
                 gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
-                if st_short == 'FT':
-                    if fid not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
+                
+                # --- LÓGICA CORRIGIDA PARA BAIXAR FT (BIG DATA) ---
+                if st_short in ['FT', 'AET', 'PEN']:
+                    if str(fid) not in st.session_state['jogos_salvos_bigdata']:
+                        if contagem_ft_baixar < 5: # Limitador de segurança
+                             jogos_para_baixar.append(j)
+                             contagem_ft_baixar += 1
+                # --------------------------------------------------
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
+
             if jogos_para_baixar:
                 novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, safe_api)
                 for fid, stats in novas_stats.items():
-                    jogo_ft = next((x for x in jogos_para_baixar if x['fixture']['id'] == fid and x['fixture']['status']['short'] == 'FT'), None)
+                    # Verifica se o jogo baixado é FT para salvar no BigData
+                    jogo_ft = next((x for x in jogos_para_baixar if x['fixture']['id'] == fid and x['fixture']['status']['short'] in ['FT', 'AET', 'PEN']), None)
                     if jogo_ft: salvar_bigdata(jogo_ft, stats)
                     else:
                         st.session_state['controle_stats'][fid] = datetime.now()
                         st.session_state[f"st_{fid}"] = stats
+
             candidatos_multipla = []; ids_no_radar = []
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
@@ -1184,7 +1201,10 @@ if st.session_state.ROBO_LIGADO:
                 tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
                 home = j['teams']['home']['name']; away = j['teams']['away']['name']
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-                if st_short == 'FT': continue 
+                
+                # Se jogo acabou, pula processamento de sinais (já foi tratado no BigData acima)
+                if st_short in ['FT', 'AET', 'PEN', 'NS', 'TBD', 'PST']: continue 
+
                 stats = st.session_state.get(f"st_{fid}", [])
                 status_vis = "👁️" if stats else "💤"
                 rank_h = None; rank_a = None
