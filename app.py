@@ -26,7 +26,7 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # Modelo 2.0 Flash (Ideal para análise rápida e grandes volumes de dados do BI)
+        # Modelo 2.0 Flash (Ideal para ler grandes volumes de dados do dia)
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -39,7 +39,6 @@ except Exception as e:
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 
-if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 
@@ -54,6 +53,11 @@ if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] 
 
 # Disjuntor Inteligente (Circuit Breaker)
 if 'ia_bloqueada_ate' not in st.session_state: st.session_state['ia_bloqueada_ate'] = None
+
+# Controle de Envios Diários (23:30 e 23:35)
+if 'last_check_date' not in st.session_state: st.session_state['last_check_date'] = ""
+if 'bi_enviado' not in st.session_state: st.session_state['bi_enviado'] = False
+if 'ia_enviada' not in st.session_state: st.session_state['ia_enviada'] = False
 
 # CACHE CONFIG
 DB_CACHE_TIME = 60   
@@ -142,12 +146,9 @@ def gerar_barra_pressao(rh, ra):
 
 # --- IA FUNCTIONS ---
 def consultar_ia_gemini(dados_jogo, estrategia):
-    """
-    IA para validar SINAIS ao vivo.
-    """
+    """ IA para validar SINAIS ao vivo. """
     if not IA_ATIVADA: return ""
     
-    # Verifica disjuntor
     if st.session_state['ia_bloqueada_ate']:
         agora = datetime.now()
         if agora < st.session_state['ia_bloqueada_ate']:
@@ -165,7 +166,6 @@ def consultar_ia_gemini(dados_jogo, estrategia):
     
     Responda em 1 frase curta (máx 15 palavras): Aprova a entrada com base na pressão? Seja direto.
     """
-    
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 8})
         return f"\n🤖 <b>IA:</b> {response.text.strip()}"
@@ -177,43 +177,48 @@ def consultar_ia_gemini(dados_jogo, estrategia):
         return ""
 
 def analisar_bi_com_ia():
-    """
-    IA para analisar o HISTÓRICO (BI) e dar dicas de gestão.
-    """
+    """ IA para analisar o HISTÓRICO (BI) e dar dicas de gestão. """
     if not IA_ATIVADA: return "IA Desconectada."
     
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados suficientes para análise."
     
     try:
-        # Prepara o resumo dos dados para a IA ler
-        df_f = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        # Filtra apenas o dia de hoje para o relatório noturno
+        hoje_str = get_time_br().strftime('%Y-%m-%d')
+        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+        df_hoje = df[df['Data_Str'] == hoje_str]
+        
+        if df_hoje.empty: return "Sem sinais operados hoje."
+
+        df_f = df_hoje[df_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         total = len(df_f)
         greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
         reds = len(df_f[df_f['Resultado'].str.contains('RED')])
         winrate = (greens/total*100) if total > 0 else 0
         
-        # Resumo por Estratégia
         resumo_strat = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}% WR ({len(x)} jogos)").to_dict()
         
         prompt_bi = f"""
-        Aja como um Consultor de Data Science para Apostas Esportivas.
-        Analise os resultados do meu Robô "Neves Analytics":
+        Aja como um Consultor Sênior de Apostas Esportivas.
+        Analise o desempenho DO DIA DE HOJE ({hoje_str}) do meu robô:
         
-        TOTAL DE SINAIS: {total}
-        GREENS: {greens}
-        REDS: {reds}
-        ASSERTIVIDADE GERAL: {winrate:.1f}%
+        RESUMO DO DIA:
+        - Total Sinais: {total}
+        - Greens: {greens}
+        - Reds: {reds}
+        - Assertividade: {winrate:.1f}%
         
-        PERFORMANCE POR ESTRATÉGIA:
+        DETALHE POR ESTRATÉGIA:
         {json.dumps(resumo_strat, indent=2)}
         
-        Sua missão:
-        1. Identifique a estratégia que está dando PREJUÍZO (se houver) e sugira parar ou ajustar.
-        2. Identifique a melhor estratégia (Ouro) e sugira aumentar a mão nela.
-        3. Dê uma dica geral de gestão de banca baseada nesses números.
+        Sua missão (Responda para ser enviado no Telegram):
+        1. Dê uma nota para o dia (0 a 10).
+        2. Qual foi a melhor estratégia hoje?
+        3. Qual estratégia deu prejuízo e deve ser evitada amanhã?
+        4. Uma frase curta motivacional ou de cautela para o trader encerrar o dia.
         
-        Seja curto, direto e motivador. Use emojis.
+        Use emojis. Seja profissional e direto.
         """
         
         response = model_ia.generate_content(prompt_bi)
@@ -626,12 +631,27 @@ def enviar_relatorio_bi(token, chat_ids):
 
 def verificar_automacao_bi(token, chat_ids):
     agora = get_time_br()
-    if agora.hour == 23 and agora.minute >= 30:
-        hoje_str = agora.strftime('%Y-%m-%d')
-        if st.session_state.get('bi_enviado_data') != hoje_str:
-            enviar_relatorio_bi(token, chat_ids)
-            st.session_state['bi_enviado_data'] = hoje_str
-            st.toast("Relatório Automático Enviado!")
+    hoje_str = agora.strftime('%Y-%m-%d')
+
+    # Inicializa flags do dia se mudou o dia
+    if st.session_state['last_check_date'] != hoje_str:
+        st.session_state['bi_enviado'] = False
+        st.session_state['ia_enviada'] = False
+        st.session_state['last_check_date'] = hoje_str
+
+    # 23:30 - Relatório Gráfico (BI)
+    if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
+        enviar_relatorio_bi(token, chat_ids)
+        st.session_state['bi_enviado'] = True
+        st.toast("📊 Relatório BI Enviado!")
+
+    # 23:35 - Relatório Consultoria IA
+    if agora.hour == 23 and agora.minute >= 35 and not st.session_state['ia_enviada']:
+        analise = analisar_bi_com_ia()
+        msg_ia = f"🧠 <b>CONSULTORIA DIÁRIA DA IA</b>\n\n{analise}"
+        enviar_telegram(token, chat_ids, msg_ia)
+        st.session_state['ia_enviada'] = True
+        st.toast("🤖 Relatório IA Enviado!")
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
