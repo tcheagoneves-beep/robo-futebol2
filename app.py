@@ -1160,42 +1160,156 @@ if st.session_state.ROBO_LIGADO:
              st.session_state['historico_sinais'] = df_full[df_full['Data'] == hoje_real].to_dict('records')[::-1]
 
         api_error = False
-        jogos_live = []
+        jogos_do_dia = []
         try:
             url = "https://v3.football.api-sports.io/fixtures"
-            # APENAS JOGOS DE HOJE - Timeout 10s
             resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"date": hoje_real, "timezone": "America/Sao_Paulo"}, timeout=10)
             update_api_usage(resp.headers); res = resp.json()
-            jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
+            jogos_do_dia = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
-        except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
+        except Exception as e: jogos_do_dia = []; api_error = True; st.error(f"Erro de Conexão: {e}")
 
         if not api_error: 
-            check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
-            conferir_resultados_sniper(jogos_live) 
-            verificar_var_rollback(jogos_live, safe_token, safe_chat)
+            check_green_red_hibrido(jogos_do_dia, safe_token, safe_chat, safe_api)
+            conferir_resultados_sniper(jogos_do_dia) 
+            verificar_var_rollback(jogos_do_dia, safe_token, safe_chat)
         
         radar = []; agenda = []
         if not api_error:
+            # === LOOP OTIMIZADO PARA CLASSIFICAÇÃO ÚNICA ===
             jogos_para_baixar = []
             contagem_ft_baixar = 0
-            for j in jogos_live:
-                lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
+            candidatos_multipla = []
+            ids_no_radar = [] # Lista de IDs ao vivo para não repetir na Agenda (opcional, mas bom pra organização)
+
+            for j in jogos_do_dia:
+                fid = j['fixture']['id']
+                lid = normalizar_id(j['league']['id'])
                 if lid in ids_black: continue
-                tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
-                gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-                t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
-                ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                # Big Data (FT)
-                if st_short in ['FT', 'AET', 'PEN']:
+                status = j['fixture']['status']['short']
+                
+                # --- 1. JOGOS FINALIZADOS (BIG DATA) ---
+                if status in ['FT', 'AET', 'PEN']:
                     if str(fid) not in st.session_state['jogos_salvos_bigdata']:
-                        if contagem_ft_baixar < 2: 
+                        if contagem_ft_baixar < 2:
                              jogos_para_baixar.append(j)
                              contagem_ft_baixar += 1
-                elif deve_buscar_stats(tempo, gh, ga, st_short):
-                    if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
+                
+                # --- 2. JOGOS FUTUROS (AGENDA) ---
+                elif status in ['NS', 'TBD', 'PST']:
+                    try:
+                        # Extração Simples para Agenda
+                        l_nm = j['league']['name']
+                        if lid in ids_safe: l_nm += " 🛡️"
+                        elif lid in df_obs['id'].values: l_nm += " ⚠️"
+                        
+                        # Formatação visual da hora
+                        data_iso = j['fixture']['date'].replace('Z', '+00:00')
+                        dt_jogo = datetime.fromisoformat(data_iso).astimezone(pytz.timezone('America/Sao_Paulo'))
+                        hora_show = dt_jogo.strftime('%H:%M')
+                        
+                        agenda.append({"Hora": hora_show, "Liga": l_nm, "Jogo": f"{j['teams']['home']['name']} vs {j['teams']['away']['name']}"})
+                    except: pass
 
+                # --- 3. JOGOS AO VIVO (RADAR) ---
+                elif status in ['1H', 'HT', '2H', 'ET', 'P', 'BT', 'INT']:
+                     ids_no_radar.append(fid) # Marca como "em radar"
+                     tempo = j['fixture']['status']['elapsed'] or 0
+                     gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
+                     ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
+                     t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
+                     
+                     if deve_buscar_stats(tempo, gh, ga, status):
+                        if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
+                     
+                     # Processamento visual do Radar
+                     nome_liga_show = j['league']['name']
+                     if lid in ids_safe: nome_liga_show += " 🛡️"
+                     elif lid in df_obs['id'].values: nome_liga_show += " ⚠️"
+                     else: nome_liga_show += " ❓"
+                     
+                     placar = f"{gh}x{ga}"
+                     stats = st.session_state.get(f"st_{fid}", [])
+                     status_vis = "👁️" if stats else "💤"
+                     
+                     # Lógica de Sinais (Se tiver stats)
+                     if stats:
+                        # ... (Mantém a mesma lógica de processamento de sinais do original) ...
+                        rank_h = None; rank_a = None
+                        if j['league']['id'] in LIGAS_TABELA:
+                            rk = buscar_ranking(safe_api, j['league']['id'], j['league']['season'])
+                            rank_h = rk.get(j['teams']['home']['name']); rank_a = rk.get(j['teams']['away']['name'])
+                        
+                        lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
+                        salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'], tem_tabela=(rank_h is not None))
+                        resetar_erros(lid)
+
+                        # Múltiplas HT
+                        if status == 'HT' and gh == 0 and ga == 0:
+                             try:
+                                s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
+                                v1 = next((x['value'] for x in s1 if x['type']=='Total Shots'), 0) or 0
+                                v2 = next((x['value'] for x in s2 if x['type']=='Total Shots'), 0) or 0
+                                sg1 = next((x['value'] for x in s1 if x['type']=='Shots on Goal'), 0) or 0
+                                sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
+                                if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{j['teams']['home']['name']} x {j['teams']['away']['name']}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
+                             except: pass
+                        
+                        if lista_sinais:
+                            status_vis = f"✅ {len(lista_sinais)} Sinais"
+                            for s in lista_sinais:
+                                rh = s.get('rh', 0); ra = s.get('ra', 0)
+                                txt_pressao = gerar_barra_pressao(rh, ra)
+                                uid_normal = f"{fid}_{s['tag']}"
+                                uid_super = f"SUPER_ODD_{fid}_{s['tag']}"
+                                odd_atual_str = buscar_odd_real(fid, safe_api, s['tag'], gh+ga)
+                                try: odd_val = float(odd_atual_str)
+                                except: odd_val = 0.0
+                                
+                                if uid_normal not in st.session_state['alertas_enviados']:
+                                    destaque_odd = ""
+                                    if odd_val >= 1.80:
+                                        destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
+                                        st.session_state['alertas_enviados'].add(uid_super)
+                                    st.session_state['alertas_enviados'].add(uid_normal)
+                                    item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} x {j['teams']['away']['name']}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": ""}
+                                    if adicionar_historico(item):
+                                        prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{j['teams']['home']['name']} x {j['teams']['away']['name']}")
+                                        opiniao_ia = ""
+                                        if IA_ATIVADA:
+                                            try:
+                                                time.sleep(1)
+                                                win_info = "Sem dados suficientes."
+                                                if 'historico_full' in st.session_state:
+                                                    dff = st.session_state['historico_full']
+                                                    df_strat = dff[dff['Estrategia'] == s['tag']]
+                                                    if not df_strat.empty:
+                                                        gr = df_strat['Resultado'].str.contains('GREEN').sum()
+                                                        rd = df_strat['Resultado'].str.contains('RED').sum()
+                                                        tot = gr + rd
+                                                        if tot > 0:
+                                                            win_rate = (gr / tot) * 100
+                                                            win_info = f"{win_rate:.1f}% ({gr} Greens / {rd} Reds)"
+                                                opiniao_ia = consultar_ia_gemini(
+                                                    {'jogo': f"{j['teams']['home']['name']} x {j['teams']['away']['name']}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar}, 
+                                                    s['tag'], 
+                                                    stats,
+                                                    winrate_info=win_info
+                                                )
+                                            except: pass
+                                        msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {j['teams']['home']['name']} 🆚 {j['teams']['away']['name']}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
+                                        enviar_telegram(safe_token, safe_chat, msg)
+                                        st.toast(f"Sinal: {s['tag']}")
+                                elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
+                                    st.session_state['alertas_enviados'].add(uid_super)
+                                    msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {j['teams']['home']['name']} 🆚 {j['teams']['away']['name']}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
+                                    enviar_telegram(safe_token, safe_chat, msg_super)
+                                    st.toast(f"💎 Odd Subiu: {s['tag']}")
+                     
+                     radar.append({"Liga": nome_liga_show, "Jogo": f"{j['teams']['home']['name']} {placar} {j['teams']['away']['name']}", "Tempo": f"{tempo}'", "Status": status_vis})
+
+            # --- PROCESSAMENTO BATCH DE STATS (FORA DO LOOP PRINCIPAL) ---
             if jogos_para_baixar:
                 novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, safe_api)
                 for fid, stats in novas_stats.items():
@@ -1204,118 +1318,16 @@ if st.session_state.ROBO_LIGADO:
                     else:
                         st.session_state['controle_stats'][fid] = datetime.now()
                         st.session_state[f"st_{fid}"] = stats
-
-            candidatos_multipla = []; ids_no_radar = []
-            for j in jogos_live:
-                lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
-                if lid in ids_black: continue
-                nome_liga_show = j['league']['name']
-                if lid in ids_safe: nome_liga_show += " 🛡️"
-                elif lid in df_obs['id'].values: nome_liga_show += " ⚠️"
-                else: nome_liga_show += " ❓" 
-                ids_no_radar.append(fid)
-                tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
-                home = j['teams']['home']['name']; away = j['teams']['away']['name']
-                placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-                
-                if st_short in ['FT', 'AET', 'PEN', 'NS', 'TBD', 'PST']: continue 
-
-                stats = st.session_state.get(f"st_{fid}", [])
-                status_vis = "👁️" if stats else "💤"
-                rank_h = None; rank_a = None
-                if j['league']['id'] in LIGAS_TABELA:
-                    rk = buscar_ranking(safe_api, j['league']['id'], j['league']['season'])
-                    rank_h = rk.get(home); rank_a = rk.get(away)
-                lista_sinais = []
-                if stats:
-                    lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
-                    salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'], tem_tabela=(rank_h is not None))
-                    resetar_erros(lid)
-                    if st_short == 'HT' and gh == 0 and ga == 0:
-                        try:
-                            s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
-                            v1 = next((x['value'] for x in s1 if x['type']=='Total Shots'), 0) or 0
-                            v2 = next((x['value'] for x in s2 if x['type']=='Total Shots'), 0) or 0
-                            sg1 = next((x['value'] for x in s1 if x['type']=='Shots on Goal'), 0) or 0
-                            sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
-                            if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
-                        except: pass
-                if lista_sinais:
-                    status_vis = f"✅ {len(lista_sinais)} Sinais"
-                    for s in lista_sinais:
-                        rh = s.get('rh', 0); ra = s.get('ra', 0)
-                        txt_pressao = gerar_barra_pressao(rh, ra) 
-                        uid_normal = f"{fid}_{s['tag']}"
-                        uid_super = f"SUPER_ODD_{fid}_{s['tag']}"
-                        odd_atual_str = buscar_odd_real(fid, safe_api, s['tag'], gh+ga) 
-                        try: odd_val = float(odd_atual_str)
-                        except: odd_val = 0.0
-                        if uid_normal not in st.session_state['alertas_enviados']:
-                            destaque_odd = ""
-                            if odd_val >= 1.80:
-                                destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
-                                st.session_state['alertas_enviados'].add(uid_super)
-                            st.session_state['alertas_enviados'].add(uid_normal)
-                            item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": ""}
-                            if adicionar_historico(item):
-                                prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                                opiniao_ia = ""
-                                if IA_ATIVADA:
-                                    try:
-                                        time.sleep(1)
-                                        win_info = "Sem dados suficientes."
-                                        if 'historico_full' in st.session_state:
-                                            dff = st.session_state['historico_full']
-                                            df_strat = dff[dff['Estrategia'] == s['tag']]
-                                            if not df_strat.empty:
-                                                gr = df_strat['Resultado'].str.contains('GREEN').sum()
-                                                rd = df_strat['Resultado'].str.contains('RED').sum()
-                                                tot = gr + rd
-                                                if tot > 0:
-                                                    win_rate = (gr / tot) * 100
-                                                    win_info = f"{win_rate:.1f}% ({gr} Greens / {rd} Reds)"
-                                        opiniao_ia = consultar_ia_gemini(
-                                            {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar}, 
-                                            s['tag'], 
-                                            stats,
-                                            winrate_info=win_info
-                                        )
-                                    except: pass
-                                msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
-                                enviar_telegram(safe_token, safe_chat, msg)
-                                st.toast(f"Sinal: {s['tag']}")
-                        elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
-                            st.session_state['alertas_enviados'].add(uid_super)
-                            msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
-                            enviar_telegram(safe_token, safe_chat, msg_super)
-                            st.toast(f"💎 Odd Subiu: {s['tag']}")
-                radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
+            
+            # --- PROCESSAMENTO MÚLTIPLAS ---
             if candidatos_multipla:
                 novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
                 if novos:
                     msg = "<b>🚀 OPORTUNIDADE DE MÚLTIPLA (HT) 🚀</b>\n" + "".join([f"\n⚽ {c['jogo']} ({c['stats']})\n⚠️ AÇÃO: {c['indica']}" for c in novos])
                     for c in novos: st.session_state['multiplas_enviadas'].add(c['fid'])
                     enviar_telegram(safe_token, safe_chat, msg)
-            
-            # --- CORREÇÃO FINAL AGENDA: FILTRO POR STATUS (INFALÍVEL) ---
-            prox = jogos_live 
-            for p in prox:
-                try:
-                    if str(p['league']['id']) not in ids_black and p['fixture']['id'] not in ids_no_radar:
-                        # Se status for NS (Not Started), TBD (To Be Defined) ou PST (Postponed), É AGENDA.
-                        if p['fixture']['status']['short'] in ['NS', 'TBD', 'PST']:
-                            l_id = normalizar_id(p['league']['id']); l_nm = p['league']['name']
-                            if l_id in ids_safe: l_nm += " 🛡️"
-                            elif l_id in df_obs['id'].values: l_nm += " ⚠️"
-                            
-                            # Formatação visual apenas
-                            data_iso = p['fixture']['date'].replace('Z', '+00:00')
-                            dt_jogo = datetime.fromisoformat(data_iso).astimezone(pytz.timezone('America/Sao_Paulo'))
-                            hora_show = dt_jogo.strftime('%H:%M')
-                            
-                            agenda.append({"Hora": hora_show, "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
-                except: pass
-                
+
+        # --- FINALIZAÇÃO E VISUALIZAÇÃO ---
         if st.session_state.get('precisa_salvar') and 'historico_full' in st.session_state:
             df_memoria = st.session_state['historico_full']
             if not df_memoria.empty:
