@@ -18,9 +18,10 @@ st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="�
 # --- INICIALIZAÇÃO DE VARIÁVEIS ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
-if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 # Novo controle para cache longo
+if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
+if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False # NOVO CONTROLE
 
 # Variáveis de Controle
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
@@ -32,8 +33,8 @@ if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
 
 # CACHE CONFIG
-DB_CACHE_TIME = 60 # Histórico (Rápido)
-STATIC_CACHE_TIME = 600 # Blacklist/Seguras (Lento - 10 min)
+DB_CACHE_TIME = 60   
+STATIC_CACHE_TIME = 600 
 
 st.markdown("""
 <style>
@@ -58,14 +59,6 @@ st.markdown("""
     }
     .stButton button:hover { border-color: #00FF00; color: #00FF00; }
     
-    /* BOTÃO PERIGO */
-    div[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"] {
-        background-color: #4A0E0E !important; border: 1px solid #FF4B4B !important; color: #FF4B4B !important;
-    }
-    div[data-testid="stSidebar"] div[data-testid="stButton"] button[kind="primary"]:hover {
-        background-color: #FF0000 !important; color: white !important;
-    }
-
     .footer-timer { 
         position: fixed; left: 0; bottom: 0; width: 100%; 
         background-color: #0E1117; color: #FFD700; 
@@ -105,15 +98,14 @@ def formatar_inteiro_visual(val):
         return str(int(float(str(val))))
     except: return str(val)
 
-# --- 3. BANCO DE DADOS (OTIMIZADO) ---
+# --- 3. BANCO DE DADOS (COM TRAVA DE SEGURANÇA E FLAG DE SALVAMENTO) ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
-        # TTL=0 garante dado fresco, mas usaremos cache manual
         df = conn.read(worksheet=nome_aba, ttl=0)
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    if col == 'Odd': df[col] = "1.10" 
+                    if col == 'Odd': df[col] = "1.10"
                     else: df[col] = ""
         if df.empty or len(df.columns) < len(colunas_esperadas): 
             return pd.DataFrame(columns=colunas_esperadas)
@@ -122,9 +114,10 @@ def carregar_aba(nome_aba, colunas_esperadas):
 
 def salvar_aba(nome_aba, df_para_salvar):
     try: 
-        # SEGURANÇA: Se o DF estiver vazio e não for intencional, não salva para evitar wipe
-        if df_para_salvar.empty and nome_aba == "Historico":
-            return False 
+        # ESCUDO ANTI-APAGÃO: Não salva histórico se estiver vazio
+        if nome_aba == "Historico" and df_para_salvar.empty:
+            return False
+            
         conn.update(worksheet=nome_aba, data=df_para_salvar)
         return True
     except: return False
@@ -133,11 +126,9 @@ def sanitizar_conflitos():
     df_black = st.session_state.get('df_black', pd.DataFrame())
     df_vip = st.session_state.get('df_vip', pd.DataFrame())
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
-    
     if df_black.empty or df_vip.empty or df_safe.empty: return
 
     alterou_black, alterou_vip, alterou_safe = False, False, False
-    
     for idx, row in df_black.iterrows():
         id_b = normalizar_id(row['id'])
         motivo_atual = str(row['Motivo'])
@@ -170,14 +161,12 @@ def sanitizar_conflitos():
 def carregar_tudo(force=False):
     now = time.time()
     
-    # 1. Carregamento OTIMIZADO de tabelas estáticas (Blacklist, Safe, Obs)
-    # Só recarrega se forçado OU se passou 10 minutos (600s)
+    # Cache longo para estáticas (10 min)
     if force or (now - st.session_state['last_static_update']) > STATIC_CACHE_TIME or 'df_black' not in st.session_state:
         st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
         st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
         st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
         
-        # Normaliza IDs
         if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
         if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
@@ -185,65 +174,56 @@ def carregar_tudo(force=False):
         sanitizar_conflitos()
         st.session_state['last_static_update'] = now
 
-    # 2. Carregamento de Histórico (Mais frequente, mas protegido)
-    if force or (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
-        # Se não for hora de atualizar, usa o que tem na memória
-        if 'historico_full' in st.session_state: return
-
-    df = carregar_aba("Historico", COLS_HIST)
-    
-    # BLINDAGEM: Se o Sheets vier vazio por erro, mas temos memória, MANTÉM A MEMÓRIA
-    if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
-        df = st.session_state['historico_full'] # Recupera da RAM
-        
-    if not df.empty and 'Data' in df.columns:
-        df['FID'] = df['FID'].apply(clean_fid)
-        try:
-            df['Data_Temp'] = pd.to_datetime(df['Data'], errors='coerce')
-            df['Data'] = df['Data_Temp'].dt.strftime('%Y-%m-%d').fillna(df['Data'])
-            df = df.drop(columns=['Data_Temp'])
-        except: pass
-        
-        st.session_state['historico_full'] = df
-        
-        hoje = get_time_br().strftime('%Y-%m-%d')
-        st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
-        
-        if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
-        
-        for item in st.session_state['historico_sinais']:
-            fid_strat = f"{item['FID']}_{item['Estrategia']}"
-            st.session_state['alertas_enviados'].add(fid_strat)
-            if 'GREEN' in str(item['Resultado']): st.session_state['alertas_enviados'].add(f"RES_GREEN_{fid_strat}")
-            if 'RED' in str(item['Resultado']): st.session_state['alertas_enviados'].add(f"RES_RED_{fid_strat}")
-    else:
-        # Se realmente for o primeiro load e estiver vazio
-        if 'historico_full' not in st.session_state:
-            st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
-            st.session_state['historico_sinais'] = []
+    # Carrega histórico apenas na inicialização ou se forçado.
+    # Depois confiamos na memória RAM e só salvamos se houver mudanças.
+    if 'historico_full' not in st.session_state or force:
+        df = carregar_aba("Historico", COLS_HIST)
+        if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
+            df = st.session_state['historico_full'] # Anti-wipe
+            
+        if not df.empty and 'Data' in df.columns:
+            df['FID'] = df['FID'].apply(clean_fid)
+            try:
+                df['Data_Temp'] = pd.to_datetime(df['Data'], errors='coerce')
+                df['Data'] = df['Data_Temp'].dt.strftime('%Y-%m-%d').fillna(df['Data'])
+                df = df.drop(columns=['Data_Temp'])
+            except: pass
+            
+            st.session_state['historico_full'] = df
+            hoje = get_time_br().strftime('%Y-%m-%d')
+            st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
+            
+            if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+            for item in st.session_state['historico_sinais']:
+                fid_strat = f"{item['FID']}_{item['Estrategia']}"
+                st.session_state['alertas_enviados'].add(fid_strat)
+                if 'GREEN' in str(item['Resultado']): st.session_state['alertas_enviados'].add(f"RES_GREEN_{fid_strat}")
+                if 'RED' in str(item['Resultado']): st.session_state['alertas_enviados'].add(f"RES_RED_{fid_strat}")
+        else:
+            if 'historico_full' not in st.session_state:
+                st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
+                st.session_state['historico_sinais'] = []
 
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
-    # BLINDAGEM: Em vez de ler, apagar e escrever, usamos a memória RAM como fonte da verdade
     if 'historico_full' not in st.session_state:
         st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
     
     df_memoria = st.session_state['historico_full']
     df_novo = pd.DataFrame([item])
-    
-    # Concatena na Memória
     df_final = pd.concat([df_novo, df_memoria], ignore_index=True)
+    
     st.session_state['historico_full'] = df_final
     st.session_state['historico_sinais'].insert(0, item)
     
-    # Salva a Memória no Disco (Sheets)
-    return salvar_aba("Historico", df_final)
+    # MARCA PARA SALVAR
+    st.session_state['precisa_salvar'] = True 
+    return True
 
-def atualizar_historico_ram_disk(lista_atualizada_hoje):
-    # BLINDAGEM: Atualiza baseada na Memória, não no disco (para evitar falha de leitura)
-    if 'historico_full' not in st.session_state:
-        st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
+def atualizar_historico_ram(lista_atualizada_hoje):
+    # Atualiza APENAS a memória. O salvamento ocorre no final do loop se 'precisa_salvar' for True.
+    if 'historico_full' not in st.session_state: return
         
     df_memoria = st.session_state['historico_full']
     df_hoje_updates = pd.DataFrame(lista_atualizada_hoje)
@@ -258,13 +238,15 @@ def atualizar_historico_ram_disk(lista_atualizada_hoje):
     def atualizar_linha(row):
         chave = f"{row['FID']}_{row['Estrategia']}"
         if chave in mapa_atualizacao:
-            return mapa_atualizacao[chave]
+            # Detecta mudança real para ativar o salvamento
+            nova_linha = mapa_atualizacao[chave]
+            if str(row['Resultado']) != str(nova_linha['Resultado']) or str(row['Odd']) != str(nova_linha['Odd']):
+                st.session_state['precisa_salvar'] = True
+            return nova_linha
         return row
 
     df_final = df_memoria.apply(atualizar_linha, axis=1)
-    
     st.session_state['historico_full'] = df_final
-    salvar_aba("Historico", df_final)
 
 def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
@@ -295,11 +277,6 @@ def salvar_safe_league_basic(id_liga, pais, nome_liga, tem_tabela=False):
 
 def resetar_erros(id_liga):
     id_norm = normalizar_id(id_liga)
-    df_vip = st.session_state.get('df_vip', pd.DataFrame())
-    if not df_vip.empty and id_norm in df_vip['id'].values:
-        df_new_vip = df_vip[df_vip['id'] != id_norm]
-        if salvar_aba("Obs", df_new_vip): st.session_state['df_vip'] = df_new_vip
-    
     df_safe = st.session_state.get('df_safe', pd.DataFrame())
     if not df_safe.empty and id_norm in df_safe['id'].values:
         idx = df_safe[df_safe['id'] == id_norm].index[0]
@@ -399,17 +376,14 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- FUNÇÃO DE ODD INTELIGENTE ---
 def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
         params = {"fixture": fixture_id}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
-        
         target_markets = []
         target_line = 0.0
         
-        # Define Targets
         if "Relâmpago" in strategy_name and total_gols_atual == 0:
             target_markets = ["1st half", "first half"]; target_line = 0.5
         elif "Golden" in strategy_name and total_gols_atual == 1:
@@ -421,14 +395,11 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
             target_line = total_gols_atual + 0.5
         
         best_odd = "0.00"
-        
         if res.get('response'):
             markets = res['response'][0]['odds']
             for m in markets:
                 m_name = m['name'].lower()
                 if any(tm in m_name for tm in target_markets) and "over" in m_name:
-                    
-                    # 1. Tenta LINHA EXATA
                     for v in m['values']:
                         try:
                             line_raw = str(v['value']).lower().replace("over", "").strip()
@@ -438,8 +409,6 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
                                 if raw_odd > 50: raw_odd = raw_odd / 1000
                                 return "{:.2f}".format(raw_odd)
                         except: pass
-                    
-                    # 2. Se falhar, pega QUALQUER OVER jogável (> 1.20)
                     for v in m['values']:
                         try:
                             raw_odd = float(v['odd'])
@@ -447,14 +416,10 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
                             if raw_odd > 1.20:
                                 if best_odd == "0.00": best_odd = "{:.2f}".format(raw_odd)
                         except: pass
-        
-        # SE NÃO ACHOU NADA, RETORNA O DEFAULT DO USUÁRIO
         if best_odd == "0.00": return "1.10"
         return best_odd
-    except:
-        return "1.10"
+    except: return "1.10"
 
-# --- INTELIGÊNCIA ---
 def buscar_inteligencia(estrategia, liga, jogo):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
@@ -487,11 +452,7 @@ def buscar_inteligencia(estrategia, liga, jogo):
     if denominador == 0: return "\n🔮 <b>Prob: Calculando...</b>"
     prob_final = numerador / denominador
     str_fontes = "+".join(fontes) if fontes else "Geral"
-    
-    emoji = "🔮"
-    if prob_final >= 80: emoji = "🔥"
-    elif prob_final <= 40: emoji = "⚠️"
-    return f"\n{emoji} <b>Prob: {prob_final:.0f}% ({str_fontes})</b>"
+    return f"\n{'🔥' if prob_final >= 80 else '🔮' if prob_final > 40 else '⚠️'} <b>Prob: {prob_final:.0f}% ({str_fontes})</b>"
 
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
@@ -512,7 +473,6 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
-# --- RELATÓRIOS (DEFINIDOS ANTES DE SEREM CHAMADOS) ---
 def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
     msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro Líquido:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}\n\n<i>Cálculo baseado na gestão configurada.</i>"
     enviar_telegram(token, chat_ids, msg)
@@ -528,19 +488,10 @@ def enviar_relatorio_bi(token, chat_ids):
     except: return
     
     hoje = pd.to_datetime(get_time_br().date())
-    mask_dia = df['Data_DT'] == hoje
-    mask_sem = df['Data_DT'] >= (hoje - timedelta(days=7))
     mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
-    
-    def cm(d):
-        g = d['Resultado'].str.contains('GREEN').sum(); r = d['Resultado'].str.contains('RED').sum()
-        tot = g+r; wr = (g/tot*100) if tot>0 else 0
-        return tot, g, r, wr
-
-    t_d, g_d, r_d, w_d = cm(df[mask_dia])
-    t_s, g_s, r_s, w_s = cm(df[mask_sem])
-    t_m, g_m, r_m, w_m = cm(df[mask_mes])
-    t_a, g_a, r_a, w_a = cm(df)
+    t_a = len(df)
+    g_a = df['Resultado'].str.contains('GREEN').sum()
+    w_a = (g_a/t_a*100) if t_a>0 else 0
 
     if token and chat_ids:
         plt.style.use('dark_background')
@@ -549,11 +500,11 @@ def enviar_relatorio_bi(token, chat_ids):
         if not stats.empty:
             c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
             c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
-            ax.set_title(f'PERFORMANCE 30 DIAS (WR: {w_m:.1f}%)', color='white', fontsize=12)
+            ax.set_title(f'PERFORMANCE 30 DIAS', color='white', fontsize=12)
             ax.legend(title='', frameon=False)
             plt.tight_layout()
             buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
-            msg = f"📊 <b>RELATÓRIO BI</b>\n\n📆 <b>HOJE:</b> {t_d} (WR: {w_d:.1f}%)\n📅 <b>7 DIAS:</b> {t_s} (WR: {w_s:.1f}%)\n🗓️ <b>30 DIAS:</b> {t_m} (WR: {w_m:.1f}%)\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
+            msg = f"📊 <b>RELATÓRIO BI</b>\n\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
             ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
             for cid in ids:
                 buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
@@ -627,7 +578,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
         enviar_telegram(token, chat_ids, msg)
     st.session_state[chave] = True 
 
-# --- PROCESSAR RESULTADO (COM TRAVA E CORREÇÃO DE ODDS 1.10) ---
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0
     ga = jogo_api['goals']['away'] or 0
@@ -635,86 +585,80 @@ def processar_resultado(sinal, jogo_api, token, chats):
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque Líderes", "Briga de Rua"]
     
     if "Múltipla" in sinal['Estrategia']: return False
-    
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
     fid = clean_fid(sinal['FID'])
     strat = str(sinal['Estrategia'])
-    
     key_green = f"RES_GREEN_{fid}_{strat}"
     key_red = f"RES_RED_{fid}_{strat}"
 
-    if 'alertas_enviados' not in st.session_state: 
-        st.session_state['alertas_enviados'] = set()
+    if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 
-    # LÓGICA DE GREEN
     if (gh+ga) > (ph+pa):
         if "Morno" in sinal['Estrategia']: 
             sinal['Resultado'] = '❌ RED'
             if key_red not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"❌ <b>RED | GOL SAIU</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
                 st.session_state['alertas_enviados'].add(key_red)
+                st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
             return True
         else:
             sinal['Resultado'] = '✅ GREEN'
             if key_green in st.session_state['alertas_enviados']: return True
-                
             enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
             st.session_state['alertas_enviados'].add(key_green)
+            st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
             return True
 
     eh_ht_strat = any(x in sinal['Estrategia'] for x in STRATS_HT_ONLY)
-    
-    # LÓGICA DE RED (HT)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | INTERVALO (HT)</b>\n⚽ {sinal['Jogo']}\n📉 Placar HT: {gh}x{ga}\n🎯 {sinal['Estrategia']} (Não bateu no 1º Tempo)")
             st.session_state['alertas_enviados'].add(key_red)
+            st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
         return True
 
-    # LÓGICA DE RED (FT) ou GREEN (UNDER)
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
         if "Morno" in sinal['Estrategia'] and (gh+ga) <= 1:
              sinal['Resultado'] = '✅ GREEN'
              if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN | UNDER BATIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}")
                 st.session_state['alertas_enviados'].add(key_green)
+                st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
              return True
         
         sinal['Resultado'] = '❌ RED'
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
             st.session_state['alertas_enviados'].add(key_red)
+            st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
         return True
-
     return False
 
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
-    atualizou = False
     hist = st.session_state['historico_sinais']
     pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
-    
     if not pendentes: return
     
     hoje_str = get_time_br().strftime('%Y-%m-%d')
     agora = get_time_br()
     ids_live = [j['fixture']['id'] for j in jogos_live]
     
+    updates_buffer = []
+    
     for s in pendentes:
         if s.get('Data') != hoje_str: continue
         fid = int(clean_fid(s.get('FID', 0)))
-        
         strat = str(s.get('Estrategia', ''))
         key_green = f"RES_GREEN_{str(fid)}_{strat}"
         
         if key_green in st.session_state.get('alertas_enviados', set()):
             s['Resultado'] = '✅ GREEN'
-            atualizou = True
+            updates_buffer.append(s)
             continue 
 
-        # --- ATUALIZAÇÃO DE ODD TARDIA ---
         if 'Odd_Atualizada' not in s: s['Odd_Atualizada'] = False
         try:
             hora_str = f"{s['Data']} {s['Hora']}"
@@ -729,7 +673,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
                 if nova_odd != s['Odd']:
                     s['Odd'] = nova_odd
                     s['Odd_Atualizada'] = True
-                    atualizou = True
+                    updates_buffer.append(s)
         except: pass
 
         jogo_encontrado = None
@@ -741,15 +685,17 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             except: pass
             
         if jogo_encontrado:
-            if processar_resultado(s, jogo_encontrado, token, chats): atualizou = True
+            if processar_resultado(s, jogo_encontrado, token, chats): 
+                updates_buffer.append(s)
             
-    if atualizou: atualizar_historico_ram_disk(hist)
+    if updates_buffer: atualizar_historico_ram(updates_buffer)
 
 def verificar_var_rollback(jogos_live, token, chats):
     hist = st.session_state['historico_sinais']
     greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
     if not greens: return
-    atualizou = False
+    
+    updates_buffer = []
     for s in greens:
         if "Morno" in s['Estrategia']: continue
         fid = int(clean_fid(s.get('FID', 0)))
@@ -759,11 +705,14 @@ def verificar_var_rollback(jogos_live, token, chats):
             try:
                 ph, pa = map(int, s['Placar_Sinal'].split('x'))
                 if (gh + ga) <= (ph + pa):
-                    s['Resultado'] = 'Pendente'; s['Placar_Sinal'] = f"{gh}x{ga}"; atualizou = True
+                    s['Resultado'] = 'Pendente'; s['Placar_Sinal'] = f"{gh}x{ga}"
                     msg = (f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n\n⚽ {s['Jogo']}\n📉 Placar voltou para: <b>{gh}x{ga}</b>\n🔄 Status revertido para <b>PENDENTE</b>.")
                     enviar_telegram(token, chats, msg)
+                    st.session_state['precisa_salvar'] = True
+                    updates_buffer.append(s)
             except: pass
-    if atualizou: atualizar_historico_ram_disk(hist)
+            
+    if updates_buffer: atualizar_historico_ram(updates_buffer)
 
 def reenviar_sinais(token, chats):
     hist = st.session_state['historico_sinais']
@@ -794,7 +743,6 @@ def deve_buscar_stats(tempo, gh, ga, status):
     if status == 'HT' and gh == 0 and ga == 0: return True
     return False
 
-# --- DECISÃO DO ROBÔ ---
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
@@ -920,9 +868,7 @@ if st.session_state.ROBO_LIGADO:
     df_safe_show = st.session_state.get('df_safe', pd.DataFrame()); count_safe = len(df_safe_show)
     ids_safe = [normalizar_id(x) for x in df_safe_show['id'].values]
     
-    # --- FILTRO ROBUSTO DA DATA DE HOJE ---
     hoje_real = get_time_br().strftime('%Y-%m-%d')
-    # Recarrega a lista baseada no que está no dataframe completo (segurança contra perda de dados)
     if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
          df_full = st.session_state['historico_full']
          st.session_state['historico_sinais'] = df_full[df_full['Data'] == hoje_real].to_dict('records')[::-1]
@@ -1018,6 +964,15 @@ if st.session_state.ROBO_LIGADO:
                         elif l_id in df_obs['id'].values: l_nm += " ⚠️"
                         agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
             except: pass
+
+    # --- SALVAMENTO FINAL APENAS SE HOUVE MUDANÇA (OTIMIZAÇÃO CRÍTICA) ---
+    if st.session_state.get('precisa_salvar') and 'historico_full' in st.session_state:
+        df_memoria = st.session_state['historico_full']
+        if not df_memoria.empty:
+            sucesso = salvar_aba("Historico", df_memoria)
+            if sucesso:
+                st.session_state['precisa_salvar'] = False
+                st.toast("💾 Dados salvos com sucesso!")
 
     dashboard_placeholder = st.empty()
     with dashboard_placeholder.container():
@@ -1182,7 +1137,6 @@ if st.session_state.ROBO_LIGADO:
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
     relogio = st.empty()
-    # TIMER SUAVE: Reduz chamadas de redraw
     for i in range(INTERVALO, 0, -1):
         relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
         time.sleep(1)
