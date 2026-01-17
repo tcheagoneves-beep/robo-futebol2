@@ -301,7 +301,7 @@ def carregar_tudo(force=False):
         st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
         st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
         st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
-        # --- NOVO: Carregar cache do BigData para evitar duplicidade ---
+        # --- Carregar cache do BigData para evitar duplicidade ---
         df_bd_load = carregar_aba("BigData", COLS_BIGDATA)
         if not df_bd_load.empty:
             st.session_state['jogos_salvos_bigdata'] = set(df_bd_load['FID'].astype(str).values)
@@ -403,7 +403,7 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- FUNÇÕES QUE FALTAVAM (RANKING, AGENDA, ODDS, INTELIGENCIA) ---
+# --- FUNÇÕES (RANKING, AGENDA, ODDS, INTELIGENCIA) ---
 @st.cache_data(ttl=86400)
 def buscar_ranking(api_key, league_id, season):
     try:
@@ -522,19 +522,25 @@ def recuperar_odd_justa(odd_str, estrategia):
     except: pass
     return calcular_odd_dinamica(estrategia)
 
-def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
+def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, winrate_info=""):
     if not IA_ATIVADA: return ""
     if st.session_state['ia_bloqueada_ate']:
         agora = datetime.now()
         if agora < st.session_state['ia_bloqueada_ate']: return ""
         else: st.session_state['ia_bloqueada_ate'] = None
     dados_ricos = extrair_dados_completos(stats_raw)
+    
+    # --- NOVO PROMPT FOCADO EM LONGO PRAZO ---
     prompt = f"""
-    Aja como Trader Profissional.
+    Aja como um Trader Esportivo Profissional.
     JOGO: {dados_jogo['jogo']} | TEMPO: {dados_jogo['tempo']}'
     ESTRATÉGIA: "{estrategia}"
-    DADOS: {dados_ricos}
-    Responda APENAS: "Aprovado" ou "Arriscado" + motivo curto (max 10 palavras).
+    PERFORMANCE HISTÓRICA DESTA ESTRATÉGIA (GLOBAL): {winrate_info}
+    DADOS DO JOGO EM TEMPO REAL: {dados_ricos}
+    
+    Analise a força dos dados atuais COMBINADA com o histórico da estratégia.
+    Se a estratégia tem winrate baixo historicamente, seja mais conservador.
+    Responda APENAS: "Aprovado" ou "Arriscado" + motivo curto e direto (max 10 palavras).
     """
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 10})
@@ -1144,9 +1150,7 @@ if st.session_state.ROBO_LIGADO:
         jogos_live = []
         try:
             url = "https://v3.football.api-sports.io/fixtures"
-            # --- CORREÇÃO AQUI: Mudança para buscar TODOS os jogos do dia (date) ao invés de apenas live ---
             resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"date": hoje_real, "timezone": "America/Sao_Paulo"}, timeout=10)
-            # ------------------------------------------------------------------------------------------------
             update_api_usage(resp.headers); res = resp.json()
             jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
@@ -1169,20 +1173,19 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                # --- LÓGICA CORRIGIDA PARA BAIXAR FT (BIG DATA) ---
+                # --- LÓGICA DE BIG DATA ---
                 if st_short in ['FT', 'AET', 'PEN']:
                     if str(fid) not in st.session_state['jogos_salvos_bigdata']:
-                        if contagem_ft_baixar < 5: # Limitador de segurança
+                        if contagem_ft_baixar < 5: 
                              jogos_para_baixar.append(j)
                              contagem_ft_baixar += 1
-                # --------------------------------------------------
+                # --------------------------
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
 
             if jogos_para_baixar:
                 novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, safe_api)
                 for fid, stats in novas_stats.items():
-                    # Verifica se o jogo baixado é FT para salvar no BigData
                     jogo_ft = next((x for x in jogos_para_baixar if x['fixture']['id'] == fid and x['fixture']['status']['short'] in ['FT', 'AET', 'PEN']), None)
                     if jogo_ft: salvar_bigdata(jogo_ft, stats)
                     else:
@@ -1202,7 +1205,6 @@ if st.session_state.ROBO_LIGADO:
                 home = j['teams']['home']['name']; away = j['teams']['away']['name']
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 
-                # Se jogo acabou, pula processamento de sinais (já foi tratado no BigData acima)
                 if st_short in ['FT', 'AET', 'PEN', 'NS', 'TBD', 'PST']: continue 
 
                 stats = st.session_state.get(f"st_{fid}", [])
@@ -1248,7 +1250,26 @@ if st.session_state.ROBO_LIGADO:
                                 if IA_ATIVADA:
                                     try:
                                         time.sleep(1)
-                                        opiniao_ia = consultar_ia_gemini({'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar}, s['tag'], stats)
+                                        # --- CÁLCULO HISTÓRICO GLOBAL PARA A IA ---
+                                        win_info = "Sem dados suficientes."
+                                        if 'historico_full' in st.session_state:
+                                            dff = st.session_state['historico_full']
+                                            # Filtra TODAS as ocorrências dessa estratégia na história
+                                            df_strat = dff[dff['Estrategia'] == s['tag']]
+                                            if not df_strat.empty:
+                                                gr = df_strat['Resultado'].str.contains('GREEN').sum()
+                                                rd = df_strat['Resultado'].str.contains('RED').sum()
+                                                tot = gr + rd
+                                                if tot > 0:
+                                                    win_rate = (gr / tot) * 100
+                                                    win_info = f"{win_rate:.1f}% ({gr} Greens / {rd} Reds)"
+                                        opiniao_ia = consultar_ia_gemini(
+                                            {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar}, 
+                                            s['tag'], 
+                                            stats,
+                                            winrate_info=win_info
+                                        )
+                                        # -----------------------------------------------
                                     except: pass
                                 msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
                                 enviar_telegram(safe_token, safe_chat, msg)
