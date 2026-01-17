@@ -165,8 +165,8 @@ def extrair_dados_completos(stats_api):
         return texto
     except: return "Erro stats."
 
-# --- FUNÇÕES DE BANCO DE DADOS ---
-@st.cache_data(ttl=600)
+# --- FUNÇÕES DE BANCO DE DADOS (CACHE ESTRATÉGICO) ---
+@st.cache_data(ttl=600) # Cache longo para configurações (10 min)
 def carregar_configs_cached():
     try:
         df_b = conn.read(worksheet="Blacklist", ttl=600).fillna("").astype(str)
@@ -1164,8 +1164,7 @@ if st.session_state.ROBO_LIGADO:
         jogos_live = []
         try:
             url = "https://v3.football.api-sports.io/fixtures"
-            # VOLTANDO AO PADRÃO: Apenas HOJE (para não poluir e não pesar)
-            # Timeout aumentado para 10s para garantir o download da lista completa
+            # APENAS JOGOS DE HOJE
             resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"date": hoje_real, "timezone": "America/Sao_Paulo"}, timeout=10)
             update_api_usage(resp.headers); res = resp.json()
             jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
@@ -1189,7 +1188,7 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                # Big Data (FT) - Limitado a 2 por ciclo para performance
+                # Big Data (FT)
                 if st_short in ['FT', 'AET', 'PEN']:
                     if str(fid) not in st.session_state['jogos_salvos_bigdata']:
                         if contagem_ft_baixar < 2: 
@@ -1299,26 +1298,23 @@ if st.session_state.ROBO_LIGADO:
                     for c in novos: st.session_state['multiplas_enviadas'].add(c['fid'])
                     enviar_telegram(safe_token, safe_chat, msg)
             
-            # --- CORREÇÃO DA AGENDA: Filtro baseado em Timestamp para não ter erro de fuso ---
+            # --- CORREÇÃO DA AGENDA (SEM COMPLICAÇÃO DE UTC) ---
             prox = jogos_live 
-            agora_ts = datetime.now().timestamp()
             for p in prox:
                 try:
                     if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and p['fixture']['id'] not in ids_no_radar:
-                        # Pega o timestamp direto da API (infalível)
-                        ts_jogo = p['fixture']['timestamp']
+                        # Se o jogo ainda não começou (NS) ou está indefinido (TBD), ele É futuro.
+                        # Não precisamos comparar timestamps complexos.
+                        l_id = normalizar_id(p['league']['id']); l_nm = p['league']['name']
+                        if l_id in ids_safe: l_nm += " 🛡️"
+                        elif l_id in df_obs['id'].values: l_nm += " ⚠️"
                         
-                        # Filtro: Se o timestamp do jogo é MAIOR que agora, é futuro. Entra na agenda.
-                        if ts_jogo > agora_ts:
-                            l_id = normalizar_id(p['league']['id']); l_nm = p['league']['name']
-                            if l_id in ids_safe: l_nm += " 🛡️"
-                            elif l_id in df_obs['id'].values: l_nm += " ⚠️"
-                            
-                            # Formatação visual apenas
-                            dt_obj = datetime.fromtimestamp(ts_jogo)
-                            hora_show = dt_obj.strftime('%H:%M')
-                            
-                            agenda.append({"Hora": hora_show, "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
+                        # Converte a hora só para mostrar na tela
+                        data_iso = p['fixture']['date'].replace('Z', '+00:00')
+                        dt_jogo = datetime.fromisoformat(data_iso).astimezone(pytz.timezone('America/Sao_Paulo'))
+                        hora_show = dt_jogo.strftime('%H:%M')
+                        
+                        agenda.append({"Hora": hora_show, "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
                 except: pass
                 
         if st.session_state.get('precisa_salvar') and 'historico_full' in st.session_state:
