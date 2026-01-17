@@ -497,10 +497,52 @@ def enviar_telegram(token, chat_ids, msg):
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
 
-# --- RELATÓRIOS ---
+# --- RELATÓRIOS (DEFINIDOS ANTES DE SEREM CHAMADOS) ---
 def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
     msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro Líquido:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}\n\n<i>Cálculo baseado na gestão configurada.</i>"
     enviar_telegram(token, chat_ids, msg)
+
+def enviar_relatorio_bi(token, chat_ids):
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return
+    try:
+        df = df.copy()
+        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
+        df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+    except: return
+    
+    hoje = pd.to_datetime(get_time_br().date())
+    mask_dia = df['Data_DT'] == hoje
+    mask_sem = df['Data_DT'] >= (hoje - timedelta(days=7))
+    mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
+    
+    def cm(d):
+        g = d['Resultado'].str.contains('GREEN').sum(); r = d['Resultado'].str.contains('RED').sum()
+        tot = g+r; wr = (g/tot*100) if tot>0 else 0
+        return tot, g, r, wr
+
+    t_d, g_d, r_d, w_d = cm(df[mask_dia])
+    t_s, g_s, r_s, w_s = cm(df[mask_sem])
+    t_m, g_m, r_m, w_m = cm(df[mask_mes])
+    t_a, g_a, r_a, w_a = cm(df)
+
+    if token and chat_ids:
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(7, 4))
+        stats = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        if not stats.empty:
+            c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
+            c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
+            ax.set_title(f'PERFORMANCE 30 DIAS (WR: {w_m:.1f}%)', color='white', fontsize=12)
+            ax.legend(title='', frameon=False)
+            plt.tight_layout()
+            buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
+            msg = f"📊 <b>RELATÓRIO BI</b>\n\n📆 <b>HOJE:</b> {t_d} (WR: {w_d:.1f}%)\n📅 <b>7 DIAS:</b> {t_s} (WR: {w_s:.1f}%)\n🗓️ <b>30 DIAS:</b> {t_m} (WR: {w_m:.1f}%)\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
+            ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+            for cid in ids:
+                buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
+            plt.close(fig)
 
 def verificar_automacao_bi(token, chat_ids):
     agora = get_time_br()
@@ -1094,7 +1136,7 @@ if st.session_state.ROBO_LIGADO:
 
         with abas[5]: st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         
-        # --- ABA SEGURAS (CORRIGIDA COM COLUNA DE RISCO E REMOÇÃO DE JOGOS_ERRO) ---
+        # --- ABA SEGURAS (CORRIGIDA COM COLUNA DE RISCO E SEM JOGOS_ERRO) ---
         with abas[6]: 
             df_safe_show = st.session_state.get('df_safe', pd.DataFrame()).copy()
             if not df_safe_show.empty:
@@ -1106,7 +1148,7 @@ if st.session_state.ROBO_LIGADO:
                 
                 df_safe_show['Status Risco'] = df_safe_show['Strikes'].apply(calc_risco)
                 
-                # Exibe a coluna calculada e as outras originais, MAS SEM 'Jogos_Erro'
+                # Exibe a coluna calculada e as outras originais (SEM 'Jogos_Erro' agora)
                 st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
             else:
                 st.info("Nenhuma liga segura ainda.")
