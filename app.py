@@ -26,7 +26,7 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # MODELO: gemini-2.0-flash (Rápido e Eficiente)
+        # Modelo 2.0 Flash (Mais rápido e eficiente)
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -43,7 +43,7 @@ if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 
-# Variáveis de Controle
+# Variáveis de Controle e COTA INTELIGENTE
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
@@ -51,6 +51,10 @@ if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviado
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
+
+# VARIÁVEL DO DISJUNTOR (Circuit Breaker)
+# Se der erro 429, guardamos a hora aqui para não tentar de novo por um tempo
+if 'ia_bloqueada_ate' not in st.session_state: st.session_state['ia_bloqueada_ate'] = None
 
 # CACHE CONFIG
 DB_CACHE_TIME = 60   
@@ -72,6 +76,7 @@ st.markdown("""
     
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
+    .status-warning { background-color: #3B3B10; color: #FFFF00; border: 1px solid #FFFF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
     
     .stButton button {
         width: 100%; height: 50px !important; font-size: 16px !important; font-weight: bold !important;
@@ -138,12 +143,22 @@ def gerar_barra_pressao(rh, ra):
 
 def consultar_ia_gemini(dados_jogo, estrategia):
     """
-    Função BLINDADA com Retry Inteligente para evitar Erro 429.
-    Se der erro de cota, ela espera e tenta de novo automaticamente.
+    Função INTELIGENTE com Disjuntor (Circuit Breaker).
+    Se a cota estourar, ela desliga a IA por 1 hora para não travar o robô.
     """
     if not IA_ATIVADA: return ""
     
-    # Prompt Otimizado
+    # 1. Verifica se o disjuntor está desarmado (bloqueio ativo)
+    if st.session_state['ia_bloqueada_ate']:
+        agora = datetime.now()
+        if agora < st.session_state['ia_bloqueada_ate']:
+            # Ainda está no tempo de castigo, não chama a IA
+            tempo_restante = int((st.session_state['ia_bloqueada_ate'] - agora).total_seconds() / 60)
+            return f"\n🤖 <b>IA:</b> (Em pausa por {tempo_restante}min - Cota)"
+        else:
+            # Tempo acabou, desarma o disjuntor e tenta de novo
+            st.session_state['ia_bloqueada_ate'] = None
+
     prompt = f"""
     Aja como analista de futebol. Jogo AO VIVO:
     PARTIDA: {dados_jogo['jogo']} ({dados_jogo['liga']})
@@ -154,26 +169,25 @@ def consultar_ia_gemini(dados_jogo, estrategia):
     Responda em 1 frase curta (máx 15 palavras): Aprova a entrada com base na pressão?
     """
     
-    max_tentativas = 3
-    espera_base = 10 # Começa esperando 10s se der erro
-    
-    for tentativa in range(max_tentativas):
-        try:
-            # Tenta gerar a resposta
-            response = model_ia.generate_content(prompt)
-            return f"\n🤖 <b>IA:</b> {response.text.strip()}"
-        except Exception as e:
-            erro_str = str(e)
-            if "429" in erro_str:
-                # Se for erro 429 (Muitos Pedidos), entra no modo de espera
-                tempo_wait = espera_base * (tentativa + 1) # 10s, depois 20s...
-                time.sleep(tempo_wait)
-                continue # Tenta de novo
+    try:
+        # Tenta gerar a resposta (timeout curto para não travar)
+        response = model_ia.generate_content(prompt, request_options={"timeout": 8})
+        return f"\n🤖 <b>IA:</b> {response.text.strip()}"
+    except Exception as e:
+        erro_str = str(e)
+        if "429" in erro_str or "quota" in erro_str.lower():
+            # ERRO DE COTA DETECTADO!
+            # Ativa o disjuntor: Bloqueia IA por 60 minutos
+            bloqueio = datetime.now() + timedelta(minutes=60)
+            st.session_state['ia_bloqueada_ate'] = bloqueio
+            
+            # Retorna msg de erro com o motivo real para o Telegram ver
+            if "quota" in erro_str.lower():
+                return "\n🤖 <b>IA:</b> (Cota Diária Esgotada - Voltando em 1h)"
             else:
-                # Se for outro erro, não adianta insistir
-                return ""
-                
-    return "\n🤖 <b>IA:</b> (Indisponível - Cota Diária)"
+                return "\n🤖 <b>IA:</b> (Muitos Pedidos - Pausa de 1h)"
+        else:
+            return ""
 
 # --- 3. BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
@@ -953,6 +967,20 @@ with st.sidebar:
     st.write("---")
     st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
     
+    # STATUS DA IA (VISUAL)
+    if IA_ATIVADA:
+        if st.session_state['ia_bloqueada_ate']:
+            ag = datetime.now()
+            if ag < st.session_state['ia_bloqueada_ate']:
+                m_rest = int((st.session_state['ia_bloqueada_ate'] - ag).total_seconds()/60)
+                st.markdown(f'<div class="status-warning">⚠️ IA PAUSADA (Cota Esgotada) - Volta em {m_rest} min</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="status-error">❌ IA DESCONECTADA</div>', unsafe_allow_html=True)
+
     st.markdown("---")
     st.markdown("### ⚠️ Zona de Perigo")
     if st.button("☢️ ZERAR ROBÔ", type="primary", use_container_width=True): st.session_state['confirmar_reset'] = True
@@ -963,10 +991,6 @@ with st.sidebar:
         if c2.button("❌ NÃO"): st.session_state['confirmar_reset'] = False; st.rerun()
 
 # --- LOOP PRINCIPAL (VISUALIZAÇÃO CONTROLADA) ---
-# A MÁGICA ACONTECE AQUI:
-# O 'placeholder_root' é o único lugar onde o app desenha.
-# A cada rerun, ele limpa e desenha de novo, impedindo duplicação.
-
 placeholder_root.empty() # Limpa o frame anterior
 
 if st.session_state.ROBO_LIGADO:
@@ -1087,9 +1111,9 @@ if st.session_state.ROBO_LIGADO:
                             if adicionar_historico(item):
                                 prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
                                 
-                                # AQUI ESTÁ A MUDANÇA: Usando a função blindada
                                 opiniao_ia = ""
                                 if IA_ATIVADA:
+                                    # CHAMA A FUNÇÃO INTELIGENTE (COM DISJUNTOR)
                                     dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
                                     opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
 
