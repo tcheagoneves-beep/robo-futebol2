@@ -1084,7 +1084,7 @@ if st.session_state.ROBO_LIGADO:
                                 if IA_ATIVADA:
                                     try:
                                         # FREIO PARA CONTA GRÁTIS (Evita Erro 429)
-                                        time.sleep(4)
+                                        time.sleep(15) # AUMENTADO PARA 15s PARA GARANTIR SEGURANÇA NA COTA
                                         dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
                                         opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
                                     except: pass # Se der erro no sleep ou na chamada, segue sem IA
