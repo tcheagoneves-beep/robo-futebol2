@@ -1062,7 +1062,7 @@ if st.session_state.ROBO_LIGADO:
                         agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
             except: pass
 
-    # --- SALVAMENTO FINAL APENAS SE HOUVE MUDANÇA (OTIMIZAÇÃO CRÍTICA) ---
+    # --- SALVAMENTO FINAL ---
     if st.session_state.get('precisa_salvar') and 'historico_full' in st.session_state:
         df_memoria = st.session_state['historico_full']
         if not df_memoria.empty:
@@ -1071,163 +1071,163 @@ if st.session_state.ROBO_LIGADO:
                 st.session_state['precisa_salvar'] = False
                 st.toast("💾 Dados salvos com sucesso!")
 
-    dashboard_placeholder = st.empty()
-    with dashboard_placeholder.container():
-        if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
-        else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
-        
-        hist_hj = pd.DataFrame(st.session_state['historico_sinais'])
-        t, g, r, w = calcular_stats(hist_hj)
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{count_safe}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
-        
-        st.write("")
-        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})"])
-        
-        with abas[0]: 
-            if radar: st.dataframe(pd.DataFrame(radar)[['Liga', 'Jogo', 'Tempo', 'Status']].astype(str), use_container_width=True, hide_index=True)
-            else: st.info("Buscando jogos...")
-        with abas[1]: 
-            if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
-            else: st.caption("Sem jogos futuros hoje.")
-        
-        with abas[2]:
-            st.markdown("### 💰 Evolução Financeira")
-            modo_simulacao = st.radio("Cenário de Entrada:", ["Todos os sinais", "Apenas 1 sinal por jogo", "Até 2 sinais por jogo"], horizontal=True)
-            df_fin = st.session_state.get('historico_full', pd.DataFrame())
+    # --- RENDERIZAÇÃO DIRETA (SEM CONTAINER PARA EVITAR ESPELHAMENTO) ---
+    
+    if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
+    else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
+    
+    hist_hj = pd.DataFrame(st.session_state['historico_sinais'])
+    t, g, r, w = calcular_stats(hist_hj)
+    c1, c2, c3 = st.columns(3)
+    c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
+    c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{count_safe}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
+    
+    st.write("")
+    abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})"])
+    
+    with abas[0]: 
+        if radar: st.dataframe(pd.DataFrame(radar)[['Liga', 'Jogo', 'Tempo', 'Status']].astype(str), use_container_width=True, hide_index=True)
+        else: st.info("Buscando jogos...")
+    with abas[1]: 
+        if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
+        else: st.caption("Sem jogos futuros hoje.")
+    
+    with abas[2]:
+        st.markdown("### 💰 Evolução Financeira")
+        modo_simulacao = st.radio("Cenário de Entrada:", ["Todos os sinais", "Apenas 1 sinal por jogo", "Até 2 sinais por jogo"], horizontal=True)
+        df_fin = st.session_state.get('historico_full', pd.DataFrame())
+        if not df_fin.empty:
+            df_fin = df_fin.copy()
+            df_fin['Odd_Num'] = pd.to_numeric(df_fin['Odd'], errors='coerce').fillna(0.0)
+            filtro_validas = df_fin['Odd_Num'] > 1.01
+            if filtro_validas.any():
+                mapa_medias = df_fin[filtro_validas].groupby('Estrategia')['Odd_Num'].mean().to_dict()
+            else: mapa_medias = {}
+            df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
+            df_fin = df_fin.sort_values(by=['FID', 'Hora'], ascending=[True, True])
+            if modo_simulacao == "Apenas 1 sinal por jogo": df_fin = df_fin.groupby('FID').head(1)
+            elif modo_simulacao == "Até 2 sinais por jogo": df_fin = df_fin.groupby('FID').head(2)
+            
             if not df_fin.empty:
-                df_fin = df_fin.copy()
-                df_fin['Odd_Num'] = pd.to_numeric(df_fin['Odd'], errors='coerce').fillna(0.0)
-                filtro_validas = df_fin['Odd_Num'] > 1.01
-                if filtro_validas.any():
-                    mapa_medias = df_fin[filtro_validas].groupby('Estrategia')['Odd_Num'].mean().to_dict()
-                else: mapa_medias = {}
-                df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
-                df_fin = df_fin.sort_values(by=['FID', 'Hora'], ascending=[True, True])
-                if modo_simulacao == "Apenas 1 sinal por jogo": df_fin = df_fin.groupby('FID').head(1)
-                elif modo_simulacao == "Até 2 sinais por jogo": df_fin = df_fin.groupby('FID').head(2)
+                lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]
+                for idx, row in df_fin.iterrows():
+                    res = row['Resultado']; odd = row['Odd_Num']; strat = row['Estrategia']
+                    if odd <= 1.01: odd = mapa_medias.get(strat, 1.10)
+                    if 'GREEN' in res: lucro = (stake_padrao * odd) - stake_padrao
+                    else: lucro = -stake_padrao
+                    saldo_atual += lucro; lucros.append(lucro); historico_saldo.append(saldo_atual)
                 
-                if not df_fin.empty:
-                    lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]
-                    for idx, row in df_fin.iterrows():
-                        res = row['Resultado']; odd = row['Odd_Num']; strat = row['Estrategia']
-                        if odd <= 1.01: odd = mapa_medias.get(strat, 1.10)
-                        if 'GREEN' in res: lucro = (stake_padrao * odd) - stake_padrao
-                        else: lucro = -stake_padrao
-                        saldo_atual += lucro; lucros.append(lucro); historico_saldo.append(saldo_atual)
-                    
-                    df_fin['Lucro'] = lucros; total_lucro = sum(lucros); roi = (total_lucro / (len(df_fin) * stake_padrao)) * 100
-                    st.session_state['last_fin_stats'] = {'cenario': modo_simulacao, 'lucro': total_lucro, 'roi': roi, 'entradas': len(df_fin)}
+                df_fin['Lucro'] = lucros; total_lucro = sum(lucros); roi = (total_lucro / (len(df_fin) * stake_padrao)) * 100
+                st.session_state['last_fin_stats'] = {'cenario': modo_simulacao, 'lucro': total_lucro, 'roi': roi, 'entradas': len(df_fin)}
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Banca Atual", f"R$ {saldo_atual:.2f}"); m2.metric("Lucro Líquido", f"R$ {total_lucro:.2f}", delta_color="normal")
+                m3.metric("ROI Estimado", f"{roi:.1f}%"); m4.metric("Entradas", len(df_fin))
+                fig_fin = px.line(y=historico_saldo, x=range(len(historico_saldo)), title="Crescimento da Banca")
+                fig_fin.update_layout(xaxis_title="Entradas", yaxis_title="Saldo (R$)", template="plotly_dark"); st.plotly_chart(fig_fin, use_container_width=True)
+                st.caption(f"ℹ️ As odds médias calculadas automaticamente foram: {', '.join([f'{k}: {v:.2f}' for k,v in mapa_medias.items()])}")
+            else: st.info("Aguardando fechamento de sinais para calcular financeiro.")
+        else: st.info("Sem dados históricos para cálculo.")
+
+    with abas[3]: 
+        if not hist_hj.empty: 
+            df_show = hist_hj.copy()
+            if 'Jogo' in df_show.columns and 'Placar_Sinal' in df_show.columns:
+                df_show['Jogo'] = df_show['Jogo'] + " (" + df_show['Placar_Sinal'].astype(str) + ")"
+            colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada', 'Placar_Sinal']
+            cols_view = [c for c in df_show.columns if c not in colunas_esconder]
+            df_show = df_show[cols_view]
+            try: df_show['Odd'] = df_show['Odd'].astype(float)
+            except: pass
+            st.dataframe(df_show.style.format({"Odd": "{:.2f}"}), use_container_width=True, hide_index=True)
+        else: st.caption("Vazio.")
+    
+    with abas[4]: 
+        st.markdown("### 📊 Inteligência de Mercado")
+        df_bi = st.session_state.get('historico_full', pd.DataFrame())
+        if df_bi.empty: st.warning("Sem dados históricos.")
+        else:
+            try:
+                df_bi = df_bi.copy()
+                df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+                df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
+                df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+                hoje_str = get_time_br().strftime('%Y-%m-%d')
+                df_bi_hoje = df_bi[df_bi['Data_Str'] == hoje_str]
+                hoje = pd.to_datetime(get_time_br().date())
+                if 'bi_filter' not in st.session_state: st.session_state['bi_filter'] = "Tudo"
+                filtro = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"], key="bi_select")
+                if filtro == "Hoje": df_show = df_bi_hoje
+                elif filtro == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]
+                elif filtro == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]
+                else: df_show = df_bi 
+                if not df_show.empty:
+                    gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum()
+                    tt = len(df_show); ww = (gr/tt*100) if tt>0 else 0
                     m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Banca Atual", f"R$ {saldo_atual:.2f}"); m2.metric("Lucro Líquido", f"R$ {total_lucro:.2f}", delta_color="normal")
-                    m3.metric("ROI Estimado", f"{roi:.1f}%"); m4.metric("Entradas", len(df_fin))
-                    fig_fin = px.line(y=historico_saldo, x=range(len(historico_saldo)), title="Crescimento da Banca")
-                    fig_fin.update_layout(xaxis_title="Entradas", yaxis_title="Saldo (R$)", template="plotly_dark"); st.plotly_chart(fig_fin, use_container_width=True)
-                    st.caption(f"ℹ️ As odds médias calculadas automaticamente foram: {', '.join([f'{k}: {v:.2f}' for k,v in mapa_medias.items()])}")
-                else: st.info("Aguardando fechamento de sinais para calcular financeiro.")
-            else: st.info("Sem dados históricos para cálculo.")
+                    m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
+                    st.divider()
+                    st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                    if not st_s.empty:
+                        cts = st_s.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
+                        fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Performance por Estratégia", text='Qtd')
+                        fig.update_layout(template="plotly_dark"); st.plotly_chart(fig, use_container_width=True)
+                    st.markdown("### ⚽ Raio-X por Jogo (Volume de Sinais)")
+                    sinais_por_jogo = df_show['Jogo'].value_counts()
+                    c_vol1, c_vol2, c_vol3 = st.columns(3)
+                    c_vol1.metric("Jogos Únicos", len(sinais_por_jogo))
+                    c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
+                    c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
+                    st.caption("📋 Detalhe dos Jogos com Mais Sinais")
+                    detalhe = df_show.groupby('Jogo')['Resultado'].value_counts().unstack(fill_value=0)
+                    detalhe['Total'] = detalhe.sum(axis=1)
+                    if '✅ GREEN' not in detalhe: detalhe['✅ GREEN'] = 0
+                    if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
+                    st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
+                    st.divider()
+                    cb1, cb2 = st.columns(2)
+                    with cb1:
+                        st.caption("🏆 Melhores Ligas")
+                        stats_l = df_show.groupby('Liga')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)*100).reset_index(name='Winrate')
+                        cnt_l = df_show['Liga'].value_counts().reset_index(name='Qtd')
+                        final_l = stats_l.merge(cnt_l, left_on='Liga', right_on='Liga')
+                        st.dataframe(final_l[final_l['Qtd']>=2].sort_values('Winrate', ascending=False).head(5).style.format({'Winrate': '{:.1f}%'}), hide_index=True, use_container_width=True)
+                    with cb2:
+                        st.caption("⚡ Top Estratégias")
+                        stats_e = df_show.groupby('Estrategia')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)*100).reset_index(name='Winrate')
+                        st.dataframe(stats_e.sort_values('Winrate', ascending=False).style.format({'Winrate': '{:.1f}%'}), hide_index=True, use_container_width=True)
+                    st.divider()
+                    st.markdown("### 👑 Reis do Green (Times que mais lucram)")
+                    df_g = df_show[df_show['Resultado'].str.contains('GREEN')]
+                    lst_t = []
+                    for j in df_g['Jogo']:
+                        try: p = j.split(' x '); lst_t.extend([p[0].strip(), p[1].strip()])
+                        except: pass
+                    if lst_t:
+                        top_r = pd.Series(lst_t).value_counts().reset_index()
+                        top_r.columns = ['Time', 'Qtd Green']
+                        st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
+            except Exception as e: st.error(f"Erro ao carregar BI: {e}")
 
-        with abas[3]: 
-            if not hist_hj.empty: 
-                df_show = hist_hj.copy()
-                if 'Jogo' in df_show.columns and 'Placar_Sinal' in df_show.columns:
-                    df_show['Jogo'] = df_show['Jogo'] + " (" + df_show['Placar_Sinal'].astype(str) + ")"
-                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada', 'Placar_Sinal']
-                cols_view = [c for c in df_show.columns if c not in colunas_esconder]
-                df_show = df_show[cols_view]
-                try: df_show['Odd'] = df_show['Odd'].astype(float)
-                except: pass
-                st.dataframe(df_show.style.format({"Odd": "{:.2f}"}), use_container_width=True, hide_index=True)
-            else: st.caption("Vazio.")
-        
-        with abas[4]: 
-            st.markdown("### 📊 Inteligência de Mercado")
-            df_bi = st.session_state.get('historico_full', pd.DataFrame())
-            if df_bi.empty: st.warning("Sem dados históricos.")
-            else:
-                try:
-                    df_bi = df_bi.copy()
-                    df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-                    df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
-                    df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-                    hoje_str = get_time_br().strftime('%Y-%m-%d')
-                    df_bi_hoje = df_bi[df_bi['Data_Str'] == hoje_str]
-                    hoje = pd.to_datetime(get_time_br().date())
-                    if 'bi_filter' not in st.session_state: st.session_state['bi_filter'] = "Tudo"
-                    filtro = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"], key="bi_select")
-                    if filtro == "Hoje": df_show = df_bi_hoje
-                    elif filtro == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]
-                    elif filtro == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]
-                    else: df_show = df_bi 
-                    if not df_show.empty:
-                        gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum()
-                        tt = len(df_show); ww = (gr/tt*100) if tt>0 else 0
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
-                        st.divider()
-                        st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-                        if not st_s.empty:
-                            cts = st_s.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
-                            fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Performance por Estratégia", text='Qtd')
-                            fig.update_layout(template="plotly_dark"); st.plotly_chart(fig, use_container_width=True)
-                        st.markdown("### ⚽ Raio-X por Jogo (Volume de Sinais)")
-                        sinais_por_jogo = df_show['Jogo'].value_counts()
-                        c_vol1, c_vol2, c_vol3 = st.columns(3)
-                        c_vol1.metric("Jogos Únicos", len(sinais_por_jogo))
-                        c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
-                        c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
-                        st.caption("📋 Detalhe dos Jogos com Mais Sinais")
-                        detalhe = df_show.groupby('Jogo')['Resultado'].value_counts().unstack(fill_value=0)
-                        detalhe['Total'] = detalhe.sum(axis=1)
-                        if '✅ GREEN' not in detalhe: detalhe['✅ GREEN'] = 0
-                        if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
-                        st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
-                        st.divider()
-                        cb1, cb2 = st.columns(2)
-                        with cb1:
-                            st.caption("🏆 Melhores Ligas")
-                            stats_l = df_show.groupby('Liga')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)*100).reset_index(name='Winrate')
-                            cnt_l = df_show['Liga'].value_counts().reset_index(name='Qtd')
-                            final_l = stats_l.merge(cnt_l, left_on='Liga', right_on='Liga')
-                            st.dataframe(final_l[final_l['Qtd']>=2].sort_values('Winrate', ascending=False).head(5).style.format({'Winrate': '{:.1f}%'}), hide_index=True, use_container_width=True)
-                        with cb2:
-                            st.caption("⚡ Top Estratégias")
-                            stats_e = df_show.groupby('Estrategia')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)*100).reset_index(name='Winrate')
-                            st.dataframe(stats_e.sort_values('Winrate', ascending=False).style.format({'Winrate': '{:.1f}%'}), hide_index=True, use_container_width=True)
-                        st.divider()
-                        st.markdown("### 👑 Reis do Green (Times que mais lucram)")
-                        df_g = df_show[df_show['Resultado'].str.contains('GREEN')]
-                        lst_t = []
-                        for j in df_g['Jogo']:
-                            try: p = j.split(' x '); lst_t.extend([p[0].strip(), p[1].strip()])
-                            except: pass
-                        if lst_t:
-                            top_r = pd.Series(lst_t).value_counts().reset_index()
-                            top_r.columns = ['Time', 'Qtd Green']
-                            st.dataframe(top_r.head(10), use_container_width=True, hide_index=True)
-                except Exception as e: st.error(f"Erro ao carregar BI: {e}")
+    with abas[5]: st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
+    
+    with abas[6]: 
+        df_safe_show = st.session_state.get('df_safe', pd.DataFrame()).copy()
+        if not df_safe_show.empty:
+            def calc_risco(x):
+                try: v = int(float(str(x)))
+                except: v = 0
+                return "🟢 100% Estável" if v == 0 else f"⚠️ Atenção ({v}/10)"
+            
+            df_safe_show['Status Risco'] = df_safe_show['Strikes'].apply(calc_risco)
+            st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhuma liga segura ainda.")
 
-        with abas[5]: st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
-        
-        with abas[6]: 
-            df_safe_show = st.session_state.get('df_safe', pd.DataFrame()).copy()
-            if not df_safe_show.empty:
-                def calc_risco(x):
-                    try: v = int(float(str(x)))
-                    except: v = 0
-                    return "🟢 100% Estável" if v == 0 else f"⚠️ Atenção ({v}/10)"
-                
-                df_safe_show['Status Risco'] = df_safe_show['Strikes'].apply(calc_risco)
-                st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
-            else:
-                st.info("Nenhuma liga segura ainda.")
-
-        with abas[7]: 
-            df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
-            if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
-            st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
+    with abas[7]: 
+        df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
+        if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
+        st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
     relogio = st.empty()
     for i in range(INTERVALO, 0, -1):
