@@ -26,7 +26,7 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # Modelo 2.0 Flash (Rápido e Eficiente)
+        # Modelo 2.0 Flash
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -34,6 +34,15 @@ try:
 except Exception as e:
     st.error(f"❌ Erro ao conectar na IA: {e}")
     IA_ATIVADA = False
+
+# --- ODDS TEÓRICAS (BACKUP) ---
+ODDS_ESTIMADAS = {
+    "Gol Relâmpago": 2.10, "Massacre": 1.70, "Porteira Aberta": 1.60,
+    "Janela de Ouro": 1.80, "Blitz Casa": 1.60, "Blitz Visitante": 1.60,
+    "Favorito": 1.50, "Choque Líderes": 1.90, "Briga de Rua": 1.90,
+    "Jogo Morno": 1.50, "GOLDEN BET": 1.80, "Múltipla": 2.50
+}
+ODD_MEDIA_GERAL = 1.65
 
 # --- INICIALIZAÇÃO DE VARIÁVEIS ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
@@ -43,10 +52,13 @@ if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 
-# Variáveis de Controle e Cota
+# VARIÁVEIS FINANCEIRAS GLOBAIS (CORREÇÃO DO ERRO)
+if 'stake_padrao' not in st.session_state: st.session_state['stake_padrao'] = 10.0
+if 'banca_inicial' not in st.session_state: st.session_state['banca_inicial'] = 100.0
+
+# Variáveis de Controle
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
-# CONTADOR DA IA
 if 'gemini_usage' not in st.session_state: st.session_state['gemini_usage'] = {'used': 0, 'limit': 10000}
 
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
@@ -154,7 +166,6 @@ def gerar_barra_pressao(rh, ra):
     except: return ""
 
 def extrair_dados_completos(stats_api):
-    """ Transforma o JSON da API num texto rico para a IA ler """
     if not stats_api: return "Dados indisponíveis."
     try:
         s1 = stats_api[0]['statistics']; s2 = stats_api[1]['statistics']
@@ -169,18 +180,25 @@ def extrair_dados_completos(stats_api):
         - Cartões Vermelhos: {gv(s1, 'Red Cards')} vs {gv(s2, 'Red Cards')}
         """
         return texto
-    except: return "Erro ao processar estatísticas completas."
+    except: return "Erro ao processar estatísticas."
+
+def recuperar_odd_justa(odd_str, estrategia):
+    try:
+        odd_val = float(odd_str)
+        if odd_val > 1.15: return odd_val
+    except: pass
+    for key, val in ODDS_ESTIMADAS.items():
+        if key in estrategia: return val
+    return ODD_MEDIA_GERAL
 
 # --- IA FUNCTIONS ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
-    """ Validação de Sinais - Modo Pago (Rápido) """
+    """ Validação de Sinais - Modo Pago """
     if not IA_ATIVADA: return ""
-    
     if st.session_state['ia_bloqueada_ate']:
         agora = datetime.now()
         if agora < st.session_state['ia_bloqueada_ate']: return ""
         else: st.session_state['ia_bloqueada_ate'] = None
-
     dados_ricos = extrair_dados_completos(stats_raw)
     prompt = f"""
     Aja como Trader Esportivo Profissional.
@@ -212,7 +230,6 @@ def analisar_bi_com_ia():
         df_f = df_hoje[df_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         total = len(df_f); greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
         resumo = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}%").to_dict()
-        
         prompt = f"""
         Analise o dia do meu robô ({hoje_str}):
         Total: {total}, Greens: {greens}
@@ -224,8 +241,7 @@ def analisar_bi_com_ia():
         return response.text
     except Exception as e: return f"Erro BI: {e}"
 
-def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
-    """ Análise Financeira Completa (Com Banca e Stake) """
+def analisar_financeiro_com_ia(stake, banca):
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados."
@@ -233,54 +249,31 @@ def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
         hoje_str = get_time_br().strftime('%Y-%m-%d')
         df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
         df_hoje = df[df['Data_Str'] == hoje_str].copy()
-        
         if df_hoje.empty: return "Sem operações hoje."
-        
-        df_hoje['Odd_Num'] = pd.to_numeric(df_hoje['Odd'], errors='coerce').fillna(1.0)
-        lucro_total = 0.0
-        investido = 0.0
-        greens_count = 0
-        odds_greens = []
-        
+        lucro_total = 0.0; investido = 0.0; qtd=0; odds_greens = []
         for _, row in df_hoje.iterrows():
             res = str(row['Resultado'])
+            odd_final = recuperar_odd_justa(row['Odd'], row['Estrategia'])
             if 'GREEN' in res:
-                lucro = (stake_padrao * row['Odd_Num']) - stake_padrao
-                lucro_total += lucro
-                investido += stake_padrao
-                greens_count += 1
-                if row['Odd_Num'] > 1: odds_greens.append(row['Odd_Num'])
+                lucro = (stake * odd_final) - stake
+                lucro_total += lucro; investido += stake; qtd+=1
+                if odd_final > 1: odds_greens.append(odd_final)
             elif 'RED' in res:
-                lucro_total -= stake_padrao
-                investido += stake_padrao
-        
+                lucro_total -= stake; investido += stake; qtd+=1
         roi = (lucro_total / investido * 100) if investido > 0 else 0
-        odd_media_green = (sum(odds_greens) / len(odds_greens)) if odds_greens else 0
-        banca_atual = banca_inicial + lucro_total
-        
+        odd_media = (sum(odds_greens)/len(odds_greens)) if odds_greens else 0
+        banca_atual = banca + lucro_total
         prompt_fin = f"""
-        Aja como um Gestor Financeiro de Apostas Profissional. Analise meu dia:
-        
-        DADOS DA BANCA:
-        - Banca Inicial: R$ {banca_inicial:.2f}
-        - Valor da Stake Fixa: R$ {stake_padrao:.2f}
-        - Banca Atual (Pós-Sessão): R$ {banca_atual:.2f}
-        
-        PERFORMANCE HOJE:
-        - Investido Total: R$ {investido:.2f}
-        - Lucro/Prejuízo Líquido: R$ {lucro_total:.2f}
-        - ROI do Dia: {roi:.2f}%
-        - Odd Média dos Acertos: {odd_media_green:.2f}
-        
-        Sua Missão:
-        Dê um feedback direto sobre a saúde financeira.
-        Avalie se a Stake de R$ {stake_padrao} está adequada para a banca de R$ {banca_atual} (Regra sugerida: 1% a 2%).
+        Aja como Gestor Financeiro. Analise meu dia:
+        - Banca Inicial: R$ {banca:.2f} | Banca Final: R$ {banca_atual:.2f}
+        - Stake Fixa: R$ {stake:.2f} | Entradas: {qtd}
+        - Lucro: R$ {lucro_total:.2f} | ROI: {roi:.2f}% | Odd Média: {odd_media:.2f}
+        Feedback curto sobre a saúde financeira.
         """
-        
         response = model_ia.generate_content(prompt_fin)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
-    except Exception as e: return f"Erro Financeiro: {e}"
+    except Exception as e: return f"Erro Fin: {e}"
 
 def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
@@ -300,60 +293,40 @@ def criar_estrategia_nova_ia():
     except Exception as e: return f"Erro na criação: {e}"
 
 def gerar_insights_matinais_ia(api_key):
-    """ Busca previsões pré-jogo na API e pede análise MULTI-MERCADO """
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
         url = "https://v3.football.api-sports.io/fixtures"
-        ligas_foco = "71,72,39,140,78,135,61,2" # Ligas Principais
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
-        
         LIGAS_TOP = [71, 72, 39, 140, 78, 135, 61, 2]
-        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP][:5] # Top 5 jogos
-        
+        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP][:5] 
         if not jogos_top: return "Nenhum jogo 'Top Tier' para análise matinal hoje."
-
         relatorio_final = ""
         for j in jogos_top:
             fid = j['fixture']['id']
-            time_casa = j['teams']['home']['name']
-            time_fora = j['teams']['away']['name']
-            
+            time_casa = j['teams']['home']['name']; time_fora = j['teams']['away']['name']
             url_pred = "https://v3.football.api-sports.io/predictions"
             res_pred = requests.get(url_pred, headers={"x-apisports-key": api_key}, params={"fixture": fid}).json()
             if res_pred.get('response'):
                 pred = res_pred['response'][0]['predictions']
                 comp = res_pred['response'][0]['comparison']
-                
                 info_jogo = f"""
                 JOGO: {time_casa} vs {time_fora}
-                - Previsão Vencedor: {pred['winner']['name']} (Comment: {pred['advice']})
-                - Força Ataque: Casa {comp['att']['home']} vs Fora {comp['att']['away']}
-                - Força Defesa: Casa {comp['def']['home']} vs Fora {comp['def']['away']}
-                - Forma: Casa {comp['form']['home']} vs Fora {comp['form']['away']}
-                - H2H: Casa {comp['h2h']['home']} vs Fora {comp['h2h']['away']}
+                - Previsão API: {pred['advice']} | Prob: {pred['percent']}
+                - Ataque: {comp['att']['home']} vs {comp['att']['away']}
+                - Defesa: {comp['def']['home']} vs {comp['def']['away']}
                 """
-                
                 prompt_matinal = f"""
-                Analise esses dados pré-jogo. 
-                {info_jogo}
-                
-                Busque oportunidades claras em VÁRIOS MERCADOS (não só gols):
-                1. Gols (Over/Under)
-                2. Escanteios (Se os times tiverem Ataque alto e Defesa fraca)
-                3. Cartões (Se for jogo equilibrado/pegado)
-                4. Ambas Marcam
-                
-                Diga apenas o melhor insight ou "Sem Oportunidade Clara".
+                Analise dados pré-jogo: {info_jogo}
+                Busque oportunidades em VÁRIOS MERCADOS (Gols, Cantos, Cartões, Ambas Marcam).
+                Diga apenas o melhor insight.
                 """
-                
                 resp_ia = model_ia.generate_content(prompt_matinal)
                 st.session_state['gemini_usage']['used'] += 1
                 relatorio_final += f"⚽ <b>{time_casa} x {time_fora}</b>\n💡 {resp_ia.text.strip()}\n\n"
                 time.sleep(1)
-        
         return relatorio_final if relatorio_final else "Sem insights claros."
     except Exception as e: return f"Erro Matinal: {e}"
 
@@ -386,21 +359,16 @@ def salvar_bigdata(jogo_api, stats):
         placar = f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}"
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
-        
         chutes = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
         gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
         cantos = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
         cartoes = gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards')
-        ataques = gv(s1, 'Dangerous Attacks') + gv(s2, 'Dangerous Attacks')
         posse = f"{gv(s1, 'Ball Possession')}/{gv(s2, 'Ball Possession')}"
-        faltas = gv(s1, 'Fouls') + gv(s2, 'Fouls')
-        
         novo_item = {
             'FID': fid, 'Data': get_time_br().strftime('%Y-%m-%d'), 
             'Liga': jogo_api['league']['name'], 'Jogo': f"{home} x {away}",
             'Placar_Final': placar, 'Chutes_Total': chutes, 'Chutes_Gol': gol,
-            'Escanteios': cantos, 'Posse_Casa': str(posse), 
-            'Faltas': faltas, 'Ataques_Perigosos': ataques
+            'Escanteios': cantos, 'Posse_Casa': str(posse), 'Cartoes': cartoes
         }
         df_bd = carregar_aba("BigData", COLS_BIGDATA)
         df_bd = pd.concat([df_bd, pd.DataFrame([novo_item])], ignore_index=True)
@@ -604,6 +572,7 @@ def verificar_reset_diario():
         st.session_state['api_usage']['used'] = 0; st.session_state['data_api_usage'] = hoje_utc
         st.session_state['gemini_usage']['used'] = 0
         st.session_state['alvos_do_dia'] = {}
+        st.session_state['matinal_enviado'] = False
         return True
     return False
 
