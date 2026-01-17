@@ -607,18 +607,21 @@ def processar_resultado(sinal, jogo_api, token, chats):
 
     if (gh+ga) > (ph+pa):
         if "Morno" in sinal['Estrategia']: 
-            sinal['Resultado'] = '❌ RED'
-            if key_red not in st.session_state['alertas_enviados']:
-                enviar_telegram(token, chats, f"❌ <b>RED | GOL SAIU</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
-                st.session_state['alertas_enviados'].add(key_red)
-                st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
-            return True
+            if (gh+ga) >= 2: # SÓ DÁ RED SE TIVER 2 OU MAIS GOLS
+                sinal['Resultado'] = '❌ RED'
+                if key_red not in st.session_state['alertas_enviados']:
+                    enviar_telegram(token, chats, f"❌ <b>RED | OVER 1.5 BATIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
+                    st.session_state['alertas_enviados'].add(key_red)
+                    st.session_state['precisa_salvar'] = True
+                return True
+            else:
+                return False # Saiu 1 gol, mas ainda está vivo
         else:
             sinal['Resultado'] = '✅ GREEN'
             if key_green in st.session_state['alertas_enviados']: return True
             enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
             st.session_state['alertas_enviados'].add(key_green)
-            st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
+            st.session_state['precisa_salvar'] = True 
             return True
 
     eh_ht_strat = any(x in sinal['Estrategia'] for x in STRATS_HT_ONLY)
@@ -627,7 +630,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | INTERVALO (HT)</b>\n⚽ {sinal['Jogo']}\n📉 Placar HT: {gh}x{ga}\n🎯 {sinal['Estrategia']} (Não bateu no 1º Tempo)")
             st.session_state['alertas_enviados'].add(key_red)
-            st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
+            st.session_state['precisa_salvar'] = True 
         return True
 
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
@@ -636,14 +639,14 @@ def processar_resultado(sinal, jogo_api, token, chats):
              if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN | UNDER BATIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}")
                 st.session_state['alertas_enviados'].add(key_green)
-                st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
+                st.session_state['precisa_salvar'] = True 
              return True
         
         sinal['Resultado'] = '❌ RED'
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {sinal['Estrategia']}")
             st.session_state['alertas_enviados'].add(key_red)
-            st.session_state['precisa_salvar'] = True # MARCA PARA SALVAR
+            st.session_state['precisa_salvar'] = True 
         return True
     return False
 
@@ -772,12 +775,11 @@ def fetch_stats_single(fid, api_key):
 
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
-    # REDUZIDO PARA 3 E COM DELAY PARA EVITAR O ERRO 'TOO MANY REQUESTS'
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {}
         for j in jogos_alvo:
             futures[executor.submit(fetch_stats_single, j['fixture']['id'], api_key)] = j
-            time.sleep(0.2) # Respiro para a API
+            time.sleep(0.2)
         
         for future in as_completed(futures):
             fid, stats, headers = future.result()
@@ -903,15 +905,16 @@ with st.sidebar:
         if c2.button("❌ NÃO"): st.session_state['confirmar_reset'] = False; st.rerun()
 
 if st.session_state.ROBO_LIGADO:
+    # -------------------------------------------------------------
+    # SOLUÇÃO DEFINITIVA: CONTAINER ÚNICO NA RAIZ
+    # -------------------------------------------------------------
+    # Todo conteúdo visual será desenhado aqui dentro.
+    # Antes de desenhar, nós limpamos esse container.
+    main_placeholder = st.empty()
+    
     carregar_tudo()
     verificar_automacao_bi(TG_TOKEN, TG_CHAT)
     verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY)
-    
-    # --- AQUI É O SEGREDO: CONTAINER ÚNICO DEFINIDO NO TOPO ---
-    # Criamos o placeholder antes de tudo e limpamos ele explicitamente
-    main_placeholder = st.empty()
-    timer_placeholder = st.empty()
-    main_placeholder.empty() 
     
     ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
     df_obs = st.session_state.get('df_vip', pd.DataFrame()); count_obs = len(df_obs)
@@ -1057,7 +1060,11 @@ if st.session_state.ROBO_LIGADO:
                 st.session_state['precisa_salvar'] = False
                 st.toast("💾 Dados salvos com sucesso!")
 
-    # --- RENDERIZAÇÃO VISUAL DENTRO DO CONTAINER MESTRE ---
+    # -------------------------------------------------------------
+    # RENDERIZAÇÃO DENTRO DO CONTAINER ÚNICO
+    # -------------------------------------------------------------
+    # Isso garante que o Streamlit substitua o conteúdo anterior
+    main_placeholder.empty() # Limpa o container antes de escrever
     with main_placeholder.container():
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
         else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
@@ -1215,12 +1222,10 @@ if st.session_state.ROBO_LIGADO:
             if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
-    # Timer separado, desenhado em seu próprio container (limpo a cada loop)
-    for i in range(INTERVALO, 0, -1):
-        with timer_placeholder.container():
+        for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
-        time.sleep(1)
-    st.rerun()
+            time.sleep(1)
+        st.rerun()
 else:
     st.title("❄️ Neves Analytics")
     st.info("💡 Robô em espera. Configure na lateral.")
