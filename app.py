@@ -18,9 +18,7 @@ import json
 # --- 0. CONFIGURAÇÃO E CSS ---
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 
-# --- CONTAINER MESTRE (SOLUÇÃO FINAL DO BUG VISUAL) ---
-# Tudo o que é visual será renderizado aqui dentro.
-# Isso garante que a tela anterior seja sempre limpa antes da nova.
+# --- CONTAINER MESTRE ---
 placeholder_root = st.empty()
 
 # --- CONFIGURAÇÃO DA IA (GEMINI) ---
@@ -28,15 +26,13 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # ATUALIZADO: Trocado para 'gemini-1.5-flash' para evitar erro 404 e melhorar velocidade
+        # MODELO VALIDADO: gemini-2.0-flash (Mais rápido e compatível com sua chave)
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
-        # Adicionado aviso caso a chave não seja encontrada
-        st.error("⚠️ Chave GEMINI_KEY não encontrada no secrets.toml!")
+        st.error("⚠️ Chave GEMINI_KEY não encontrada nos Secrets!")
 except Exception as e:
-    # Exibe o erro real em vez de silenciar
-    st.error(f"❌ Erro na conexão com Gemini: {e}")
+    st.error(f"❌ Erro ao conectar na IA: {e}")
     IA_ATIVADA = False
 
 # --- INICIALIZAÇÃO DE VARIÁVEIS ---
@@ -167,7 +163,7 @@ def consultar_ia_gemini(dados_jogo, estrategia):
         Responda em UMA ÚNICA FRASE curta e direta (máx 15 palavras) dando seu veredito e o motivo principal.
         Exemplo: "Aprovado, o time da casa está amassando." ou "Arriscado, jogo muito travado no meio campo."
         """
-        response = model_ia.generate_content(prompt)
+        response = model_ia.generate_content(prompt, request_options={"timeout": 10})
         return f"\n🤖 <b>IA:</b> {response.text.strip()}"
     except:
         return ""
@@ -1086,8 +1082,12 @@ if st.session_state.ROBO_LIGADO:
                                 
                                 opiniao_ia = ""
                                 if IA_ATIVADA:
-                                    dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
-                                    opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
+                                    try:
+                                        # FREIO PARA CONTA GRÁTIS (Evita Erro 429)
+                                        time.sleep(4)
+                                        dados_ia = {'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar, 'stats': s['stats']}
+                                        opiniao_ia = consultar_ia_gemini(dados_ia, s['tag'])
+                                    except: pass # Se der erro no sleep ou na chamada, segue sem IA
 
                                 msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
                                 enviar_telegram(TG_TOKEN, TG_CHAT, msg)
@@ -1295,4 +1295,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
