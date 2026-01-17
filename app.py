@@ -28,11 +28,16 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # Usando 'gemini-pro' que é mais robusto para análise de contexto geral
-        model_ia = genai.GenerativeModel('gemini-pro') 
+        # ATUALIZADO: Trocado para 'gemini-1.5-flash' para evitar erro 404 e melhorar velocidade
+        model_ia = genai.GenerativeModel('gemini-1.5-flash') 
         IA_ATIVADA = True
+    else:
+        # Adicionado aviso caso a chave não seja encontrada
+        st.error("⚠️ Chave GEMINI_KEY não encontrada no secrets.toml!")
 except Exception as e:
-    pass 
+    # Exibe o erro real em vez de silenciar
+    st.error(f"❌ Erro na conexão com Gemini: {e}")
+    IA_ATIVADA = False
 
 # --- INICIALIZAÇÃO DE VARIÁVEIS ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
