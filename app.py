@@ -32,7 +32,6 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # Modelo 2.0 Flash (Rápido e Eficiente)
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -100,6 +99,7 @@ st.markdown("""
 
 # --- 1. CONEXÃO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
+
 COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
@@ -107,7 +107,10 @@ COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
 COLS_BIGDATA = ['FID', 'Data', 'Liga', 'Jogo', 'Placar_Final', 'Chutes_Total', 'Chutes_Gol', 'Escanteios', 'Posse_Casa', 'Cartoes']
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 
-# --- 2. UTILITÁRIOS ---
+# ========================================================================================
+# SEÇÃO 2: DEFINIÇÃO DE TODAS AS FUNÇÕES (AGORA ESTÃO NO TOPO PARA EVITAR NAME ERROR)
+# ========================================================================================
+
 def get_time_br(): return datetime.now(pytz.timezone('America/Sao_Paulo'))
 def clean_fid(x): 
     try: return str(int(float(x))) 
@@ -132,6 +135,16 @@ def gerar_barra_pressao(rh, ra):
         elif nivel_h > 0 and nivel_a > 0: return "🟨🟨 Jogo Aberto"
         else: return ""
     except: return ""
+
+def verificar_reset_diario():
+    hoje_utc = datetime.now(pytz.utc).date()
+    if st.session_state['data_api_usage'] != hoje_utc:
+        st.session_state['api_usage']['used'] = 0; st.session_state['data_api_usage'] = hoje_utc
+        st.session_state['gemini_usage']['used'] = 0
+        st.session_state['alvos_do_dia'] = {}
+        st.session_state['matinal_enviado'] = False
+        return True
+    return False
 
 def extrair_dados_completos(stats_api):
     if not stats_api: return "Dados indisponíveis."
@@ -169,7 +182,6 @@ def recuperar_odd_justa(odd_str, estrategia):
     except: pass
     return calcular_odd_dinamica(estrategia)
 
-# --- IA FUNCTIONS ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     if not IA_ATIVADA: return ""
     if st.session_state['ia_bloqueada_ate']:
@@ -267,6 +279,110 @@ def criar_estrategia_nova_ia():
         return response.text
     except Exception as e: return f"Erro na criação: {e}"
 
+def _worker_telegram(token, chat_id, msg):
+    try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
+    except: pass
+
+def _worker_telegram_photo(token, chat_id, photo_buffer, caption):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendPhoto"
+        files = {'photo': photo_buffer}
+        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'}
+        requests.post(url, files=files, data=data, timeout=10)
+    except: pass
+
+def enviar_telegram(token, chat_ids, msg):
+    if not token or not chat_ids: return
+    ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+    for cid in ids:
+        t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
+        t.daemon = True; t.start()
+
+def enviar_analise_estrategia(token, chat_ids):
+    df_bd = carregar_aba("BigData", COLS_BIGDATA)
+    if len(df_bd) < 10: return 
+    sugestao = criar_estrategia_nova_ia()
+    ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+    msg = f"🧪 <b>LABORATÓRIO DE ESTRATÉGIAS (IA)</b>\n\n{sugestao}"
+    for cid in ids: enviar_telegram(token, cid, msg)
+
+def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
+    msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro Líquido:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}\n\n<i>Cálculo baseado na gestão configurada.</i>"
+    enviar_telegram(token, chat_ids, msg)
+
+def enviar_relatorio_bi(token, chat_ids):
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return
+    try:
+        df = df.copy()
+        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
+        df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+    except: return
+    
+    hoje = pd.to_datetime(get_time_br().date())
+    mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
+    t_a = len(df)
+    g_a = df['Resultado'].str.contains('GREEN').sum()
+    w_a = (g_a/t_a*100) if t_a>0 else 0
+
+    if token and chat_ids:
+        plt.style.use('dark_background')
+        fig, ax = plt.subplots(figsize=(7, 4))
+        stats = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        if not stats.empty:
+            c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
+            c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
+            ax.set_title(f'PERFORMANCE 30 DIAS', color='white', fontsize=12)
+            ax.legend(title='', frameon=False)
+            plt.tight_layout()
+            buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
+            msg = f"📊 <b>RELATÓRIO BI</b>\n\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
+            ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+            for cid in ids: buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
+            plt.close(fig)
+
+def verificar_automacao_bi(token, chat_ids, stake_padrao, banca_inicial):
+    agora = get_time_br()
+    hoje_str = agora.strftime('%Y-%m-%d')
+    if st.session_state['last_check_date'] != hoje_str:
+        st.session_state['bi_enviado'] = False
+        st.session_state['ia_enviada'] = False
+        st.session_state['financeiro_enviado'] = False
+        st.session_state['bigdata_enviado'] = False
+        st.session_state['matinal_enviado'] = False
+        st.session_state['last_check_date'] = hoje_str
+    if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
+        enviar_relatorio_bi(token, chat_ids)
+        st.session_state['bi_enviado'] = True
+        st.toast("📊 Relatório BI Enviado!")
+    if agora.hour == 23 and agora.minute >= 35 and not st.session_state['ia_enviada']:
+        analise = analisar_bi_com_ia()
+        msg_ia = f"🧠 <b>CONSULTORIA DIÁRIA DA IA</b>\n\n{analise}"
+        enviar_telegram(token, chat_ids, msg_ia)
+        st.session_state['ia_enviada'] = True
+        st.toast("🤖 Relatório IA Enviado!")
+    if agora.hour == 23 and agora.minute >= 40 and not st.session_state['financeiro_enviado']:
+        analise_fin = analisar_financeiro_com_ia(stake_padrao, banca_inicial)
+        msg_fin = f"💰 <b>CONSULTORIA FINANCEIRA</b>\n\n{analise_fin}"
+        enviar_telegram(token, chat_ids, msg_fin)
+        st.session_state['financeiro_enviado'] = True
+        st.toast("💰 Relatório Financeiro Enviado!")
+    if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
+        enviar_analise_estrategia(token, chat_ids)
+        st.session_state['bigdata_enviado'] = True
+        st.toast("🧪 Sugestão de Estratégia Enviada!")
+
+def adicionar_historico(item):
+    if 'historico_full' not in st.session_state: st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
+    df_memoria = st.session_state['historico_full']
+    df_novo = pd.DataFrame([item])
+    df_final = pd.concat([df_novo, df_memoria], ignore_index=True)
+    st.session_state['historico_full'] = df_final
+    st.session_state['historico_sinais'].insert(0, item)
+    st.session_state['precisa_salvar'] = True 
+    return True
+
 def gerar_insights_matinais_ia(api_key):
     """ Sniper Matinal + Registro no BI """
     if not IA_ATIVADA: return "IA Offline."
@@ -279,18 +395,15 @@ def gerar_insights_matinais_ia(api_key):
         LIGAS_TOP = [71, 72, 39, 140, 78, 135, 61, 2]
         jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP][:5] 
         if not jogos_top: return "Nenhum jogo 'Top Tier' para análise matinal hoje."
-
         relatorio_final = ""
         for j in jogos_top:
             fid = j['fixture']['id']
             time_casa = j['teams']['home']['name']; time_fora = j['teams']['away']['name']
-            # Evita duplicar
             ja_enviado = False
             for s in st.session_state['historico_sinais']:
                 if str(s['FID']) == str(fid) and "Sniper" in s['Estrategia']:
                     ja_enviado = True; break
             if ja_enviado: continue
-
             url_pred = "https://v3.football.api-sports.io/predictions"
             res_pred = requests.get(url_pred, headers={"x-apisports-key": api_key}, params={"fixture": fid}).json()
             if res_pred.get('response'):
@@ -307,11 +420,9 @@ def gerar_insights_matinais_ia(api_key):
                 resp_ia = model_ia.generate_content(prompt_matinal)
                 st.session_state['gemini_usage']['used'] += 1
                 texto_ia = resp_ia.text.strip().upper()
-                
                 if "BET:" in texto_ia:
                     aposta = texto_ia.replace("BET:", "").strip()
                     relatorio_final += f"🎯 <b>SNIPER: {time_casa} x {time_fora}</b>\n👉 {aposta}\n\n"
-                    # Salva como Pendente
                     item_bi = {
                         "FID": str(fid), "Data": hoje, "Hora": "08:00", 
                         "Liga": j['league']['name'], "Jogo": f"{time_casa} x {time_fora}", 
@@ -325,24 +436,30 @@ def gerar_insights_matinais_ia(api_key):
         return relatorio_final if relatorio_final else "Sem oportunidades claras no Sniper."
     except Exception as e: return f"Erro Matinal: {e}"
 
-# --- FUNÇÃO PROCESSAR RESULTADO (RESTITUÍDA) ---
+def verificar_alerta_matinal(token, chat_ids, api_key):
+    agora = get_time_br()
+    if 8 <= agora.hour < 11 and not st.session_state['matinal_enviado']:
+        insights = gerar_insights_matinais_ia(api_key)
+        if insights and "Sem insights" not in insights:
+            ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+            msg_final = f"🌅 <b>INSIGHTS MATINAIS (IA + API)</b>\n\n{insights}"
+            for cid in ids: enviar_telegram(token, cid, msg_final)
+            st.session_state['matinal_enviado'] = True
+            st.toast("Insights Matinais Enviados!")
+
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0
     ga = jogo_api['goals']['away'] or 0
     st_short = jogo_api['fixture']['status']['short']
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque Líderes", "Briga de Rua"]
-    
     if "Múltipla" in sinal['Estrategia'] or "Sniper" in sinal['Estrategia']: return False
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
-
     fid = clean_fid(sinal['FID'])
     strat = str(sinal['Estrategia'])
     key_green = f"RES_GREEN_{fid}_{strat}"
     key_red = f"RES_RED_{fid}_{strat}"
-
     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
-
     if (gh+ga) > (ph+pa):
         if "Morno" in sinal['Estrategia']: 
             if (gh+ga) >= 2:
@@ -360,7 +477,6 @@ def processar_resultado(sinal, jogo_api, token, chats):
             st.session_state['alertas_enviados'].add(key_green)
             st.session_state['precisa_salvar'] = True 
             return True
-
     eh_ht_strat = any(x in sinal['Estrategia'] for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
@@ -369,7 +485,6 @@ def processar_resultado(sinal, jogo_api, token, chats):
             st.session_state['alertas_enviados'].add(key_red)
             st.session_state['precisa_salvar'] = True 
         return True
-
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
         if "Morno" in sinal['Estrategia'] and (gh+ga) <= 1:
              sinal['Resultado'] = '✅ GREEN'
@@ -386,14 +501,32 @@ def processar_resultado(sinal, jogo_api, token, chats):
         return True
     return False
 
+def atualizar_historico_ram(lista_atualizada_hoje):
+    if 'historico_full' not in st.session_state: return
+    df_memoria = st.session_state['historico_full']
+    df_hoje_updates = pd.DataFrame(lista_atualizada_hoje)
+    if df_hoje_updates.empty or df_memoria.empty: return
+    mapa_atualizacao = {}
+    for _, row in df_hoje_updates.iterrows():
+        chave = f"{row['FID']}_{row['Estrategia']}"
+        mapa_atualizacao[chave] = row
+    def atualizar_linha(row):
+        chave = f"{row['FID']}_{row['Estrategia']}"
+        if chave in mapa_atualizacao:
+            nova_linha = mapa_atualizacao[chave]
+            if str(row['Resultado']) != str(nova_linha['Resultado']) or str(row['Odd']) != str(nova_linha['Odd']):
+                st.session_state['precisa_salvar'] = True
+            return nova_linha
+        return row
+    df_final = df_memoria.apply(atualizar_linha, axis=1)
+    st.session_state['historico_full'] = df_final
+
 def conferir_resultados_sniper(jogos_live):
-    """ AUDITORIA AUTOMÁTICA: Confere se o Sniper Matinal acertou """
     hist = st.session_state.get('historico_sinais', [])
     snipers_pendentes = [s for s in hist if s['Estrategia'] == "Sniper Matinal" and s['Resultado'] == "Pendente"]
     if not snipers_pendentes: return
     updates_buffer = []
     ids_live_ou_fim = {str(j['fixture']['id']): j for j in jogos_live} 
-    
     for s in snipers_pendentes:
         fid = str(s['FID'])
         if fid in ids_live_ou_fim:
@@ -404,19 +537,16 @@ def conferir_resultados_sniper(jogos_live):
                 total_gols = gh + ga
                 target = s['Placar_Sinal'] 
                 resultado_final = None
-                
                 if "OVER 2.5" in target: resultado_final = '✅ GREEN' if total_gols > 2.5 else '❌ RED'
                 elif "UNDER 2.5" in target: resultado_final = '✅ GREEN' if total_gols < 2.5 else '❌ RED'
                 elif "AMBAS MARCAM" in target: resultado_final = '✅ GREEN' if (gh > 0 and ga > 0) else '❌ RED'
                 elif "CASA VENCE" in target: resultado_final = '✅ GREEN' if gh > ga else '❌ RED'
                 elif "FORA VENCE" in target: resultado_final = '✅ GREEN' if ga > gh else '❌ RED'
-                
                 if resultado_final:
                     s['Resultado'] = resultado_final
                     updates_buffer.append(s)
                     enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], 
                                     f"{resultado_final} <b>RESULTADO SNIPER</b>\n⚽ {s['Jogo']}\n🎯 {target}\n📉 Placar: {gh}x{ga}")
-
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
@@ -462,39 +592,14 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             if processar_resultado(s, jogo_encontrado, token, chats): updates_buffer.append(s)
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
-def verificar_var_rollback(jogos_live, token, chats):
-    hist = st.session_state['historico_sinais']
-    greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
-    if not greens: return
-    updates_buffer = []
-    for s in greens:
-        if "Morno" in s['Estrategia']: continue
-        fid = int(clean_fid(s.get('FID', 0)))
-        jogo_api = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
-        if jogo_api:
-            gh = jogo_api['goals']['home'] or 0; ga = jogo_api['goals']['away'] or 0
-            try:
-                ph, pa = map(int, s['Placar_Sinal'].split('x'))
-                if (gh + ga) <= (ph + pa):
-                    key_var = f"VAR_{fid}_{s['Estrategia']}_{gh}x{ga}"
-                    s['Resultado'] = 'Pendente'
-                    st.session_state['precisa_salvar'] = True
-                    updates_buffer.append(s)
-                    if key_var not in st.session_state['alertas_enviados']:
-                        msg = (f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n\n⚽ {s['Jogo']}\n📉 Placar voltou para: <b>{gh}x{ga}</b>\n🔄 Status revertido para <b>PENDENTE</b>.")
-                        enviar_telegram(token, chats, msg)
-                        st.session_state['alertas_enviados'].add(key_var)
-            except: pass
-    if updates_buffer: atualizar_historico_ram(updates_buffer)
-
-def reenviar_sinais(token, chats):
-    hist = st.session_state['historico_sinais']
-    if not hist: return st.toast("Sem sinais.")
-    st.toast("Reenviando...")
-    for s in reversed(hist):
-        prob = buscar_inteligencia(s['Estrategia'], s['Liga'], s['Jogo'])
-        enviar_telegram(token, chats, f"🔄 <b>REENVIO</b>\n\n🚨 {s['Estrategia']}\n⚽ {s['Jogo']}\n⚠️ Placar: {s.get('Placar_Sinal','?')}{prob}")
-        time.sleep(0.5)
+def update_api_usage(headers):
+    if not headers: return
+    try:
+        limit = int(headers.get('x-ratelimit-requests-limit', 75000))
+        remaining = int(headers.get('x-ratelimit-requests-remaining', 0))
+        used = limit - remaining
+        st.session_state['api_usage'] = {'used': used, 'limit': limit}
+    except: pass
 
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
@@ -578,28 +683,6 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
     return SINAIS
 
-def resetar_sistema_completo():
-    st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
-    st.session_state['historico_sinais'] = []
-    st.session_state['df_black'] = pd.DataFrame(columns=COLS_BLACK)
-    st.session_state['df_safe'] = pd.DataFrame(columns=COLS_SAFE)
-    st.session_state['df_vip'] = pd.DataFrame(columns=COLS_OBS)
-    st.session_state['alvos_do_dia'] = {}
-    st.session_state['alertas_enviados'] = set()
-    st.session_state['multiplas_enviadas'] = set()
-    st.session_state['memoria_pressao'] = {}
-    st.session_state['controle_stats'] = {}
-    st.session_state['jogos_salvos_bigdata'] = set()
-    try:
-        conn.clear(worksheet="Historico"); salvar_aba("Historico", st.session_state['historico_full'])
-        conn.clear(worksheet="Blacklist"); salvar_aba("Blacklist", st.session_state['df_black'])
-        conn.clear(worksheet="Seguras"); salvar_aba("Seguras", st.session_state['df_safe'])
-        conn.clear(worksheet="Obs"); salvar_aba("Obs", st.session_state['df_vip'])
-        conn.clear(worksheet="BigData") 
-    except: pass
-    st.cache_data.clear()
-    st.toast("♻️ SISTEMA COMPLETAMENTE RESETADO!")
-
 # --- SIDEBAR E LAYOUT ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
@@ -635,7 +718,7 @@ with st.sidebar:
             else: st.error("Abra a aba Financeiro primeiro.")
 
     with st.expander("💰 Gestão de Banca", expanded=False):
-        stake_padrao = st.number_input("Valor da Entrada (R$)", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
+        stake_padrao = st.number_input("Valor da Aposta (R$)", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
         banca_inicial = st.number_input("Banca Inicial (R$)", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
         st.session_state['stake_padrao'] = stake_padrao
         st.session_state['banca_inicial'] = banca_inicial
@@ -645,7 +728,7 @@ with st.sidebar:
         u = st.session_state['api_usage']; perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
         st.progress(perc); st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
     
-    with st.expander("🤖 Consumo IA (Gemini)", expanded=False):
+    with st.expander("🤖 Consumo IA", expanded=False):
         u_ia = st.session_state['gemini_usage']
         perc_ia = min(u_ia['used'] / u_ia['limit'], 1.0)
         st.progress(perc_ia)
@@ -690,7 +773,7 @@ if st.session_state.ROBO_LIGADO:
         safe_api = st.session_state.get('API_KEY', '')
 
         # EXECUÇÃO DAS AUTOMAÇÕES
-        verificar_automacao_bi(safe_token, safe_chat, s_padrao)
+        verificar_automacao_bi(safe_token, safe_chat, s_padrao, b_inicial)
         verificar_alerta_matinal(safe_token, safe_chat, safe_api)
         
         ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
