@@ -26,7 +26,7 @@ IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        # Modelo 2.0 Flash
+        # Mantendo o 2.0 Flash conforme validado
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
     else:
@@ -35,15 +35,6 @@ except Exception as e:
     st.error(f"❌ Erro ao conectar na IA: {e}")
     IA_ATIVADA = False
 
-# --- ODDS TEÓRICAS (BACKUP) ---
-ODDS_ESTIMADAS = {
-    "Gol Relâmpago": 2.10, "Massacre": 1.70, "Porteira Aberta": 1.60,
-    "Janela de Ouro": 1.80, "Blitz Casa": 1.60, "Blitz Visitante": 1.60,
-    "Favorito": 1.50, "Choque Líderes": 1.90, "Briga de Rua": 1.90,
-    "Jogo Morno": 1.50, "GOLDEN BET": 1.80, "Múltipla": 2.50
-}
-ODD_MEDIA_GERAL = 1.65
-
 # --- INICIALIZAÇÃO DE VARIÁVEIS ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
@@ -51,10 +42,6 @@ if 'last_static_update' not in st.session_state: st.session_state['last_static_u
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
-
-# VARIÁVEIS FINANCEIRAS GLOBAIS (CORREÇÃO DO ERRO)
-if 'stake_padrao' not in st.session_state: st.session_state['stake_padrao'] = 10.0
-if 'banca_inicial' not in st.session_state: st.session_state['banca_inicial'] = 100.0
 
 # Variáveis de Controle
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
@@ -182,14 +169,39 @@ def extrair_dados_completos(stats_api):
         return texto
     except: return "Erro ao processar estatísticas."
 
+# --- FUNÇÃO DE ODD DINÂMICA (AQUI ESTÁ A MÁGICA) ---
+def calcular_odd_dinamica(estrategia):
+    """ Calcula a média real das odds do histórico para a estratégia, ignorando dados sujos """
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return 1.65 # Fallback global se não tiver dados
+    
+    try:
+        # Filtra apenas a estratégia desejada
+        df_strat = df[df['Estrategia'] == estrategia].copy()
+        if df_strat.empty: return 1.65
+        
+        # Converte para número e limpa sujeira
+        df_strat['Odd_Num'] = pd.to_numeric(df_strat['Odd'], errors='coerce')
+        
+        # O PULO DO GATO: Ignora odds < 1.15 (que provavelmente eram placeholder ou erro)
+        df_limpo = df_strat[df_strat['Odd_Num'] > 1.15]
+        
+        if df_limpo.empty: return 1.65 # Se tudo era sujo, usa padrão
+        
+        media_real = df_limpo['Odd_Num'].mean()
+        return float(f"{media_real:.2f}")
+    except:
+        return 1.65
+
 def recuperar_odd_justa(odd_str, estrategia):
+    """ Tenta usar odd real, se falhar, usa a Dinâmica Calculada """
     try:
         odd_val = float(odd_str)
         if odd_val > 1.15: return odd_val
     except: pass
-    for key, val in ODDS_ESTIMADAS.items():
-        if key in estrategia: return val
-    return ODD_MEDIA_GERAL
+    
+    # Se falhou, calcula a média histórica dessa estratégia
+    return calcular_odd_dinamica(estrategia)
 
 # --- IA FUNCTIONS ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
@@ -199,6 +211,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
         agora = datetime.now()
         if agora < st.session_state['ia_bloqueada_ate']: return ""
         else: st.session_state['ia_bloqueada_ate'] = None
+
     dados_ricos = extrair_dados_completos(stats_raw)
     prompt = f"""
     Aja como Trader Esportivo Profissional.
@@ -230,6 +243,7 @@ def analisar_bi_com_ia():
         df_f = df_hoje[df_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         total = len(df_f); greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
         resumo = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}%").to_dict()
+        
         prompt = f"""
         Analise o dia do meu robô ({hoje_str}):
         Total: {total}, Greens: {greens}
@@ -241,7 +255,7 @@ def analisar_bi_com_ia():
         return response.text
     except Exception as e: return f"Erro BI: {e}"
 
-def analisar_financeiro_com_ia(stake, banca):
+def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados."
@@ -249,31 +263,47 @@ def analisar_financeiro_com_ia(stake, banca):
         hoje_str = get_time_br().strftime('%Y-%m-%d')
         df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
         df_hoje = df[df['Data_Str'] == hoje_str].copy()
+        
         if df_hoje.empty: return "Sem operações hoje."
-        lucro_total = 0.0; investido = 0.0; qtd=0; odds_greens = []
+        
+        df_hoje['Odd_Num'] = pd.to_numeric(df_hoje['Odd'], errors='coerce').fillna(1.0)
+        lucro_total = 0.0
+        investido = 0.0
+        greens_count = 0
+        odds_greens = []
+        
         for _, row in df_hoje.iterrows():
             res = str(row['Resultado'])
+            # AQUI USA A ODD DINAMICA
             odd_final = recuperar_odd_justa(row['Odd'], row['Estrategia'])
+            
             if 'GREEN' in res:
-                lucro = (stake * odd_final) - stake
-                lucro_total += lucro; investido += stake; qtd+=1
+                lucro = (stake_padrao * odd_final) - stake_padrao
+                lucro_total += lucro
+                investido += stake_padrao
+                greens_count += 1
                 if odd_final > 1: odds_greens.append(odd_final)
             elif 'RED' in res:
-                lucro_total -= stake; investido += stake; qtd+=1
+                lucro_total -= stake_padrao
+                investido += stake_padrao
+        
         roi = (lucro_total / investido * 100) if investido > 0 else 0
-        odd_media = (sum(odds_greens)/len(odds_greens)) if odds_greens else 0
-        banca_atual = banca + lucro_total
+        odd_media_green = (sum(odds_greens) / len(odds_greens)) if odds_greens else 0
+        banca_atual = banca_inicial + lucro_total
+        
         prompt_fin = f"""
         Aja como Gestor Financeiro. Analise meu dia:
-        - Banca Inicial: R$ {banca:.2f} | Banca Final: R$ {banca_atual:.2f}
-        - Stake Fixa: R$ {stake:.2f} | Entradas: {qtd}
-        - Lucro: R$ {lucro_total:.2f} | ROI: {roi:.2f}% | Odd Média: {odd_media:.2f}
-        Feedback curto sobre a saúde financeira.
+        - Banca Inicial: R$ {banca_inicial:.2f} | Banca Final: R$ {banca_atual:.2f}
+        - Stake Fixa: R$ {stake_padrao:.2f}
+        - Lucro Líquido: R$ {lucro_total:.2f} | ROI: {roi:.2f}%
+        - Odd Média Real dos Greens: {odd_media_green:.2f} (Calculada com base no histórico limpo)
+        
+        Dê um feedback direto sobre a saúde financeira.
         """
         response = model_ia.generate_content(prompt_fin)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
-    except Exception as e: return f"Erro Fin: {e}"
+    except Exception as e: return f"Erro Financeiro: {e}"
 
 def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
@@ -293,6 +323,7 @@ def criar_estrategia_nova_ia():
     except Exception as e: return f"Erro na criação: {e}"
 
 def gerar_insights_matinais_ia(api_key):
+    """ Insights Matinais + SALVAMENTO NO BI """
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
@@ -300,33 +331,64 @@ def gerar_insights_matinais_ia(api_key):
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
+        
         LIGAS_TOP = [71, 72, 39, 140, 78, 135, 61, 2]
         jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP][:5] 
+        
         if not jogos_top: return "Nenhum jogo 'Top Tier' para análise matinal hoje."
+
         relatorio_final = ""
         for j in jogos_top:
             fid = j['fixture']['id']
-            time_casa = j['teams']['home']['name']; time_fora = j['teams']['away']['name']
+            time_casa = j['teams']['home']['name']
+            time_fora = j['teams']['away']['name']
+            
             url_pred = "https://v3.football.api-sports.io/predictions"
             res_pred = requests.get(url_pred, headers={"x-apisports-key": api_key}, params={"fixture": fid}).json()
             if res_pred.get('response'):
                 pred = res_pred['response'][0]['predictions']
                 comp = res_pred['response'][0]['comparison']
+                
                 info_jogo = f"""
                 JOGO: {time_casa} vs {time_fora}
                 - Previsão API: {pred['advice']} | Prob: {pred['percent']}
                 - Ataque: {comp['att']['home']} vs {comp['att']['away']}
                 - Defesa: {comp['def']['home']} vs {comp['def']['away']}
                 """
+                
                 prompt_matinal = f"""
-                Analise dados pré-jogo: {info_jogo}
+                Analise esses dados pré-jogo: {info_jogo}
                 Busque oportunidades em VÁRIOS MERCADOS (Gols, Cantos, Cartões, Ambas Marcam).
-                Diga apenas o melhor insight.
+                Diga apenas o melhor insight (Ex: 'Apostar em Over 2.5').
                 """
+                
                 resp_ia = model_ia.generate_content(prompt_matinal)
                 st.session_state['gemini_usage']['used'] += 1
-                relatorio_final += f"⚽ <b>{time_casa} x {time_fora}</b>\n💡 {resp_ia.text.strip()}\n\n"
+                insight_texto = resp_ia.text.strip()
+                
+                relatorio_final += f"⚽ <b>{time_casa} x {time_fora}</b>\n💡 {insight_texto}\n\n"
+                
+                # --- AQUI ESTÁ A MAGICA: SALVAR NO BI ---
+                # Salvamos como "Sniper Matinal" para aparecer no BI
+                # O status fica "Pendente" para você validar depois
+                item_bi = {
+                    "FID": fid, 
+                    "Data": hoje, 
+                    "Hora": "08:00", 
+                    "Liga": j['league']['name'], 
+                    "Jogo": f"{time_casa} x {time_fora}", 
+                    "Placar_Sinal": "Pré-Live", 
+                    "Estrategia": "Sniper Matinal", # Nome da estratégia para o BI
+                    "Resultado": "Pendente", 
+                    "HomeID": str(j['teams']['home']['id']), 
+                    "AwayID": str(j['teams']['away']['id']), 
+                    "Odd": "1.70", # Odd média estimada para pré-live
+                    "Odd_Atualizada": ""
+                }
+                adicionar_historico(item_bi)
+                
                 time.sleep(1)
+        
         return relatorio_final if relatorio_final else "Sem insights claros."
     except Exception as e: return f"Erro Matinal: {e}"
 
@@ -363,12 +425,15 @@ def salvar_bigdata(jogo_api, stats):
         gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
         cantos = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
         cartoes = gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards')
+        ataques = gv(s1, 'Dangerous Attacks') + gv(s2, 'Dangerous Attacks')
         posse = f"{gv(s1, 'Ball Possession')}/{gv(s2, 'Ball Possession')}"
+        faltas = gv(s1, 'Fouls') + gv(s2, 'Fouls')
         novo_item = {
             'FID': fid, 'Data': get_time_br().strftime('%Y-%m-%d'), 
             'Liga': jogo_api['league']['name'], 'Jogo': f"{home} x {away}",
             'Placar_Final': placar, 'Chutes_Total': chutes, 'Chutes_Gol': gol,
-            'Escanteios': cantos, 'Posse_Casa': str(posse), 'Cartoes': cartoes
+            'Escanteios': cantos, 'Posse_Casa': str(posse), 
+            'Faltas': faltas, 'Ataques_Perigosos': ataques
         }
         df_bd = carregar_aba("BigData", COLS_BIGDATA)
         df_bd = pd.concat([df_bd, pd.DataFrame([novo_item])], ignore_index=True)
@@ -810,7 +875,10 @@ if st.session_state.ROBO_LIGADO:
     # --- MODO: ROBÔ RODANDO ---
     with placeholder_root.container():
         carregar_tudo()
-        verificar_automacao_bi(TG_TOKEN, TG_CHAT, stake_padrao, banca_inicial)
+        # VARIÁVEIS SEGURAS NA CHAMADA
+        s_padrao = st.session_state.get('stake_padrao', 10.0)
+        b_inicial = st.session_state.get('banca_inicial', 100.0)
+        verificar_automacao_bi(TG_TOKEN, TG_CHAT, s_padrao, b_inicial)
         verificar_alerta_matinal(TG_TOKEN, TG_CHAT, API_KEY)
         
         # Lógica invisível (não desenha nada, só processa)
@@ -1008,15 +1076,28 @@ if st.session_state.ROBO_LIGADO:
             else: st.caption("Sem jogos futuros hoje.")
         with abas[2]:
             st.markdown("### 💰 Evolução Financeira")
+            # --- INPUTS FINANCEIROS (CORRIGIDOS) ---
+            c_fin1, c_fin2 = st.columns(2)
+            stake_padrao = c_fin1.number_input("Valor da Aposta (Stake):", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
+            banca_inicial = c_fin2.number_input("Banca Inicial:", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
+            
+            # Atualiza sessão
+            st.session_state['stake_padrao'] = stake_padrao
+            st.session_state['banca_inicial'] = banca_inicial
+            
             modo_simulacao = st.radio("Cenário de Entrada:", ["Todos os sinais", "Apenas 1 sinal por jogo", "Até 2 sinais por jogo"], horizontal=True)
             df_fin = st.session_state.get('historico_full', pd.DataFrame())
             if not df_fin.empty:
                 df_fin = df_fin.copy()
                 df_fin['Odd_Num'] = pd.to_numeric(df_fin['Odd'], errors='coerce').fillna(0.0)
-                filtro_validas = df_fin['Odd_Num'] > 1.01
-                if filtro_validas.any():
-                    mapa_medias = df_fin[filtro_validas].groupby('Estrategia')['Odd_Num'].mean().to_dict()
-                else: mapa_medias = {}
+                
+                # FILTRA SUJEIRA E APLICA ODD DINAMICA SE PRECISAR
+                def ajustar_odd_row(r):
+                   if r['Odd_Num'] <= 1.15: return recuperar_odd_justa(r['Odd'], r['Estrategia'])
+                   return r['Odd_Num']
+
+                df_fin['Odd_Calc'] = df_fin.apply(ajustar_odd_row, axis=1)
+
                 df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
                 df_fin = df_fin.sort_values(by=['FID', 'Hora'], ascending=[True, True])
                 if modo_simulacao == "Apenas 1 sinal por jogo": df_fin = df_fin.groupby('FID').head(1)
@@ -1025,8 +1106,7 @@ if st.session_state.ROBO_LIGADO:
                 if not df_fin.empty:
                     lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]
                     for idx, row in df_fin.iterrows():
-                        res = row['Resultado']; odd = row['Odd_Num']; strat = row['Estrategia']
-                        if odd <= 1.01: odd = mapa_medias.get(strat, 1.10)
+                        res = row['Resultado']; odd = row['Odd_Calc']
                         if 'GREEN' in res: lucro = (stake_padrao * odd) - stake_padrao
                         else: lucro = -stake_padrao
                         saldo_atual += lucro; lucros.append(lucro); historico_saldo.append(saldo_atual)
@@ -1038,7 +1118,6 @@ if st.session_state.ROBO_LIGADO:
                     m3.metric("ROI Estimado", f"{roi:.1f}%"); m4.metric("Entradas", len(df_fin))
                     fig_fin = px.line(y=historico_saldo, x=range(len(historico_saldo)), title="Crescimento da Banca")
                     fig_fin.update_layout(xaxis_title="Entradas", yaxis_title="Saldo (R$)", template="plotly_dark"); st.plotly_chart(fig_fin, use_container_width=True)
-                    st.caption(f"ℹ️ As odds médias calculadas automaticamente foram: {', '.join([f'{k}: {v:.2f}' for k,v in mapa_medias.items()])}")
                 else: st.info("Aguardando fechamento de sinais para calcular financeiro.")
             else: st.info("Sem dados históricos para cálculo.")
 
