@@ -70,6 +70,8 @@ if 'ia_enviada' not in st.session_state: st.session_state['ia_enviada'] = False
 if 'financeiro_enviado' not in st.session_state: st.session_state['financeiro_enviado'] = False
 if 'bigdata_enviado' not in st.session_state: st.session_state['bigdata_enviado'] = False
 if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'] = False
+# Controle de carregamento inicial
+if 'dados_carregados' not in st.session_state: st.session_state['dados_carregados'] = False
 
 # ==============================================================================
 # 3. CONFIGURAÇÃO IA & CONEXÃO
@@ -163,8 +165,8 @@ def extrair_dados_completos(stats_api):
         return texto
     except: return "Erro stats."
 
-# --- FUNÇÕES DE BANCO DE DADOS ---
-@st.cache_data(ttl=600)
+# --- FUNÇÕES DE BANCO DE DADOS (CACHE ESTRATÉGICO) ---
+@st.cache_data(ttl=600) # Cache longo para configurações (10 min)
 def carregar_configs_cached():
     try:
         df_b = conn.read(worksheet="Blacklist", ttl=600).fillna("").astype(str)
@@ -182,7 +184,7 @@ def carregar_aba(nome_aba, colunas_esperadas, ttl_val=0):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    if col == 'Odd': df[col] = "0.00" # MUDANÇA: Default 0.00 para saber que falhou
+                    if col == 'Odd': df[col] = "0.00" 
                     else: df[col] = ""
         if df.empty or len(df.columns) < len(colunas_esperadas): 
             return pd.DataFrame(columns=colunas_esperadas)
@@ -318,23 +320,29 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             salvar_aba("Obs", final); st.session_state['df_vip'] = final
 
 def carregar_tudo(force=False):
-    now = time.time()
-    if force or 'df_black' not in st.session_state or (now - st.session_state.get('last_static_update', 0) > STATIC_CACHE_TIME):
+    # ESTRATÉGIA DE PERFORMANCE: Carrega do Google Sheets SÓ UMA VEZ na inicialização
+    # ou se forçado. Nos outros ciclos, usa a memória RAM (Session State).
+    
+    # 1. Carrega Configurações (Blacklist, etc)
+    if not st.session_state.get('dados_carregados') or force:
         df_b, df_s, df_o = carregar_configs_cached()
         st.session_state['df_black'] = df_b
         st.session_state['df_safe'] = df_s
         st.session_state['df_vip'] = df_o
+        
+        # Normalização
         if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
         if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
+        
+        # Cache BigData IDs
         try:
             df_bd_load = carregar_aba("BigData", ["FID"], ttl_val=600)
             if not df_bd_load.empty:
                 st.session_state['jogos_salvos_bigdata'] = set(df_bd_load['FID'].astype(str).values)
         except: pass
-        sanitizar_conflitos()
-        st.session_state['last_static_update'] = now
-    if 'historico_full' not in st.session_state or force:
+        
+        # 2. Carrega Histórico
         df = carregar_aba("Historico", COLS_HIST, ttl_val=0)
         if not df.empty and 'Data' in df.columns:
             df['FID'] = df['FID'].apply(clean_fid)
@@ -346,6 +354,8 @@ def carregar_tudo(force=False):
             st.session_state['historico_full'] = df
             hoje = get_time_br().strftime('%Y-%m-%d')
             st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
+            
+            # Reconstrói conjunto de alertas enviados
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             for item in st.session_state['historico_sinais']:
                 fid_strat = f"{item['FID']}_{item['Estrategia']}"
@@ -356,10 +366,12 @@ def carregar_tudo(force=False):
             if 'historico_full' not in st.session_state:
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
-    st.session_state['last_db_update'] = now
+        
+        st.session_state['dados_carregados'] = True
+        st.toast("📚 Dados carregados do servidor!")
 
 def adicionar_historico(item):
-    if 'historico_full' not in st.session_state: st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
+    if 'historico_full' not in st.session_state: st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
     df_memoria = st.session_state['historico_full']
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_memoria], ignore_index=True)
@@ -444,12 +456,12 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- NOVA FUNÇÃO DE ODD REAL (LIVE + PRE-MATCH) ---
+# --- FUNÇÃO DE ODD REAL (ROBUSTA) ---
 def buscar_odd_real(fixture_id, api_key, strategy_name, total_gols_atual=0):
-    # 1. TENTA LIVE PRIMEIRO
+    # 1. Tenta pegar LIVE
     try:
         url_live = "https://v3.football.api-sports.io/odds/live"
-        res = requests.get(url_live, headers={"x-apisports-key": api_key}, params={"fixture": fixture_id}).json()
+        res = requests.get(url_live, headers={"x-apisports-key": api_key}, params={"fixture": fixture_id}, timeout=3).json()
         
         target_markets = []
         target_line = 0.0
@@ -477,22 +489,21 @@ def buscar_odd_real(fixture_id, api_key, strategy_name, total_gols_atual=0):
                         except: pass
     except: pass
 
-    # 2. SE FALHOU, TENTA PRE-MATCH (PLANO B)
+    # 2. Se falhar, pega PRÉ-MATCH (Bet365 - Bookmaker 1)
     try:
         url_pre = "https://v3.football.api-sports.io/odds"
-        res_pre = requests.get(url_pre, headers={"x-apisports-key": api_key}, params={"fixture": fixture_id}).json()
+        res_pre = requests.get(url_pre, headers={"x-apisports-key": api_key}, params={"fixture": fixture_id}, timeout=3).json()
         if res_pre.get('response'):
-            # Pega Bet365 (id 1) ou o primeiro bookmaker disponível
             bookmakers = res_pre['response'][0]['bookmakers']
             b365 = next((b for b in bookmakers if b['id'] == 1), bookmakers[0])
             for bet in b365['bets']:
                 if "Goals Over/Under" in bet['name']:
                     for v in bet['values']:
-                        if "Over 0.5" in v['value'] or "Over 1.5" in v['value']:
+                        if f"Over {total_gols_atual + 0.5}" in v['value']:
                              return "{:.2f}".format(float(v['odd']))
     except: pass
 
-    return "0.00" # Retorna 0.00 se não achar nada (para não estragar a conta)
+    return "0.00" # Retorna 0.00 para indicar erro (não inventa 1.10)
 
 def buscar_inteligencia(estrategia, liga, jogo):
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -592,12 +603,13 @@ def analisar_financeiro_com_ia(stake, banca):
         lucro_total = 0.0; investido = 0.0; qtd=0; odds_greens = []
         for _, row in df_hoje.iterrows():
             res = str(row['Resultado'])
-            # --- CORREÇÃO FINANCEIRA: Usa a odd real (mesmo que baixa) ---
+            # Usa ODD REAL (proteção: se for 0.00, considera 1.0)
             try: odd_final = float(row['Odd'])
             except: odd_final = 1.0
             
             if 'GREEN' in res:
-                lucro = (stake * odd_final) - stake
+                if odd_final > 1.0: lucro = (stake * odd_final) - stake
+                else: lucro = 0
                 lucro_total += lucro; investido += stake; qtd+=1
                 if odd_final > 1: odds_greens.append(odd_final)
             elif 'RED' in res:
@@ -874,7 +886,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             if (minutos_passados >= 3 and not s['Odd_Atualizada']) or (str(s['Odd']) == "0.00") or (str(s['Odd']) == "1.10"):
                 jogo_live = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
                 total_gols = (jogo_live['goals']['home'] or 0) + (jogo_live['goals']['away'] or 0) if jogo_live else 0
-                nova_odd = buscar_odd_real(fid, api_key, s['Estrategia'], total_gols) # AGORA USA A FUNÇÃO ROBUSTA
+                nova_odd = buscar_odd_real(fid, api_key, s['Estrategia'], total_gols)
                 if nova_odd != s['Odd'] and nova_odd != "0.00":
                     s['Odd'] = nova_odd
                     s['Odd_Atualizada'] = True
@@ -884,7 +896,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
         if fid > 0 and fid in ids_live: jogo_encontrado = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
         elif fid > 0:
             try:
-                res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
+                res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}, timeout=5).json()
                 if res['response']: jogo_encontrado = res['response'][0]
             except: pass
         if jogo_encontrado:
@@ -1068,7 +1080,10 @@ with st.sidebar:
         st.session_state['TG_CHAT'] = st.text_input("Chat IDs:", value=st.session_state['TG_CHAT'])
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
         if st.button("🧹 Limpar Cache"): 
-            st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
+            st.cache_data.clear()
+            st.session_state['dados_carregados'] = False
+            carregar_tudo(force=True)
+            st.toast("Cache Limpo!")
         st.write("---")
         if st.button("🧠 Pedir Análise do BI"):
             if IA_ATIVADA:
@@ -1160,9 +1175,7 @@ if st.session_state.ROBO_LIGADO:
         jogos_live = []
         try:
             url = "https://v3.football.api-sports.io/fixtures"
-            # --- CORREÇÃO AQUI: Mudança para buscar TODOS os jogos do dia (date) ao invés de apenas live ---
             resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"date": hoje_real, "timezone": "America/Sao_Paulo"}, timeout=10)
-            # ------------------------------------------------------------------------------------------------
             update_api_usage(resp.headers); res = resp.json()
             jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
@@ -1177,7 +1190,6 @@ if st.session_state.ROBO_LIGADO:
         if not api_error:
             jogos_para_baixar = []
             contagem_ft_baixar = 0
-            # --- OTIMIZAÇÃO: Limitar batch de download para evitar gargalo ---
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
                 if lid in ids_black: continue
@@ -1186,7 +1198,7 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                # Big Data (FT) - Limitado a 2 por ciclo para performance
+                # --- BIG DATA (FT) ---
                 if st_short in ['FT', 'AET', 'PEN']:
                     if str(fid) not in st.session_state['jogos_salvos_bigdata']:
                         if contagem_ft_baixar < 2: 
@@ -1246,7 +1258,7 @@ if st.session_state.ROBO_LIGADO:
                         txt_pressao = gerar_barra_pressao(rh, ra) 
                         uid_normal = f"{fid}_{s['tag']}"
                         uid_super = f"SUPER_ODD_{fid}_{s['tag']}"
-                        odd_atual_str = buscar_odd_real(fid, safe_api, s['tag'], gh+ga) # USA ODD REAL
+                        odd_atual_str = buscar_odd_real(fid, safe_api, s['tag'], gh+ga) # USA ODD REAL (SEM FALLBACK 1.10)
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
                         if uid_normal not in st.session_state['alertas_enviados']:
@@ -1262,7 +1274,6 @@ if st.session_state.ROBO_LIGADO:
                                 if IA_ATIVADA:
                                     try:
                                         time.sleep(1)
-                                        # --- IA OTIMIZADA COM DADOS GLOBAIS ---
                                         win_info = "Sem dados suficientes."
                                         if 'historico_full' in st.session_state:
                                             dff = st.session_state['historico_full']
@@ -1280,7 +1291,6 @@ if st.session_state.ROBO_LIGADO:
                                             stats,
                                             winrate_info=win_info
                                         )
-                                        # --------------------------------------
                                     except: pass
                                 msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
                                 enviar_telegram(safe_token, safe_chat, msg)
@@ -1301,7 +1311,9 @@ if st.session_state.ROBO_LIGADO:
             for p in prox:
                 try:
                     if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and p['fixture']['id'] not in ids_no_radar:
-                        if datetime.fromisoformat(p['fixture']['date']) > agora:
+                        # CORREÇÃO DA AGENDA: Filtro mais permissivo para timezone e jogos próximos
+                        dt_jogo = datetime.fromisoformat(p['fixture']['date'].replace('Z', '+00:00'))
+                        if dt_jogo > datetime.now(pytz.utc): # Compara tudo em UTC para não ter erro
                             l_id = normalizar_id(p['league']['id']); l_nm = p['league']['name']
                             if l_id in ids_safe: l_nm += " 🛡️"
                             elif l_id in df_obs['id'].values: l_nm += " ⚠️"
@@ -1341,12 +1353,7 @@ if st.session_state.ROBO_LIGADO:
             df_fin = st.session_state.get('historico_full', pd.DataFrame())
             if not df_fin.empty:
                 df_fin = df_fin.copy()
-                # --- CORREÇÃO FINANCEIRA ---
                 df_fin['Odd_Num'] = pd.to_numeric(df_fin['Odd'], errors='coerce').fillna(0.0)
-                # Removemos a lógica de forçar 1.65. Usamos o valor real da coluna Odd.
-                # Se for 0.00 ou 1.10 (erro), usamos 1.0 (sem lucro) ou mantemos 1.10 (lucro mínimo)
-                # Para ser conservador, vamos usar a odd que está lá.
-                
                 df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
                 df_fin = df_fin.sort_values(by=['FID', 'Hora'], ascending=[True, True])
                 if modo_simulacao == "Apenas 1 sinal por jogo": df_fin = df_fin.groupby('FID').head(1)
@@ -1354,12 +1361,10 @@ if st.session_state.ROBO_LIGADO:
                 if not df_fin.empty:
                     lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]
                     for idx, row in df_fin.iterrows():
-                        res = row['Resultado']
-                        try: odd = float(row['Odd'])
-                        except: odd = 1.0
+                        res = row['Resultado']; odd = row['Odd_Num']
                         if 'GREEN' in res: 
                             if odd > 1.0: lucro = (stake_padrao * odd) - stake_padrao
-                            else: lucro = 0 # Proteção contra odd 0 ou 1
+                            else: lucro = 0
                         else: lucro = -stake_padrao
                         saldo_atual += lucro; lucros.append(lucro); historico_saldo.append(saldo_atual)
                     df_fin['Lucro'] = lucros; total_lucro = sum(lucros); roi = (total_lucro / (len(df_fin) * stake_padrao)) * 100
