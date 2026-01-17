@@ -43,8 +43,11 @@ if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 
-# Variáveis de Controle e Cota
+# Variáveis de Controle e Cotas
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
+# NOVA COTA PARA O GEMINI (Free Tier = 1500 RPD)
+if 'gemini_usage' not in st.session_state: st.session_state['gemini_usage'] = {'used': 0, 'limit': 1500}
+
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
@@ -171,6 +174,8 @@ def consultar_ia_gemini(dados_jogo, estrategia):
     """
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 8})
+        # CONTADOR DE USO
+        st.session_state['gemini_usage']['used'] += 1
         return f"\n🤖 <b>IA:</b> {response.text.strip()}"
     except Exception as e:
         erro_str = str(e)
@@ -200,47 +205,30 @@ def analisar_bi_com_ia():
         Dê 3 dicas curtas para amanhã.
         """
         response = model_ia.generate_content(prompt)
+        # CONTADOR DE USO
+        st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro BI: {e}"
 
 def criar_estrategia_nova_ia():
-    """ 
-    A MÁGICA: Lê o Big Data e sugere novas estratégias GLOBAIS.
-    """
+    """ A MÁGICA: Lê o Big Data e sugere novas estratégias GLOBAIS. """
     if not IA_ATIVADA: return "IA Desconectada."
     
     df_bd = carregar_aba("BigData", COLS_BIGDATA)
     if len(df_bd) < 5: return "Coletando dados... Preciso de mais jogos finalizados."
     
     try:
-        # Pega amostra dos últimos 100 jogos
         amostra = df_bd.tail(100).to_csv(index=False)
-        
         prompt_criacao = f"""
         Você é um Cientista de Dados de Futebol Sênior.
         Abaixo estão dados de jogos finalizados (CSV).
-        
-        CSV DADOS:
-        {amostra}
-        
-        SUA MISSÃO:
-        Encontre um padrão ESTATÍSTICO GLOBAL (que funcione para qualquer time/liga).
-        NÃO cite nomes de times específicos.
-        
-        Analise correlações como:
-        - Muitos chutes no gol levam a gol no final?
-        - Muitos escanteios indicam gol?
-        - Cartão vermelho muda o resultado?
-        
-        Saída esperada:
-        1. Nome da Nova Estratégia Sugerida.
-        2. A Regra (Ex: "Se tiver +10 escanteios e placar 0x0, entrar em Over 0.5").
-        3. A Lógica (Por que funciona matematicamente?).
-        
-        Seja técnico e direto.
+        CSV DADOS: {amostra}
+        SUA MISSÃO: Encontre um padrão ESTATÍSTICO GLOBAL lucrativo.
+        Saída esperada: Nome, Regra e Lógica. Seja direto.
         """
-        
         response = model_ia.generate_content(prompt_criacao)
+        # CONTADOR DE USO
+        st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro na criação: {e}"
 
@@ -271,10 +259,8 @@ def salvar_bigdata(jogo_api, stats):
         fid = str(jogo_api['fixture']['id'])
         if fid in st.session_state['jogos_salvos_bigdata']: return # Já salvo
         
-        # Extrai dados ricos
         home = jogo_api['teams']['home']['name']; away = jogo_api['teams']['away']['name']
         placar = f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}"
-        
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
@@ -282,7 +268,7 @@ def salvar_bigdata(jogo_api, stats):
         gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
         cantos = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
         cartoes = gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards')
-        posse = gv(s1, 'Ball Possession') # String "50%"
+        posse = gv(s1, 'Ball Possession') 
         
         novo_item = {
             'FID': fid, 'Data': get_time_br().strftime('%Y-%m-%d'), 
@@ -291,11 +277,9 @@ def salvar_bigdata(jogo_api, stats):
             'Escanteios': cantos, 'Posse_Casa': str(posse), 'Cartoes': cartoes
         }
         
-        # Carrega, Adiciona e Salva
         df_bd = carregar_aba("BigData", COLS_BIGDATA)
         df_bd = pd.concat([df_bd, pd.DataFrame([novo_item])], ignore_index=True)
         salvar_aba("BigData", df_bd)
-        
         st.session_state['jogos_salvos_bigdata'].add(fid)
     except: pass
 
@@ -499,6 +483,8 @@ def verificar_reset_diario():
     hoje_utc = datetime.now(pytz.utc).date()
     if st.session_state['data_api_usage'] != hoje_utc:
         st.session_state['api_usage']['used'] = 0; st.session_state['data_api_usage'] = hoje_utc
+        # RESET DO GEMINI TAMBÉM
+        st.session_state['gemini_usage']['used'] = 0
         st.session_state['alvos_do_dia'] = {}
         return True
     return False
@@ -633,13 +619,9 @@ def enviar_analise_estrategia(token, chat_ids):
     df_bd = carregar_aba("BigData", COLS_BIGDATA)
     if len(df_bd) < 10: return # Poucos dados para análise
     
-    # Pede para IA criar estratégia
     sugestao = criar_estrategia_nova_ia()
-    
-    # Envia texto
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
     msg = f"🧪 <b>LABORATÓRIO DE ESTRATÉGIAS (IA)</b>\n\n{sugestao}"
-    
     for cid in ids:
         enviar_telegram(token, cid, msg)
 
@@ -684,20 +666,17 @@ def verificar_automacao_bi(token, chat_ids):
     agora = get_time_br()
     hoje_str = agora.strftime('%Y-%m-%d')
 
-    # Inicializa flags do dia se mudou o dia
     if st.session_state['last_check_date'] != hoje_str:
         st.session_state['bi_enviado'] = False
         st.session_state['ia_enviada'] = False
         st.session_state['bigdata_enviado'] = False
         st.session_state['last_check_date'] = hoje_str
 
-    # 23:30 - Relatório Gráfico (BI)
     if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
         enviar_relatorio_bi(token, chat_ids)
         st.session_state['bi_enviado'] = True
         st.toast("📊 Relatório BI Enviado!")
 
-    # 23:35 - Relatório Consultoria IA
     if agora.hour == 23 and agora.minute >= 35 and not st.session_state['ia_enviada']:
         analise = analisar_bi_com_ia()
         msg_ia = f"🧠 <b>CONSULTORIA DIÁRIA DA IA</b>\n\n{analise}"
@@ -705,7 +684,6 @@ def verificar_automacao_bi(token, chat_ids):
         st.session_state['ia_enviada'] = True
         st.toast("🤖 Relatório IA Enviado!")
         
-    # 23:55 - Sugestão de Nova Estratégia (Sem arquivo, só texto)
     if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
         enviar_analise_estrategia(token, chat_ids)
         st.session_state['bigdata_enviado'] = True
@@ -1094,6 +1072,14 @@ with st.sidebar:
         u = st.session_state['api_usage']; perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
         st.progress(perc); st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
     
+    # NOVA BARRA DE CONSUMO GEMINI
+    with st.expander("🤖 Consumo IA (Gemini)", expanded=False):
+        u_ia = st.session_state['gemini_usage']
+        perc_ia = min(u_ia['used'] / u_ia['limit'], 1.0)
+        st.progress(perc_ia)
+        st.caption(f"Requições Hoje: **{u_ia['used']}** / {u_ia['limit']}")
+        st.caption("Limite: 1.500/dia (Free Tier)")
+
     st.write("---")
     st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
     
