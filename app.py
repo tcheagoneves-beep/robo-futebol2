@@ -18,6 +18,7 @@ st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="�
 # --- INICIALIZAÇÃO DE VARIÁVEIS ---
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
+if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 # Novo controle para cache longo
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
 if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
 
@@ -30,7 +31,9 @@ if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_env
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
 
-DB_CACHE_TIME = 60
+# CACHE CONFIG
+DB_CACHE_TIME = 60 # Histórico (Rápido)
+STATIC_CACHE_TIME = 600 # Blacklist/Seguras (Lento - 10 min)
 
 st.markdown("""
 <style>
@@ -102,14 +105,15 @@ def formatar_inteiro_visual(val):
         return str(int(float(str(val))))
     except: return str(val)
 
-# --- 3. BANCO DE DADOS ---
+# --- 3. BANCO DE DADOS (OTIMIZADO) ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
+        # TTL=0 garante dado fresco, mas usaremos cache manual
         df = conn.read(worksheet=nome_aba, ttl=0)
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    if col == 'Odd': df[col] = "1.10" # Default visual
+                    if col == 'Odd': df[col] = "1.10" 
                     else: df[col] = ""
         if df.empty or len(df.columns) < len(colunas_esperadas): 
             return pd.DataFrame(columns=colunas_esperadas)
@@ -117,7 +121,12 @@ def carregar_aba(nome_aba, colunas_esperadas):
     except: return pd.DataFrame(columns=colunas_esperadas)
 
 def salvar_aba(nome_aba, df_para_salvar):
-    try: conn.update(worksheet=nome_aba, data=df_para_salvar); return True
+    try: 
+        # SEGURANÇA: Se o DF estiver vazio e não for intencional, não salva para evitar wipe
+        if df_para_salvar.empty and nome_aba == "Historico":
+            return False 
+        conn.update(worksheet=nome_aba, data=df_para_salvar)
+        return True
     except: return False
 
 def sanitizar_conflitos():
@@ -160,28 +169,35 @@ def sanitizar_conflitos():
 
 def carregar_tudo(force=False):
     now = time.time()
-    if not force:
-        if (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
-            if 'df_black' in st.session_state: return
+    
+    # 1. Carregamento OTIMIZADO de tabelas estáticas (Blacklist, Safe, Obs)
+    # Só recarrega se forçado OU se passou 10 minutos (600s)
+    if force or (now - st.session_state['last_static_update']) > STATIC_CACHE_TIME or 'df_black' not in st.session_state:
+        st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
+        st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
+        st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
+        
+        # Normaliza IDs
+        if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
+        if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
+        if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
+        
+        sanitizar_conflitos()
+        st.session_state['last_static_update'] = now
 
-    # Carrega tabelas auxiliares
-    st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
-    st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
-    st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
-    
-    # Normaliza IDs
-    if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
-    if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
-    if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
-    
-    sanitizar_conflitos()
-    
-    # Carrega Histórico Completo
+    # 2. Carregamento de Histórico (Mais frequente, mas protegido)
+    if force or (now - st.session_state['last_db_update']) < DB_CACHE_TIME:
+        # Se não for hora de atualizar, usa o que tem na memória
+        if 'historico_full' in st.session_state: return
+
     df = carregar_aba("Historico", COLS_HIST)
+    
+    # BLINDAGEM: Se o Sheets vier vazio por erro, mas temos memória, MANTÉM A MEMÓRIA
+    if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
+        df = st.session_state['historico_full'] # Recupera da RAM
+        
     if not df.empty and 'Data' in df.columns:
         df['FID'] = df['FID'].apply(clean_fid)
-        
-        # Garante formato de data YYYY-MM-DD
         try:
             df['Data_Temp'] = pd.to_datetime(df['Data'], errors='coerce')
             df['Data'] = df['Data_Temp'].dt.strftime('%Y-%m-%d').fillna(df['Data'])
@@ -190,66 +206,65 @@ def carregar_tudo(force=False):
         
         st.session_state['historico_full'] = df
         
-        # Filtra apenas hoje para exibição, mas mantendo histórico full em memória
         hoje = get_time_br().strftime('%Y-%m-%d')
         st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
         
         if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
         
-        # Popula cache de envio para evitar duplicidade
         for item in st.session_state['historico_sinais']:
             fid_strat = f"{item['FID']}_{item['Estrategia']}"
             st.session_state['alertas_enviados'].add(fid_strat)
             if 'GREEN' in str(item['Resultado']): st.session_state['alertas_enviados'].add(f"RES_GREEN_{fid_strat}")
             if 'RED' in str(item['Resultado']): st.session_state['alertas_enviados'].add(f"RES_RED_{fid_strat}")
     else:
-        st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
-        st.session_state['historico_sinais'] = []
+        # Se realmente for o primeiro load e estiver vazio
+        if 'historico_full' not in st.session_state:
+            st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
+            st.session_state['historico_sinais'] = []
 
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
-    # Carrega a versão mais recente da planilha para não perder dados de outras instâncias
-    df_atual_sheet = carregar_aba("Historico", COLS_HIST)
+    # BLINDAGEM: Em vez de ler, apagar e escrever, usamos a memória RAM como fonte da verdade
+    if 'historico_full' not in st.session_state:
+        st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
     
+    df_memoria = st.session_state['historico_full']
     df_novo = pd.DataFrame([item])
-    # Concatena o novo item com TUDO que estava na planilha
-    df_final = pd.concat([df_novo, df_atual_sheet], ignore_index=True)
     
+    # Concatena na Memória
+    df_final = pd.concat([df_novo, df_memoria], ignore_index=True)
     st.session_state['historico_full'] = df_final
     st.session_state['historico_sinais'].insert(0, item)
+    
+    # Salva a Memória no Disco (Sheets)
     return salvar_aba("Historico", df_final)
 
 def atualizar_historico_ram_disk(lista_atualizada_hoje):
-    # 1. Carrega tudo da planilha para garantir que temos o histórico antigo
-    df_disk = carregar_aba("Historico", COLS_HIST)
+    # BLINDAGEM: Atualiza baseada na Memória, não no disco (para evitar falha de leitura)
+    if 'historico_full' not in st.session_state:
+        st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
+        
+    df_memoria = st.session_state['historico_full']
+    df_hoje_updates = pd.DataFrame(lista_atualizada_hoje)
     
-    # 2. Converte a lista de hoje (que tem as odds atualizadas/resultados) em DF
-    df_hoje_memoria = pd.DataFrame(lista_atualizada_hoje)
-    
-    if df_hoje_memoria.empty: return
+    if df_hoje_updates.empty or df_memoria.empty: return
 
-    # 3. Atualiza os registros no DF Disk usando os dados da memória (hoje)
-    # Criamos um dicionário de busca para performance
     mapa_atualizacao = {}
-    for _, row in df_hoje_memoria.iterrows():
+    for _, row in df_hoje_updates.iterrows():
         chave = f"{row['FID']}_{row['Estrategia']}"
         mapa_atualizacao[chave] = row
 
-    # Função para atualizar linha a linha
     def atualizar_linha(row):
         chave = f"{row['FID']}_{row['Estrategia']}"
         if chave in mapa_atualizacao:
-            return mapa_atualizacao[chave] # Substitui pela versão atualizada (com Green/Odd)
+            return mapa_atualizacao[chave]
         return row
 
-    if not df_disk.empty:
-        df_disk = df_disk.apply(atualizar_linha, axis=1)
-        # Se houver novos que não estavam no disco, adiciona (embora adicionar_historico ja faça isso)
-        # O foco aqui é atualizar status GREEN/RED e ODDS
+    df_final = df_memoria.apply(atualizar_linha, axis=1)
     
-    st.session_state['historico_full'] = df_disk
-    salvar_aba("Historico", df_disk)
+    st.session_state['historico_full'] = df_final
+    salvar_aba("Historico", df_final)
 
 def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
@@ -384,7 +399,7 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- FUNÇÃO DE ODD INTELIGENTE (COM PADRÃO 1.10) ---
+# --- FUNÇÃO DE ODD INTELIGENTE ---
 def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
@@ -624,7 +639,6 @@ def processar_resultado(sinal, jogo_api, token, chats):
     try: ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
     except: return False
 
-    # CORREÇÃO: Limpa o FID para garantir que a chave seja sempre igual
     fid = clean_fid(sinal['FID'])
     strat = str(sinal['Estrategia'])
     
@@ -644,9 +658,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
             return True
         else:
             sinal['Resultado'] = '✅ GREEN'
-            # CORREÇÃO CRÍTICA: Se já enviou, SÓ retorna True para salvar, mas NÃO envia msg
-            if key_green in st.session_state['alertas_enviados']:
-                return True
+            if key_green in st.session_state['alertas_enviados']: return True
                 
             enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {sinal['Estrategia']}")
             st.session_state['alertas_enviados'].add(key_green)
@@ -694,14 +706,13 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
         if s.get('Data') != hoje_str: continue
         fid = int(clean_fid(s.get('FID', 0)))
         
-        # CORREÇÃO: Verifica se já foi pago (mesmo se planilha disser Pendente)
         strat = str(s.get('Estrategia', ''))
         key_green = f"RES_GREEN_{str(fid)}_{strat}"
         
         if key_green in st.session_state.get('alertas_enviados', set()):
             s['Resultado'] = '✅ GREEN'
             atualizou = True
-            continue # Pula processamento para não enviar msg dupla
+            continue 
 
         # --- ATUALIZAÇÃO DE ODD TARDIA ---
         if 'Odd_Atualizada' not in s: s['Odd_Atualizada'] = False
@@ -711,12 +722,10 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             dt_sinal = pytz.timezone('America/Sao_Paulo').localize(dt_sinal)
             minutos_passados = (agora - dt_sinal).total_seconds() / 60
             
-            # Tenta atualizar Odd se for 0.00 ou 1.10 (padrão) ou se passou 3 mins
             if (minutos_passados >= 3 and not s['Odd_Atualizada']) or (str(s['Odd']) == "0.00") or (str(s['Odd']) == "1.10"):
                 jogo_live = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
                 total_gols = (jogo_live['goals']['home'] or 0) + (jogo_live['goals']['away'] or 0) if jogo_live else 0
                 nova_odd = get_live_odds(fid, api_key, s['Estrategia'], total_gols)
-                # Se nova odd for diferente do que temos, atualiza
                 if nova_odd != s['Odd']:
                     s['Odd'] = nova_odd
                     s['Odd_Atualizada'] = True
@@ -1173,8 +1182,10 @@ if st.session_state.ROBO_LIGADO:
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
 
     relogio = st.empty()
+    # TIMER SUAVE: Reduz chamadas de redraw
     for i in range(INTERVALO, 0, -1):
-        relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True); time.sleep(1)
+        relogio.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
+        time.sleep(1)
     st.rerun()
 else:
     st.title("❄️ Neves Analytics")
