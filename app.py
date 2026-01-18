@@ -5,7 +5,12 @@ import time
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# --- CORREÇÃO CRÍTICA PARA O GRÁFICO ---
+import matplotlib
+matplotlib.use('Agg') # Força o gráfico a ser gerado em segundo plano (sem janela)
 import matplotlib.pyplot as plt
+
 import plotly.express as px
 import plotly.graph_objects as go
 import io
