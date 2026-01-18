@@ -464,7 +464,8 @@ def buscar_ranking(api_key, league_id, season):
         return ranking
     except: return {}
 
-@st.cache_data(ttl=3600) 
+# --- REDUZI O CACHE PARA 120s (2 min) PARA PEGAR JOGOS FINALIZADOS RAPIDAMENTE ---
+@st.cache_data(ttl=120) 
 def buscar_agenda_cached(api_key, date_str):
     try:
         url = "https://v3.football.api-sports.io/fixtures"
@@ -752,14 +753,11 @@ def enviar_relatorio_bi(token, chat_ids):
             return f"{g}G - {r}R ({wr:.0f}%)"
 
         # --- CORREÇÃO DO ERRO DE ÍNDICE ---
-        # Filtra diretamente o dataframe d_30d para pegar apenas resultados válidos
         stats = d_30d[d_30d['Resultado'].isin(['✅ GREEN', '❌ RED'])]
 
         top_ligas_msg = ""
         piores_ligas_msg = ""
 
-        # Usa o dataframe stats já filtrado (Resultados Válidos nos últimos 30 dias)
-        # Se quiser estatísticas GERAIS (todo histórico), use df_finished abaixo:
         df_finished = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
 
         if not df_finished.empty:
@@ -803,7 +801,6 @@ def enviar_relatorio_bi(token, chat_ids):
                 plt.tight_layout()
                 buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
                 
-                # --- SOLUÇÃO PARA O LIMITE DE CARACTERES ---
                 # 1. Manda a foto com legenda curta
                 msg_foto = "📊 <b>Gráfico de Performance (30 Dias)</b>\n👇 <i>Relatório detalhado abaixo</i>"
                 ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
@@ -1313,6 +1310,26 @@ if st.session_state.ROBO_LIGADO:
                         st.session_state['controle_stats'][fid] = datetime.now()
                         st.session_state[f"st_{fid}"] = stats
             
+            # --- CORREÇÃO BIG DATA: Buscar FT na Agenda (pois somem do Live) ---
+            prox = buscar_agenda_cached(safe_api, hoje_real); agora = get_time_br()
+            
+            ft_para_salvar = []
+            for p in prox:
+                try:
+                    if p['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
+                        fid_str = str(p['fixture']['id'])
+                        if fid_str not in st.session_state['jogos_salvos_bigdata']:
+                            ft_para_salvar.append(p)
+                except: pass
+            
+            # Processa em lotes pequenos para não engasgar o loop
+            if ft_para_salvar:
+                lote = ft_para_salvar[:3] # 3 por ciclo
+                stats_ft = atualizar_stats_em_paralelo(lote, safe_api)
+                for fid, s in stats_ft.items():
+                    j_obj = next((x for x in lote if x['fixture']['id'] == fid), None)
+                    if j_obj: salvar_bigdata(j_obj, s)
+
             # 2. PROCESSAMENTO DE SINAIS (APLICAÇÃO DO FILTRO NO RADAR)
             candidatos_multipla = []; ids_no_radar = []
             
@@ -1417,7 +1434,7 @@ if st.session_state.ROBO_LIGADO:
                     msg = "<b>🚀 OPORTUNIDADE DE MÚLTIPLA (HT) 🚀</b>\n" + "".join([f"\n⚽ {c['jogo']} ({c['stats']})\n⚠️ AÇÃO: {c['indica']}" for c in novos])
                     for c in novos: st.session_state['multiplas_enviadas'].add(c['fid'])
                     enviar_telegram(safe_token, safe_chat, msg)
-            prox = buscar_agenda_cached(safe_api, hoje_real); agora = get_time_br()
+            
             for p in prox:
                 try:
                     if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and p['fixture']['id'] not in ids_no_radar:
