@@ -177,45 +177,27 @@ def extrair_dados_completos(stats_api):
         return texto
     except: return "Erro stats."
 
-# --- NOVA FUNÇÃO DE MÉDIA DE GOLS (SOLICITADA) ---
+# --- FUNÇÃO DE MÉDIA DE GOLS ---
 @st.cache_data(ttl=3600)
 def buscar_media_gols_ultimos_jogos(api_key, home_id, away_id):
-    """
-    Busca os últimos 10/20 jogos de cada time para calcular:
-    - Média de gols do MANDANTE jogando em CASA.
-    - Média de gols do VISITANTE jogando FORA.
-    """
     try:
         def get_avg_goals(team_id, location_filter):
-            # Busca ultimos 20 jogos para garantir amostra suficiente de casa/fora
             url = "https://v3.football.api-sports.io/fixtures"
             params = {"team": team_id, "last": "20", "status": "FT"}
             res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
             jogos = res.get('response', [])
-            
-            gols_marcados = 0
-            jogos_contados = 0
-            
+            gols_marcados = 0; jogos_contados = 0
             for j in jogos:
                 is_home_match = (j['teams']['home']['id'] == team_id)
                 if location_filter == 'home' and is_home_match:
-                    gols_marcados += (j['goals']['home'] or 0)
-                    jogos_contados += 1
+                    gols_marcados += (j['goals']['home'] or 0); jogos_contados += 1
                 elif location_filter == 'away' and not is_home_match:
-                    gols_marcados += (j['goals']['away'] or 0)
-                    jogos_contados += 1
-                
-                if jogos_contados >= 10: break # Limita aos ultimos 10 jogos no local específico
-            
+                    gols_marcados += (j['goals']['away'] or 0); jogos_contados += 1
+                if jogos_contados >= 10: break 
             if jogos_contados == 0: return "0.00"
             return "{:.2f}".format(gols_marcados / jogos_contados)
-
-        avg_home = get_avg_goals(home_id, 'home')
-        avg_away = get_avg_goals(away_id, 'away')
-        
-        return {'home': avg_home, 'away': avg_away}
-    except:
-        return {'home': '?', 'away': '?'}
+        return {'home': get_avg_goals(home_id, 'home'), 'away': get_avg_goals(away_id, 'away')}
+    except: return {'home': '?', 'away': '?'}
 
 # --- FUNÇÕES DE BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
@@ -768,29 +750,32 @@ def enviar_relatorio_bi(token, chat_ids):
         piores_ligas_msg = ""
 
         if not df_finished.empty:
-            # Agrupa por Liga
             grouped = df_finished.groupby('Liga')['Resultado'].apply(lambda x: (x.str.contains('GREEN').sum() / len(x) * 100, len(x), x.str.contains('RED').sum()))
-            
-            # Converte para DataFrame para ordenar
             stats_ligas = pd.DataFrame(grouped.tolist(), index=grouped.index, columns=['Winrate', 'Total', 'Reds'])
-            stats_ligas = stats_ligas[stats_ligas['Total'] >= 2] # Filtro mínimo de 2 jogos
-
-            # Top 3 Melhores (Winrate)
+            stats_ligas = stats_ligas[stats_ligas['Total'] >= 2]
+            
             melhores = stats_ligas.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(3)
-            lista_melhores = []
-            for liga, row in melhores.iterrows():
-                lista_melhores.append(f"🏆 {liga}: {row['Winrate']:.0f}%")
-            top_ligas_msg = "\n".join(lista_melhores)
+            top_ligas_msg = "\n".join([f"🏆 {liga}: {row['Winrate']:.0f}%" for liga, row in melhores.iterrows()])
 
-            # Top 3 Piores (Mais Reds)
             piores = stats_ligas.sort_values(by=['Reds'], ascending=False).head(3)
-            lista_piores = []
-            for liga, row in piores.iterrows():
-                if row['Reds'] > 0:
-                    lista_piores.append(f"💀 {liga}: {row['Reds']} Reds")
-            piores_ligas_msg = "\n".join(lista_piores)
+            piores_ligas_msg = "\n".join([f"💀 {liga}: {row['Reds']} Reds" for liga, row in piores.iterrows() if row['Reds'] > 0])
+        
+        # --- AUDITORIA DA IA (Winrate dos "Aprovados" vs "Arriscados") ---
+        ia_audit_msg = "<i>Sem dados suficientes para auditar a IA.</i>"
+        if 'Opiniao_IA' in df.columns:
+            df_ia = df[df['Resultado'].isin(['✅ GREEN', '❌ RED']) & (df['Opiniao_IA'].isin(['Aprovado', 'Arriscado']))]
+            if not df_ia.empty:
+                lines = []
+                for op in ['Aprovado', 'Arriscado']:
+                    d_op = df_ia[df_ia['Opiniao_IA'] == op]
+                    if not d_op.empty:
+                        total = len(d_op)
+                        greens = d_op['Resultado'].str.contains('GREEN').sum()
+                        wr = (greens / total * 100)
+                        lines.append(f"🤖 <b>IA {op.upper()}:</b> {wr:.1f}% ({greens}/{total})")
+                if lines:
+                    ia_audit_msg = "\n".join(lines)
 
-        # Insight da IA
         insight_text = analisar_bi_com_ia()
 
         if token and chat_ids:
@@ -811,6 +796,9 @@ def enviar_relatorio_bi(token, chat_ids):
 🗓 <b>SEMANA:</b> {calc_detalhado(d_7d)}
 📅 <b>MÊS (30d):</b> {calc_detalhado(d_30d)}
 ♾ <b>TOTAL GERAL:</b> {calc_detalhado(df)}
+
+🔍 <b>AUDITORIA DA IA (ACERTOS):</b>
+{ia_audit_msg}
 
 💎 <b>TOP LIGAS (Winrate):</b>
 {top_ligas_msg}
