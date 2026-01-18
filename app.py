@@ -1,4 +1,5 @@
 import streamlit as st
+import pd as pd
 import pandas as pd
 import requests
 import time
@@ -99,6 +100,9 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
+# LISTA DE STATUS VIVOS (IN-PLAY)
+STATUS_IN_PLAY = ['1H', '2H', 'HT', 'ET', 'BT', 'P']
+
 # ==============================================================================
 # 4. DEFINIÇÃO DE TODAS AS FUNÇÕES
 # ==============================================================================
@@ -164,7 +168,6 @@ def extrair_dados_completos(stats_api):
         return texto
     except: return "Erro stats."
 
-# --- FUNÇÕES DE BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
@@ -399,7 +402,6 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- FUNÇÕES QUE FALTAVAM (RANKING, AGENDA, ODDS, INTELIGENCIA) ---
 @st.cache_data(ttl=86400)
 def buscar_ranking(api_key, league_id, season):
     try:
@@ -497,7 +499,6 @@ def buscar_inteligencia(estrategia, liga, jogo):
     str_fontes = "+".join(fontes) if fontes else "Geral"
     return f"\n{'🔥' if prob_final >= 80 else '🔮' if prob_final > 40 else '⚠️'} <b>Prob: {prob_final:.0f}% ({str_fontes})</b>"
 
-# --- Funções IA e Lógica ---
 def calcular_odd_dinamica(estrategia):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return 1.65 
@@ -555,9 +556,9 @@ def analisar_bi_com_ia():
         total = len(df_f); greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
         resumo = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}%").to_dict()
         prompt = f"""
-        Analise o dia ({hoje_str}):
+        Analise the day ({hoje_str}):
         Total: {total}, Greens: {greens}
-        Estratégias: {json.dumps(resumo)}
+        Strategies: {json.dumps(resumo)}
         3 dicas curtas para amanhã.
         """
         response = model_ia.generate_content(prompt)
@@ -615,7 +616,6 @@ def criar_estrategia_nova_ia():
         return response.text
     except Exception as e: return f"Erro na criação: {e}"
 
-# --- Telegram & Notifications ---
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
     except: pass
@@ -722,7 +722,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             st.toast("Insights Matinais Enviados!")
 
 def gerar_insights_matinais_ia(api_key):
-    """ Sniper Matinal + Registro no BI """
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
@@ -1001,16 +1000,16 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
         if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
             if tempo <= 5 and (sh_h + sh_a) >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve abrir placar)", "stats": f"Rank: {rank_home}x{rank_away}", "rh": rh, "ra": ra})
-        if 5 <= tempo <= 15:
-            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
-            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
-        if is_top_home and is_top_away and tempo <= 7:
-            if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": txt_stats, "rh": rh, "ra": ra})
-        if is_mid_home and is_mid_away:
-            if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats, "rh": rh, "ra": ra})
-            is_bot_home_morno = rank_home >= 10; is_bot_away_morno = rank_away >= 10
-            if is_bot_home_morno and is_bot_away_morno:
-                if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
+    if 5 <= tempo <= 15:
+        if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
+        if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
+    if is_top_home and is_top_away and tempo <= 7:
+        if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": txt_stats, "rh": rh, "ra": ra})
+    if is_mid_home and is_mid_away:
+        if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats, "rh": rh, "ra": ra})
+        is_bot_home_morno = rank_home >= 10; is_bot_away_morno = rank_away >= 10
+        if is_bot_home_morno and is_bot_away_morno:
+            if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
     if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
         if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
     return SINAIS
@@ -1050,7 +1049,6 @@ with st.sidebar:
         if st.button("🧹 Limpar Cache"): 
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
         
-        # --- NOVO BOTAO DE PAUSE BIG DATA ---
         st.session_state.PAUSA_BIGDATA = st.toggle("⏸️ Pausar Big Data", value=st.session_state.PAUSA_BIGDATA)
         
         st.write("---")
@@ -1127,6 +1125,7 @@ if st.session_state.ROBO_LIGADO:
         safe_token = st.session_state.get('TG_TOKEN', '')
         safe_chat = st.session_state.get('TG_CHAT', '')
         safe_api = st.session_state.get('API_KEY', '')
+        hoje_real = get_time_br().strftime('%Y-%m-%d')
 
         verificar_automacao_bi(safe_token, safe_chat, s_padrao)
         verificar_alerta_matinal(safe_token, safe_chat, safe_api)
@@ -1135,7 +1134,7 @@ if st.session_state.ROBO_LIGADO:
         df_obs = st.session_state.get('df_vip', pd.DataFrame()); count_obs = len(df_obs)
         df_safe_show = st.session_state.get('df_safe', pd.DataFrame()); count_safe = len(df_safe_show)
         ids_safe = [normalizar_id(x) for x in df_safe_show['id'].values]
-        hoje_real = get_time_br().strftime('%Y-%m-%d')
+        
         if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
              df_full = st.session_state['historico_full']
              st.session_state['historico_sinais'] = df_full[df_full['Data'] == hoje_real].to_dict('records')[::-1]
@@ -1146,11 +1145,33 @@ if st.session_state.ROBO_LIGADO:
             url = "https://v3.football.api-sports.io/fixtures"
             resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
             update_api_usage(resp.headers); res = resp.json()
-            jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
+            jogos_live_raw = res.get('response', []) if not res.get('errors') else []
+            
+            # FILTRO DE SEGURANÇA: DATA DE HOJE + STATUS EM JOGO
+            jogos_live = [
+                j for j in jogos_live_raw 
+                if j['fixture']['status']['short'] in STATUS_IN_PLAY 
+                and j['fixture']['date'].startswith(hoje_real)
+            ]
+            
+            api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
         except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
 
-        if not api_error: 
+        # LIMPADOR DE MEMÓRIA AGRESSIVO
+        if not api_error:
+            ids_vivos = [j['fixture']['id'] for j in jogos_live]
+            # Limpa stats antigos do session_state
+            for key in list(st.session_state.keys()):
+                if key.startswith("st_"):
+                    try:
+                        fid_check = int(key.split("_")[1])
+                        if fid_check not in ids_vivos: del st.session_state[key]
+                    except: pass
+            # Limpa memória de pressão antiga
+            for fid_mem in list(st.session_state['memoria_pressao'].keys()):
+                if fid_mem not in ids_vivos: del st.session_state['memoria_pressao'][fid_mem]
+
             check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
             conferir_resultados_sniper(jogos_live) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
@@ -1166,7 +1187,6 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                # --- MODIFICAÇÃO BIG DATA COM PAUSE ---
                 if st_short == 'FT' and not st.session_state.PAUSA_BIGDATA:
                     if fid not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
@@ -1347,7 +1367,6 @@ if st.session_state.ROBO_LIGADO:
                     hoje_str = get_time_br().strftime('%Y-%m-%d')
                     df_bi_hoje = df_bi[df_bi['Data_Str'] == hoje_str]
                     hoje = pd.to_datetime(get_time_br().date())
-                    if 'bi_filter' not in st.session_state: st.session_state['bi_filter'] = "Tudo"
                     filtro = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"], key="bi_select")
                     if filtro == "Hoje": df_show = df_bi_hoje
                     elif filtro == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]
