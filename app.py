@@ -357,25 +357,37 @@ def adicionar_historico(item):
     st.session_state['precisa_salvar'] = True 
     return True
 
+# ==============================================================================
+# 4.1 FUNÇÃO DE SINCRONIZAÇÃO AJUSTADA
+# ==============================================================================
 def atualizar_historico_ram(lista_atualizada_hoje):
     if 'historico_full' not in st.session_state: return
     df_memoria = st.session_state['historico_full']
-    df_hoje_updates = pd.DataFrame(lista_atualizada_hoje)
-    if df_hoje_updates.empty or df_memoria.empty: return
-    mapa_atualizacao = {}
-    for _, row in df_hoje_updates.iterrows():
-        chave = f"{row['FID']}_{row['Estrategia']}"
-        mapa_atualizacao[chave] = row
+    if df_memoria.empty: return
+
+    # Mapeia as atualizações recebidas para busca rápida
+    mapa_atualizacao = {f"{row['FID']}_{row['Estrategia']}": row for row in lista_atualizada_hoje}
+    
     def atualizar_linha(row):
         chave = f"{row['FID']}_{row['Estrategia']}"
         if chave in mapa_atualizacao:
             nova_linha = mapa_atualizacao[chave]
+            # Detecta se houve mudança real para poupar salvamentos desnecessários
             if str(row['Resultado']) != str(nova_linha['Resultado']) or str(row['Odd']) != str(nova_linha['Odd']):
                 st.session_state['precisa_salvar'] = True
             return nova_linha
         return row
-    df_final = df_memoria.apply(atualizar_linha, axis=1)
-    st.session_state['historico_full'] = df_final
+    
+    # Atualiza o DataFrame mestre em memória
+    st.session_state['historico_full'] = df_memoria.apply(atualizar_linha, axis=1)
+    
+    # SINCRONIZAÇÃO COM A TELA: Recarrega o que deve ser exibido no Radar/Histórico
+    hoje = get_time_br().strftime('%Y-%m-%d')
+    df = st.session_state['historico_full']
+    mask_pendentes = (df['Resultado'] == 'Pendente')
+    mask_hoje = (df['Data'] == hoje)
+    # Atualiza a lista que o Streamlit usa para desenhar as abas e métricas
+    st.session_state['historico_sinais'] = df[mask_pendentes | mask_hoje].to_dict('records')[::-1]
 
 def salvar_bigdata(jogo_api, stats):
     try:
@@ -1193,7 +1205,6 @@ if st.session_state.ROBO_LIGADO:
         jogos_live = []
         try:
             url = "https://v3.football.api-sports.io/fixtures"
-            # --- FIX: Removido parâmetro '_' que causava erro na API ---
             resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
             update_api_usage(resp.headers); res = resp.json()
             jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
