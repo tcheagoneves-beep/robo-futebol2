@@ -47,6 +47,7 @@ if 'TG_TOKEN' not in st.session_state: st.session_state['TG_TOKEN'] = ""
 if 'TG_CHAT' not in st.session_state: st.session_state['TG_CHAT'] = ""
 if 'API_KEY' not in st.session_state: st.session_state['API_KEY'] = ""
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
+if 'PAUSA_BIGDATA' not in st.session_state: st.session_state.PAUSA_BIGDATA = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 
 if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
@@ -1048,6 +1049,10 @@ with st.sidebar:
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
         if st.button("🧹 Limpar Cache"): 
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
+        
+        # --- NOVO BOTAO DE PAUSE BIG DATA ---
+        st.session_state.PAUSA_BIGDATA = st.toggle("⏸️ Pausar Big Data", value=st.session_state.PAUSA_BIGDATA)
+        
         st.write("---")
         if st.button("🧠 Pedir Análise do BI"):
             if IA_ATIVADA:
@@ -1160,10 +1165,13 @@ if st.session_state.ROBO_LIGADO:
                 gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
-                if st_short == 'FT':
+                
+                # --- MODIFICAÇÃO BIG DATA COM PAUSE ---
+                if st_short == 'FT' and not st.session_state.PAUSA_BIGDATA:
                     if fid not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
+            
             if jogos_para_baixar:
                 novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, safe_api)
                 for fid, stats in novas_stats.items():
