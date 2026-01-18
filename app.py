@@ -751,9 +751,16 @@ def enviar_relatorio_bi(token, chat_ids):
             wr = (g/t*100) if t>0 else 0
             return f"{g}G - {r}R ({wr:.0f}%)"
 
-        df_finished = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        # --- CORREÇÃO DO ERRO DE ÍNDICE ---
+        # Filtra diretamente o dataframe d_30d para pegar apenas resultados válidos
+        stats = d_30d[d_30d['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+
         top_ligas_msg = ""
         piores_ligas_msg = ""
+
+        # Usa o dataframe stats já filtrado (Resultados Válidos nos últimos 30 dias)
+        # Se quiser estatísticas GERAIS (todo histórico), use df_finished abaixo:
+        df_finished = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
 
         if not df_finished.empty:
             grouped = df_finished.groupby('Liga')['Resultado'].apply(lambda x: (x.str.contains('GREEN').sum() / len(x) * 100, len(x), x.str.contains('RED').sum()))
@@ -786,7 +793,8 @@ def enviar_relatorio_bi(token, chat_ids):
         if token and chat_ids:
             plt.style.use('dark_background')
             fig, ax = plt.subplots(figsize=(7, 4))
-            stats = df[d_30d.index][df.loc[d_30d.index, 'Resultado'].isin(['✅ GREEN', '❌ RED'])]
+            
+            # --- PLOTAGEM SEGURA ---
             if not stats.empty:
                 c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
                 c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
@@ -826,6 +834,8 @@ def enviar_relatorio_bi(token, chat_ids):
                 enviar_telegram(token, chat_ids, msg_texto)
                 
                 plt.close(fig)
+            else:
+                st.warning("Sem dados suficientes nos últimos 30 dias para gerar gráfico.")
     except Exception as e: st.error(f"Erro ao gerar BI: {e}")
 
 def verificar_automacao_bi(token, chat_ids, stake_padrao):
