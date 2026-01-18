@@ -177,6 +177,46 @@ def extrair_dados_completos(stats_api):
         return texto
     except: return "Erro stats."
 
+# --- NOVA FUNÇÃO DE MÉDIA DE GOLS (SOLICITADA) ---
+@st.cache_data(ttl=3600)
+def buscar_media_gols_ultimos_jogos(api_key, home_id, away_id):
+    """
+    Busca os últimos 10/20 jogos de cada time para calcular:
+    - Média de gols do MANDANTE jogando em CASA.
+    - Média de gols do VISITANTE jogando FORA.
+    """
+    try:
+        def get_avg_goals(team_id, location_filter):
+            # Busca ultimos 20 jogos para garantir amostra suficiente de casa/fora
+            url = "https://v3.football.api-sports.io/fixtures"
+            params = {"team": team_id, "last": "20", "status": "FT"}
+            res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
+            jogos = res.get('response', [])
+            
+            gols_marcados = 0
+            jogos_contados = 0
+            
+            for j in jogos:
+                is_home_match = (j['teams']['home']['id'] == team_id)
+                if location_filter == 'home' and is_home_match:
+                    gols_marcados += (j['goals']['home'] or 0)
+                    jogos_contados += 1
+                elif location_filter == 'away' and not is_home_match:
+                    gols_marcados += (j['goals']['away'] or 0)
+                    jogos_contados += 1
+                
+                if jogos_contados >= 10: break # Limita aos ultimos 10 jogos no local específico
+            
+            if jogos_contados == 0: return "0.00"
+            return "{:.2f}".format(gols_marcados / jogos_contados)
+
+        avg_home = get_avg_goals(home_id, 'home')
+        avg_away = get_avg_goals(away_id, 'away')
+        
+        return {'home': avg_home, 'away': avg_away}
+    except:
+        return {'home': '?', 'away': '?'}
+
 # --- FUNÇÕES DE BANCO DE DADOS ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
@@ -714,10 +754,44 @@ def enviar_relatorio_bi(token, chat_ids):
         d_7d = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
         d_30d = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
 
-        def calc(d):
-            t = len(d); g = d['Resultado'].str.contains('GREEN').sum(); r = d['Resultado'].str.contains('RED').sum()
+        # Função de cálculo detalhado
+        def calc_detalhado(d):
+            t = len(d); 
+            g = d['Resultado'].str.contains('GREEN').sum(); 
+            r = d['Resultado'].str.contains('RED').sum()
             wr = (g/t*100) if t>0 else 0
-            return f"{g}G-{r}R ({wr:.0f}%)"
+            return f"{g}G - {r}R ({wr:.0f}%)"
+
+        # Cálculo de Top Ligas (Melhores e Piores)
+        df_finished = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        top_ligas_msg = ""
+        piores_ligas_msg = ""
+
+        if not df_finished.empty:
+            # Agrupa por Liga
+            grouped = df_finished.groupby('Liga')['Resultado'].apply(lambda x: (x.str.contains('GREEN').sum() / len(x) * 100, len(x), x.str.contains('RED').sum()))
+            
+            # Converte para DataFrame para ordenar
+            stats_ligas = pd.DataFrame(grouped.tolist(), index=grouped.index, columns=['Winrate', 'Total', 'Reds'])
+            stats_ligas = stats_ligas[stats_ligas['Total'] >= 2] # Filtro mínimo de 2 jogos
+
+            # Top 3 Melhores (Winrate)
+            melhores = stats_ligas.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(3)
+            lista_melhores = []
+            for liga, row in melhores.iterrows():
+                lista_melhores.append(f"🏆 {liga}: {row['Winrate']:.0f}%")
+            top_ligas_msg = "\n".join(lista_melhores)
+
+            # Top 3 Piores (Mais Reds)
+            piores = stats_ligas.sort_values(by=['Reds'], ascending=False).head(3)
+            lista_piores = []
+            for liga, row in piores.iterrows():
+                if row['Reds'] > 0:
+                    lista_piores.append(f"💀 {liga}: {row['Reds']} Reds")
+            piores_ligas_msg = "\n".join(lista_piores)
+
+        # Insight da IA
+        insight_text = analisar_bi_com_ia()
 
         if token and chat_ids:
             plt.style.use('dark_background')
@@ -731,12 +805,21 @@ def enviar_relatorio_bi(token, chat_ids):
                 plt.tight_layout()
                 buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
                 
-                msg = f"""📊 <b>RELATÓRIO DE PERFORMANCE</b>
+                msg = f"""📊 <b>RELATÓRIO DE PERFORMANCE COMPLETO</b>
                 
-                📆 <b>Hoje:</b> {calc(d_hoje)}
-                WK <b>7 Dias:</b> {calc(d_7d)}
-                MO <b>30 Dias:</b> {calc(d_30d)}
-                ∞ <b>Total:</b> {calc(df)}
+📆 <b>HOJE:</b> {calc_detalhado(d_hoje)}
+🗓 <b>SEMANA:</b> {calc_detalhado(d_7d)}
+📅 <b>MÊS (30d):</b> {calc_detalhado(d_30d)}
+♾ <b>TOTAL GERAL:</b> {calc_detalhado(df)}
+
+💎 <b>TOP LIGAS (Winrate):</b>
+{top_ligas_msg}
+
+⚠️ <b>PIORES LIGAS (Mais Reds):</b>
+{piores_ligas_msg}
+
+🧠 <b>INSIGHT DA IA:</b>
+{insight_text}
                 """
                 ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
                 for cid in ids: buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
@@ -757,12 +840,6 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
         enviar_relatorio_bi(token, chat_ids)
         st.session_state['bi_enviado'] = True
         st.toast("📊 Relatório BI Enviado!")
-    if agora.hour == 23 and agora.minute >= 35 and not st.session_state['ia_enviada']:
-        analise = analisar_bi_com_ia()
-        msg_ia = f"🧠 <b>CONSULTORIA DIÁRIA DA IA</b>\n\n{analise}"
-        enviar_telegram(token, chat_ids, msg_ia)
-        st.session_state['ia_enviada'] = True
-        st.toast("🤖 Relatório IA Enviado!")
     if agora.hour == 23 and agora.minute >= 40 and not st.session_state['financeiro_enviado']:
         analise_fin = analisar_financeiro_com_ia(stake_padrao, st.session_state.get('banca_inicial', 100))
         msg_fin = f"💰 <b>CONSULTORIA FINANCEIRA</b>\n\n{analise_fin}"
@@ -1280,6 +1357,10 @@ if st.session_state.ROBO_LIGADO:
                         except: pass
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
+                    
+                    # --- BUSCA MÉDIA DE GOLS DOS ÚLTIMOS 10 JOGOS ---
+                    medias_gols = buscar_media_gols_ultimos_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
+                    
                     for s in lista_sinais:
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         txt_pressao = gerar_barra_pressao(rh, ra) 
@@ -1309,7 +1390,7 @@ if st.session_state.ROBO_LIGADO:
                             item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
                             if adicionar_historico(item):
                                 prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                                msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_txt}"
+                                msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{prob}{opiniao_txt}"
                                 enviar_telegram(safe_token, safe_chat, msg)
                                 st.toast(f"Sinal: {s['tag']}")
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
@@ -1462,7 +1543,35 @@ if st.session_state.ROBO_LIGADO:
                         m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
                         st.divider()
                         
-                        # --- AUDITORIA DA IA (PEDIDO 6) ---
+                        # --- ANÁLISE DE LIGAS (NOVA) ---
+                        st.markdown("### 🏆 Melhores e Piores Ligas")
+                        col_top, col_worst = st.columns(2)
+                        
+                        df_finished = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                        if not df_finished.empty:
+                            liga_stats = df_finished.groupby('Liga')['Resultado'].apply(lambda x: pd.Series({
+                                'Winrate': (x.str.contains('GREEN').sum() / len(x) * 100),
+                                'Total': len(x),
+                                'Reds': x.str.contains('RED').sum()
+                            })).unstack()
+                            
+                            # Filtro mínimo de 2 jogos para não poluir
+                            liga_stats = liga_stats[liga_stats['Total'] >= 2]
+                            
+                            top_ligas = liga_stats.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(5)
+                            worst_ligas = liga_stats.sort_values(by=['Reds'], ascending=False).head(5)
+                            
+                            with col_top:
+                                st.caption("Ligas Mais Lucrativas (Winrate)")
+                                st.dataframe(top_ligas[['Winrate', 'Total']].style.format({'Winrate': '{:.1f}%'}), use_container_width=True)
+                                
+                            with col_worst:
+                                st.caption("Ligas com Mais Reds (Cuidado)")
+                                st.dataframe(worst_ligas[['Reds', 'Total']], use_container_width=True)
+                        
+                        st.divider()
+
+                        # --- AUDITORIA DA IA ---
                         st.markdown("### 🧠 Auditoria da IA (Aprovações vs Resultados)")
                         if 'Opiniao_IA' in df_show.columns:
                             df_audit = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
@@ -1473,7 +1582,6 @@ if st.session_state.ROBO_LIGADO:
                         st.markdown("### 📈 Performance por Estratégia")
                         st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                         if not st_s.empty:
-                            # Tabela de % de Acerto (Pedido 4)
                             resumo_strat = st_s.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
                             if '✅ GREEN' in resumo_strat.columns and '❌ RED' in resumo_strat.columns:
                                 resumo_strat['Winrate'] = (resumo_strat['✅ GREEN'] / (resumo_strat['✅ GREEN'] + resumo_strat['❌ RED']) * 100).round(1)
