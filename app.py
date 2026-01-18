@@ -6,9 +6,9 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# --- CORREÇÃO CRÍTICA PARA O GRÁFICO ---
+# --- CORREÇÃO DE GRÁFICO (Backend AGG) ---
 import matplotlib
-matplotlib.use('Agg') # Força o gráfico a ser gerado em segundo plano (sem janela)
+matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 
 import plotly.express as px
@@ -182,7 +182,6 @@ def extrair_dados_completos(stats_api):
         return texto
     except: return "Erro stats."
 
-# --- FUNÇÃO DE MÉDIA DE GOLS ---
 @st.cache_data(ttl=3600)
 def buscar_media_gols_ultimos_jogos(api_key, home_id, away_id):
     try:
@@ -707,8 +706,12 @@ def _worker_telegram_photo(token, chat_id, photo_buffer, caption):
         url = f"https://api.telegram.org/bot{token}/sendPhoto"
         files = {'photo': photo_buffer}
         data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'}
-        requests.post(url, files=files, data=data, timeout=10)
-    except: pass
+        # Envia a FOTO com legenda curta
+        res = requests.post(url, files=files, data=data, timeout=15)
+        if res.status_code != 200:
+            st.error(f"Erro Telegram Foto ({res.status_code}): {res.text}")
+    except Exception as e:
+        st.error(f"Erro envio foto: {e}")
 
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
@@ -741,7 +744,6 @@ def enviar_relatorio_bi(token, chat_ids):
         d_7d = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
         d_30d = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
 
-        # Função de cálculo detalhado
         def calc_detalhado(d):
             t = len(d); 
             g = d['Resultado'].str.contains('GREEN').sum(); 
@@ -749,7 +751,6 @@ def enviar_relatorio_bi(token, chat_ids):
             wr = (g/t*100) if t>0 else 0
             return f"{g}G - {r}R ({wr:.0f}%)"
 
-        # Cálculo de Top Ligas (Melhores e Piores)
         df_finished = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         top_ligas_msg = ""
         piores_ligas_msg = ""
@@ -765,7 +766,6 @@ def enviar_relatorio_bi(token, chat_ids):
             piores = stats_ligas.sort_values(by=['Reds'], ascending=False).head(3)
             piores_ligas_msg = "\n".join([f"💀 {liga}: {row['Reds']} Reds" for liga, row in piores.iterrows() if row['Reds'] > 0])
         
-        # --- AUDITORIA DA IA (Winrate dos "Aprovados" vs "Arriscados") ---
         ia_audit_msg = "<i>Sem dados suficientes para auditar a IA.</i>"
         if 'Opiniao_IA' in df.columns:
             df_ia = df[df['Resultado'].isin(['✅ GREEN', '❌ RED']) & (df['Opiniao_IA'].isin(['Aprovado', 'Arriscado']))]
@@ -795,29 +795,38 @@ def enviar_relatorio_bi(token, chat_ids):
                 plt.tight_layout()
                 buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
                 
-                msg = f"""📊 <b>RELATÓRIO DE PERFORMANCE COMPLETO</b>
+                # --- SOLUÇÃO PARA O LIMITE DE CARACTERES ---
+                # 1. Manda a foto com legenda curta
+                msg_foto = "📊 <b>Gráfico de Performance (30 Dias)</b>\n👇 <i>Relatório detalhado abaixo</i>"
+                ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+                for cid in ids: 
+                    buf.seek(0)
+                    _worker_telegram_photo(token, cid, buf, msg_foto)
+                
+                # 2. Manda o texto longo separado
+                msg_texto = f"""📈 <b>RELATÓRIO BI COMPLETO</b>
                 
 📆 <b>HOJE:</b> {calc_detalhado(d_hoje)}
 🗓 <b>SEMANA:</b> {calc_detalhado(d_7d)}
 📅 <b>MÊS (30d):</b> {calc_detalhado(d_30d)}
 ♾ <b>TOTAL GERAL:</b> {calc_detalhado(df)}
 
-🔍 <b>AUDITORIA DA IA (ACERTOS):</b>
+🔍 <b>AUDITORIA DA IA:</b>
 {ia_audit_msg}
 
 💎 <b>TOP LIGAS (Winrate):</b>
 {top_ligas_msg}
 
-⚠️ <b>PIORES LIGAS (Mais Reds):</b>
+⚠️ <b>PIORES LIGAS (Reds):</b>
 {piores_ligas_msg}
 
 🧠 <b>INSIGHT DA IA:</b>
 {insight_text}
                 """
-                ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
-                for cid in ids: buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
+                enviar_telegram(token, chat_ids, msg_texto)
+                
                 plt.close(fig)
-    except: pass
+    except Exception as e: st.error(f"Erro ao gerar BI: {e}")
 
 def verificar_automacao_bi(token, chat_ids, stake_padrao):
     agora = get_time_br()
