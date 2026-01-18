@@ -16,6 +16,10 @@ import google.generativeai as genai
 import json
 import re
 
+# --- NOVAS IMPORTAÇÕES PARA O FIREBASE ---
+import firebase_admin
+from firebase_admin import credentials, firestore
+
 # ==============================================================================
 # 1. CONFIGURAÇÃO INICIAL E CSS
 # ==============================================================================
@@ -73,7 +77,26 @@ if 'bigdata_enviado' not in st.session_state: st.session_state['bigdata_enviado'
 if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'] = False
 
 # ==============================================================================
-# 3. CONFIGURAÇÃO IA & CONEXÃO
+# 2.1 CONEXÃO FIREBASE (BIG DATA)
+# ==============================================================================
+db_firestore = None
+# Tenta conectar apenas se a chave existir nos Secrets
+if "FIREBASE_CONFIG" in st.secrets:
+    try:
+        # Evita reinicializar o app se já estiver rodando
+        if not firebase_admin._apps:
+            # Carrega o JSON que você colou nos secrets
+            fb_creds = json.loads(st.secrets["FIREBASE_CONFIG"])
+            cred = credentials.Certificate(fb_creds)
+            firebase_admin.initialize_app(cred)
+        
+        db_firestore = firestore.client()
+        # st.toast("🔥 Firebase Conectado!") # Descomente se quiser ver o aviso
+    except Exception as e:
+        st.error(f"Erro na conexão Firebase: {e}")
+
+# ==============================================================================
+# 3. CONFIGURAÇÃO IA & CONEXÃO GSHEETS
 # ==============================================================================
 IA_ATIVADA = False
 try:
@@ -94,7 +117,7 @@ COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia'
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
-COLS_BIGDATA = ['FID', 'Data', 'Liga', 'Jogo', 'Placar_Final', 'Chutes_Total', 'Chutes_Gol', 'Escanteios', 'Posse_Casa', 'Cartoes']
+# COLS_BIGDATA não é mais usado para salvar no Sheets, mas mantido para compatibilidade se necessário
 
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
@@ -149,7 +172,6 @@ def verificar_reset_diario():
         return True
     return False
 
-# AJUSTE NA IA: Extração de dados expandida
 def extrair_dados_completos(stats_api):
     if not stats_api: return "Dados indisponíveis."
     try:
@@ -338,14 +360,11 @@ def carregar_tudo(force=False):
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
     
+    # IMPORTANTE: Carregamento do BigData agora é via Firebase na aba de visualização, 
+    # não precisamos carregar tudo para a memória aqui.
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
-        try:
-            df_bd_load = carregar_aba("BigData", COLS_BIGDATA)
-            if not df_bd_load.empty:
-                fids_existentes = set(df_bd_load['FID'].astype(str).values)
-                st.session_state['jogos_salvos_bigdata'].update(fids_existentes)
-            st.session_state['jogos_salvos_bigdata_carregados'] = True
-        except: pass
+        # Apenas inicializa o set vazio ou recupera se quiser cachear IDs
+        st.session_state['jogos_salvos_bigdata_carregados'] = True
     
     st.session_state['last_db_update'] = now
 
@@ -379,42 +398,50 @@ def atualizar_historico_ram(lista_atualizada_hoje):
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
 
+# ==============================================================================
+# NOVA FUNÇÃO DE SALVAMENTO NO FIREBASE
+# ==============================================================================
 def salvar_bigdata(jogo_api, stats):
+    # Verifica se o Firebase está conectado
+    if not db_firestore: 
+        # Opcional: printar erro se quiser
+        return 
+
     try:
         fid = str(jogo_api['fixture']['id'])
+        # Verifica cache local para não re-salvar repetidamente na mesma sessão
         if fid in st.session_state['jogos_salvos_bigdata']: return 
 
-        home = jogo_api['teams']['home']['name']; away = jogo_api['teams']['away']['name']
-        placar = f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}"
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
-        chutes = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
-        gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
-        cantos = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
-        cartoes = gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards')
-        posse = f"{gv(s1, 'Ball Possession')}/{gv(s2, 'Ball Possession')}"
-        
-        novo_item = {
-            'FID': fid, 
-            'Data': get_time_br().strftime('%Y-%m-%d'), 
-            'Liga': jogo_api['league']['name'], 
-            'Jogo': f"{home} x {away}",
-            'Placar_Final': placar, 
-            'Chutes_Total': chutes, 
-            'Chutes_Gol': gol,
-            'Escanteios': cantos, 
-            'Posse_Casa': str(posse), 
-            'Cartoes': cartoes
+        # Cria o objeto JSON/Dict para salvar no banco NoSQL
+        item_bigdata = {
+            'fid': fid,
+            'data_hora': get_time_br().strftime('%Y-%m-%d %H:%M'),
+            'liga': jogo_api['league']['name'],
+            'jogo': f"{jogo_api['teams']['home']['name']} x {jogo_api['teams']['away']['name']}",
+            'placar_final': f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}",
+            'estatisticas': {
+                'chutes_total': gv(s1, 'Total Shots') + gv(s2, 'Total Shots'),
+                'chutes_gol': gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal'),
+                'chutes_area': gv(s1, 'Shots insidebox') + gv(s2, 'Shots insidebox'),
+                'escanteios': gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks'),
+                'posse_casa': str(gv(s1, 'Ball Possession')),
+                'posse_fora': str(gv(s2, 'Ball Possession')),
+                'cartoes': gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards'),
+                'precisao_passes': f"{gv(s1, 'Passes %')}/{gv(s2, 'Passes %')}"
+            }
         }
         
-        df_bd = carregar_aba("BigData", COLS_BIGDATA)
-        df_bd = pd.concat([df_bd, pd.DataFrame([novo_item])], ignore_index=True)
-        sucesso = salvar_aba("BigData", df_bd)
+        # Grava no Firebase na coleção "BigData_Futebol" usando o FID como chave única
+        db_firestore.collection("BigData_Futebol").document(fid).set(item_bigdata)
         
-        if sucesso:
-            st.session_state['jogos_salvos_bigdata'].add(fid)
-    except: pass
+        # Atualiza cache local
+        st.session_state['jogos_salvos_bigdata'].add(fid)
+        
+    except Exception as e:
+        print(f"Erro ao salvar no Firebase: {e}") # Log interno
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
@@ -697,12 +724,23 @@ def analisar_financeiro_com_ia(stake, banca):
 
 def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
-    df_bd = carregar_aba("BigData", COLS_BIGDATA)
-    if len(df_bd) < 5: return "Coletando dados... Preciso de mais jogos finalizados."
+    # Tenta usar os dados do Firebase (mais robusto)
+    if db_firestore:
+        try:
+            docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(100).stream()
+            data = [d.to_dict() for d in docs]
+            if len(data) < 5: return "Coletando dados no Firebase... Aguarde mais jogos."
+            amostra = json.dumps(data) # Transforma em texto para a IA ler
+        except: return "Erro ao ler Firebase."
+    else:
+        # Fallback para o CSV antigo se Firebase falhar
+        df_bd = carregar_aba("BigData", COLS_BIGDATA)
+        if len(df_bd) < 5: return "Coletando dados... Preciso de mais jogos finalizados."
+        amostra = df_bd.tail(50).to_csv(index=False)
+
     try:
-        amostra = df_bd.tail(100).to_csv(index=False)
         prompt_criacao = f"""
-        Cientista de Dados. Analise CSV: {amostra}
+        Cientista de Dados. Analise esta amostra de jogos (JSON/CSV): {amostra}
         MISSÃO: Padrão ESTATÍSTICO GLOBAL lucrativo (Cantos, Cartões).
         Saída: Nome, Regra e Lógica.
         """
@@ -732,8 +770,6 @@ def enviar_telegram(token, chat_ids, msg):
         t.daemon = True; t.start()
 
 def enviar_analise_estrategia(token, chat_ids):
-    df_bd = carregar_aba("BigData", COLS_BIGDATA)
-    if len(df_bd) < 10: return 
     sugestao = criar_estrategia_nova_ia()
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
     msg = f"🧪 <b>LABORATÓRIO DE ESTRATÉGIAS (IA)</b>\n\n{sugestao}"
@@ -1196,6 +1232,7 @@ with st.sidebar:
     st.write("---")
     st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
     
+    # Status da IA e Firebase
     if IA_ATIVADA:
         if st.session_state['ia_bloqueada_ate']:
             ag = datetime.now()
@@ -1205,6 +1242,11 @@ with st.sidebar:
             else: st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
         else: st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
     else: st.markdown('<div class="status-error">❌ IA DESCONECTADA</div>', unsafe_allow_html=True)
+
+    if db_firestore:
+        st.markdown('<div class="status-active">🔥 FIREBASE CONECTADO</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="status-warning">⚠️ FIREBASE OFFLINE</div>', unsafe_allow_html=True)
 
     st.markdown("---")
     st.markdown("### ⚠️ Zona de Perigo")
@@ -1253,6 +1295,7 @@ if st.session_state.ROBO_LIGADO:
         
         radar = []; agenda = []
         if not api_error:
+            # 1. COLETA DE STATS FINAIS PARA BIG DATA (FIREBASE)
             jogos_para_baixar = []
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
@@ -1261,18 +1304,24 @@ if st.session_state.ROBO_LIGADO:
                 gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
+                
+                # Se o jogo acabou, salva no Firebase
                 if st_short == 'FT':
                     if str(fid) not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
+            
             if jogos_para_baixar:
                 novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, safe_api)
                 for fid, stats in novas_stats.items():
                     jogo_ft = next((x for x in jogos_para_baixar if x['fixture']['id'] == fid and x['fixture']['status']['short'] == 'FT'), None)
-                    if jogo_ft: salvar_bigdata(jogo_ft, stats)
+                    if jogo_ft: 
+                        salvar_bigdata(jogo_ft, stats) # Salva no Firebase
                     else:
                         st.session_state['controle_stats'][fid] = datetime.now()
                         st.session_state[f"st_{fid}"] = stats
+            
+            # 2. PROCESSAMENTO DE SINAIS
             candidatos_multipla = []; ids_no_radar = []
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
@@ -1297,6 +1346,7 @@ if st.session_state.ROBO_LIGADO:
                     lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
                     salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'], tem_tabela=(rank_h is not None))
                     resetar_erros(lid)
+                    # Lógica de Múltipla HT
                     if st_short == 'HT' and gh == 0 and ga == 0:
                         try:
                             s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
@@ -1336,7 +1386,7 @@ if st.session_state.ROBO_LIGADO:
                                 st.toast(f"Sinal: {s['tag']}")
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                             st.session_state['alertas_enviados'].add(uid_super)
-                            msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estrategia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
+                            msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
                             enviar_telegram(safe_token, safe_chat, msg_super)
                             st.toast(f"💎 Odd Subiu: {s['tag']}")
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
@@ -1372,7 +1422,7 @@ if st.session_state.ROBO_LIGADO:
         c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
         c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{count_safe}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
         st.write("")
-        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})", "💾 Big Data"])
+        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})", "💾 Big Data (Firebase)"])
         with abas[0]: 
             if radar: st.dataframe(pd.DataFrame(radar)[['Liga', 'Jogo', 'Tempo', 'Status']].astype(str), use_container_width=True, hide_index=True)
             else: st.info("Buscando jogos...")
@@ -1517,11 +1567,24 @@ if st.session_state.ROBO_LIGADO:
             if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
         with abas[8]:
-            df_big = carregar_aba("BigData", COLS_BIGDATA)
-            st.markdown(f"### 💾 Banco de Dados de Partidas ({len(df_big)} Jogos Salvos)")
-            st.caption("A IA usa esses dados para criar novas estratégias. Eles são salvos automaticamente quando um jogo termina.")
-            if not df_big.empty: st.dataframe(df_big, use_container_width=True)
-            else: st.info("Aguardando o primeiro jogo terminar para salvar os dados...")
+            st.markdown(f"### 💾 Banco de Dados de Partidas (Firebase)")
+            st.caption("A IA usa esses dados para criar novas estratégias. Os dados agora são salvos na nuvem do Google Firestore.")
+            
+            if db_firestore:
+                try:
+                    # Carrega apenas os últimos 50 jogos para não pesar a interface
+                    docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
+                    data = [d.to_dict() for d in docs]
+                    if data:
+                        st.success(f"🔥 {len(data)} Jogos Recentes Carregados do Firebase")
+                        st.dataframe(pd.DataFrame(data), use_container_width=True)
+                    else:
+                        st.info("Nenhum jogo salvo no Firebase ainda. Aguarde o término de uma partida.")
+                except Exception as e:
+                    st.error(f"Erro ao ler Firebase: {e}")
+            else:
+                st.warning("⚠️ Firebase não conectado. Adicione as credenciais nos Secrets.")
+
         for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
             time.sleep(1)
