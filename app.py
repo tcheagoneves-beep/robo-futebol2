@@ -149,18 +149,23 @@ def verificar_reset_diario():
         return True
     return False
 
+# AJUSTE NA IA: Extração de dados expandida
 def extrair_dados_completos(stats_api):
     if not stats_api: return "Dados indisponíveis."
     try:
         s1 = stats_api[0]['statistics']; s2 = stats_api[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
+        
         texto = f"""
+        📊 ESTATÍSTICAS DETALHADAS (Casa x Visitante):
         - Posse: {gv(s1, 'Ball Possession')} x {gv(s2, 'Ball Possession')}
-        - Chutes Totais: {gv(s1, 'Total Shots')} x {gv(s2, 'Total Shots')}
-        - Chutes Gol: {gv(s1, 'Shots on Goal')} x {gv(s2, 'Shots on Goal')}
-        - Cantos: {gv(s1, 'Corner Kicks')} x {gv(s2, 'Corner Kicks')}
-        - Ataques P.: {gv(s1, 'Dangerous Attacks')} x {gv(s2, 'Dangerous Attacks')}
-        - CV: {gv(s1, 'Red Cards')} x {gv(s2, 'Red Cards')}
+        - Chutes Totais (No Gol): {gv(s1, 'Total Shots')}({gv(s1, 'Shots on Goal')}) x {gv(s2, 'Total Shots')}({gv(s2, 'Shots on Goal')})
+        - Chutes Dentro da Área: {gv(s1, 'Shots insidebox')} x {gv(s2, 'Shots insidebox')}
+        - Escanteios: {gv(s1, 'Corner Kicks')} x {gv(s2, 'Corner Kicks')}
+        - Ataques Perigosos: {gv(s1, 'Dangerous Attacks')} x {gv(s2, 'Dangerous Attacks')}
+        - Faltas Cometidas: {gv(s1, 'Fouls')} x {gv(s2, 'Fouls')}
+        - Cartões (A/V): {gv(s1, 'Yellow Cards')}/{gv(s1, 'Red Cards')} x {gv(s2, 'Yellow Cards')}/{gv(s2, 'Red Cards')}
+        - Precisão de Passes: {gv(s1, 'Passes %')} x {gv(s2, 'Passes %')}
         """
         return texto
     except: return "Erro stats."
@@ -572,23 +577,21 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
     except:
         return calcular_odd_media_historica(estrategia)
 
+# AJUSTE NA IA: Lógica de consulta expandida com correlação de dados
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     if not IA_ATIVADA: return ""
     
-    # --- NOVO: Análise do Histórico da Estratégia ---
+    # --- Análise do Histórico da Estratégia ---
     df = st.session_state.get('historico_full', pd.DataFrame())
     resumo_historico = "Sem dados históricos suficientes desta estratégia."
     
     if not df.empty:
-        # Filtra apenas a estratégia atual
         df_strat = df[df['Estrategia'] == estrategia]
         total_entradas = len(df_strat)
-        
         if total_entradas > 0:
             greens = len(df_strat[df_strat['Resultado'].str.contains('GREEN', na=False)])
             reds = len(df_strat[df_strat['Resultado'].str.contains('RED', na=False)])
             winrate = (greens / total_entradas * 100)
-            
             resumo_historico = (
                 f"PERFORMANCE HISTÓRICA DO ROBÔ NA ESTRATÉGIA '{estrategia}':\n"
                 f"- Total de Entradas Passadas: {total_entradas}\n"
@@ -596,7 +599,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
                 f"- Greens: {greens} | Reds: {reds}\n"
                 "USE ESTE DADO HISTÓRICO COMO PESO FORTE NA SUA DECISÃO."
             )
-    # ------------------------------------------------
 
     if st.session_state['ia_bloqueada_ate']:
         agora = datetime.now()
@@ -606,23 +608,27 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     dados_ricos = extrair_dados_completos(stats_raw)
     
     prompt = f"""
-    Atue como um Trader Esportivo Sênior. Você deve validar uma entrada.
+    Atue como um Trader Esportivo Especialista em Análise de Dados e In-Play. Você deve validar uma entrada.
     
     CONTEXTO DO JOGO AO VIVO:
     - Jogo: {dados_jogo['jogo']}
     - Tempo: {dados_jogo['tempo']}' | Placar: {dados_jogo['placar']}
-    - Estatísticas Ao Vivo: {dados_ricos}
+    - Estatísticas Ao Vivo Detalhadas: {dados_ricos}
     
     ESTRATÉGIA APLICADA: "{estrategia}"
-    
     {resumo_historico}
     
-    Sua missão: Analise se o cenário do jogo AO VIVO favorece essa estratégia, mas considere se a estratégia costuma ser lucrativa historicamente.
-    Responda ESTRITAMENTE neste formato: "Aprovado" ou "Arriscado" + um motivo ultra curto (máximo 8 palavras).
+    MISSÃO: Analise a correlação entre os novos dados fornecidos. Considere que:
+    1. Grande volume de Chutes dentro da área e Escanteios indica pressão real e perigo iminente.
+    2. Precisão de passes baixa somada a muitas faltas indica jogo truncado, desorganizado e sem ritmo de gol.
+    3. Cartões vermelhos mudam drasticamente o favoritismo e o comportamento tático.
+    
+    Analise se o cenário favorece essa estratégia e se ela costuma ser lucrativa historicamente.
+    Responda ESTRITAMENTE neste formato: "Aprovado" ou "Arriscado" | [Motivo ultra curto com base na correlação dos dados, máximo 8 palavras].
     """
     
     try:
-        response = model_ia.generate_content(prompt, request_options={"timeout": 10})
+        response = model_ia.generate_content(prompt, request_options={"timeout": 12})
         st.session_state['gemini_usage']['used'] += 1
         return f"\n🤖 <b>IA:</b> {response.text.strip()}"
     except Exception as e:
@@ -1330,7 +1336,7 @@ if st.session_state.ROBO_LIGADO:
                                 st.toast(f"Sinal: {s['tag']}")
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                             st.session_state['alertas_enviados'].add(uid_super)
-                            msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
+                            msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estrategia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
                             enviar_telegram(safe_token, safe_chat, msg_super)
                             st.toast(f"💎 Odd Subiu: {s['tag']}")
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
