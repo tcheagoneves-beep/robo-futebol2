@@ -63,6 +63,7 @@ if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_env
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
 if 'jogos_salvos_bigdata' not in st.session_state: st.session_state['jogos_salvos_bigdata'] = set()
+if 'jogos_salvos_bigdata_carregados' not in st.session_state: st.session_state['jogos_salvos_bigdata_carregados'] = False
 if 'ia_bloqueada_ate' not in st.session_state: st.session_state['ia_bloqueada_ate'] = None
 if 'last_check_date' not in st.session_state: st.session_state['last_check_date'] = ""
 if 'bi_enviado' not in st.session_state: st.session_state['bi_enviado'] = False
@@ -93,7 +94,9 @@ COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia'
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
+# IMPORTANTE: Esta lista define o que será salvo no BigData
 COLS_BIGDATA = ['FID', 'Data', 'Liga', 'Jogo', 'Placar_Final', 'Chutes_Total', 'Chutes_Gol', 'Escanteios', 'Posse_Casa', 'Cartoes']
+
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
@@ -330,6 +333,18 @@ def carregar_tudo(force=False):
             if 'historico_full' not in st.session_state:
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
+    
+    # --- NOVO: Carregamento dos Jogos do BigData ---
+    # Isso impede que o sistema tente salvar jogos repetidos e carrega o que já existe
+    if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
+        try:
+            df_bd_load = carregar_aba("BigData", COLS_BIGDATA)
+            if not df_bd_load.empty:
+                fids_existentes = set(df_bd_load['FID'].astype(str).values)
+                st.session_state['jogos_salvos_bigdata'].update(fids_existentes)
+            st.session_state['jogos_salvos_bigdata_carregados'] = True
+        except: pass
+    
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
@@ -365,28 +380,40 @@ def atualizar_historico_ram(lista_atualizada_hoje):
 def salvar_bigdata(jogo_api, stats):
     try:
         fid = str(jogo_api['fixture']['id'])
+        # Proteção contra duplicidade
         if fid in st.session_state['jogos_salvos_bigdata']: return 
+
         home = jogo_api['teams']['home']['name']; away = jogo_api['teams']['away']['name']
         placar = f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}"
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
+        
         chutes = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
         gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
         cantos = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
         cartoes = gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards')
-        ataques = gv(s1, 'Dangerous Attacks') + gv(s2, 'Dangerous Attacks')
         posse = f"{gv(s1, 'Ball Possession')}/{gv(s2, 'Ball Possession')}"
-        faltas = gv(s1, 'Fouls') + gv(s2, 'Fouls')
+        
+        # Criação do dicionário ESTRITAMENTE igual a COLS_BIGDATA
         novo_item = {
-            'FID': fid, 'Data': get_time_br().strftime('%Y-%m-%d'), 
-            'Liga': jogo_api['league']['name'], 'Jogo': f"{home} x {away}",
-            'Placar_Final': placar, 'Chutes_Total': chutes, 'Chutes_Gol': gol,
-            'Escanteios': cantos, 'Posse_Casa': str(posse), 'Faltas': faltas, 'Ataques_Perigosos': ataques
+            'FID': fid, 
+            'Data': get_time_br().strftime('%Y-%m-%d'), 
+            'Liga': jogo_api['league']['name'], 
+            'Jogo': f"{home} x {away}",
+            'Placar_Final': placar, 
+            'Chutes_Total': chutes, 
+            'Chutes_Gol': gol,
+            'Escanteios': cantos, 
+            'Posse_Casa': str(posse), 
+            'Cartoes': cartoes
         }
+        
         df_bd = carregar_aba("BigData", COLS_BIGDATA)
         df_bd = pd.concat([df_bd, pd.DataFrame([novo_item])], ignore_index=True)
-        salvar_aba("BigData", df_bd)
-        st.session_state['jogos_salvos_bigdata'].add(fid)
+        sucesso = salvar_aba("BigData", df_bd)
+        
+        if sucesso:
+            st.session_state['jogos_salvos_bigdata'].add(fid)
     except: pass
 
 def calcular_stats(df_raw):
@@ -519,18 +546,53 @@ def recuperar_odd_justa(odd_str, estrategia):
 
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     if not IA_ATIVADA: return ""
+    
+    # --- NOVO: Análise do Histórico da Estratégia ---
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    resumo_historico = "Sem dados históricos suficientes desta estratégia."
+    
+    if not df.empty:
+        # Filtra apenas a estratégia atual
+        df_strat = df[df['Estrategia'] == estrategia]
+        total_entradas = len(df_strat)
+        
+        if total_entradas > 0:
+            greens = len(df_strat[df_strat['Resultado'].str.contains('GREEN', na=False)])
+            reds = len(df_strat[df_strat['Resultado'].str.contains('RED', na=False)])
+            winrate = (greens / total_entradas * 100)
+            
+            resumo_historico = (
+                f"PERFORMANCE HISTÓRICA DO ROBÔ NA ESTRATÉGIA '{estrategia}':\n"
+                f"- Total de Entradas Passadas: {total_entradas}\n"
+                f"- Taxa de Acerto (Winrate): {winrate:.1f}%\n"
+                f"- Greens: {greens} | Reds: {reds}\n"
+                "USE ESTE DADO HISTÓRICO COMO PESO FORTE NA SUA DECISÃO."
+            )
+    # ------------------------------------------------
+
     if st.session_state['ia_bloqueada_ate']:
         agora = datetime.now()
         if agora < st.session_state['ia_bloqueada_ate']: return ""
         else: st.session_state['ia_bloqueada_ate'] = None
+        
     dados_ricos = extrair_dados_completos(stats_raw)
+    
     prompt = f"""
-    Aja como Trader Profissional.
-    JOGO: {dados_jogo['jogo']} | TEMPO: {dados_jogo['tempo']}'
-    ESTRATÉGIA: "{estrategia}"
-    DADOS: {dados_ricos}
-    Responda APENAS: "Aprovado" ou "Arriscado" + motivo curto (max 10 palavras).
+    Atue como um Trader Esportivo Sênior. Você deve validar uma entrada.
+    
+    CONTEXTO DO JOGO AO VIVO:
+    - Jogo: {dados_jogo['jogo']}
+    - Tempo: {dados_jogo['tempo']}' | Placar: {dados_jogo['placar']}
+    - Estatísticas Ao Vivo: {dados_ricos}
+    
+    ESTRATÉGIA APLICADA: "{estrategia}"
+    
+    {resumo_historico}
+    
+    Sua missão: Analise se o cenário do jogo AO VIVO favorece essa estratégia, mas considere se a estratégia costuma ser lucrativa historicamente.
+    Responda ESTRITAMENTE neste formato: "Aprovado" ou "Arriscado" + um motivo ultra curto (máximo 8 palavras).
     """
+    
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 10})
         st.session_state['gemini_usage']['used'] += 1
@@ -1026,6 +1088,7 @@ def resetar_sistema_completo():
     st.session_state['memoria_pressao'] = {}
     st.session_state['controle_stats'] = {}
     st.session_state['jogos_salvos_bigdata'] = set()
+    st.session_state['jogos_salvos_bigdata_carregados'] = False
     try:
         conn.clear(worksheet="Historico"); salvar_aba("Historico", st.session_state['historico_full'])
         conn.clear(worksheet="Blacklist"); salvar_aba("Blacklist", st.session_state['df_black'])
@@ -1161,7 +1224,7 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 if st_short == 'FT':
-                    if fid not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
+                    if str(fid) not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
             if jogos_para_baixar:
