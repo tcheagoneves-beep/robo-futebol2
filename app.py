@@ -521,11 +521,15 @@ def buscar_inteligencia(estrategia, liga, jogo):
 # --- Funções IA e Lógica ---
 def calcular_odd_media_historica(estrategia):
     """
-    Calcula a média real das odds obtidas nessa estratégia no passado.
-    Se não tiver dados suficientes, retorna o padrão conservador de 1.20.
+    Calcula a média real das odds obtidas nessa estratégia no passado,
+    mas aplica um TETO MÁXIMO (Capping) para não inflar resultados
+    quando a odd real estiver faltando.
     """
     df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return 1.20 # Padrão conservador solicitado
+    PADRAO_CONSERVADOR = 1.20
+    TETO_MAXIMO_FALLBACK = 1.50 # Se não souber a odd, nunca assuma mais que 1.50
+    
+    if df.empty: return PADRAO_CONSERVADOR
     
     try:
         # Filtra a estratégia específica
@@ -534,29 +538,30 @@ def calcular_odd_media_historica(estrategia):
         # Converte para numérico e limpa erros
         df_strat['Odd_Num'] = pd.to_numeric(df_strat['Odd'], errors='coerce')
         
-        # FILTRO DE QUALIDADE:
-        # Só consideramos para a média odds que sejam "reais" (maiores que 1.15 e menores que 50.0)
-        # Isso ignora os placeholders de erro (1.10) e erros de API (odds gigantes)
+        # Filtra odds válidas (reais) para calcular a média
         df_validas = df_strat[(df_strat['Odd_Num'] > 1.15) & (df_strat['Odd_Num'] < 50.0)]
         
         if df_validas.empty:
-            return 1.20 # Sem histórico válido -> Conservador
+            return PADRAO_CONSERVADOR
             
         media = df_validas['Odd_Num'].mean()
         
-        # Trava de segurança: Se a média der algo absurdo, mantém conservador
-        if media < 1.15: return 1.20
+        # --- TRAVA DE SEGURANÇA (NOVA LÓGICA) ---
+        # Mesmo que a média histórica seja alta (ex: 4.98), se estamos
+        # "chutando" o valor por falta de dados, aplicamos um teto.
+        media_segura = min(media, TETO_MAXIMO_FALLBACK)
         
-        return float(f"{media:.2f}")
+        if media_segura < 1.15: return PADRAO_CONSERVADOR
+        
+        return float(f"{media_segura:.2f}")
     except:
-        return 1.20
+        return PADRAO_CONSERVADOR
 
 def obter_odd_final_para_calculo(odd_registro, estrategia):
     """
     Lógica de Decisão:
     1. Tenta usar a odd que foi salva.
-    2. Se for 'podre' (<= 1.15), busca a média histórica da estratégia.
-    3. Se não tiver histórico, usa 1.20.
+    2. Se for 'podre' (<= 1.15), busca a média histórica TRAVADA pelo teto.
     """
     try:
         valor = float(odd_registro)
@@ -1383,7 +1388,7 @@ if st.session_state.ROBO_LIGADO:
             if not df_fin.empty:
                 df_fin = df_fin.copy()
                 
-                # --- APLICAÇÃO DA NOVA LÓGICA DE ODD JUSTA ---
+                # --- APLICAÇÃO DA NOVA LÓGICA DE ODD JUSTA COM TETO ---
                 df_fin['Odd_Calc'] = df_fin.apply(lambda row: obter_odd_final_para_calculo(row['Odd'], row['Estrategia']), axis=1)
                 
                 df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
