@@ -16,7 +16,7 @@ import google.generativeai as genai
 import json
 import re
 
-# --- NOVAS IMPORTAÇÕES PARA O FIREBASE ---
+# --- IMPORTAÇÕES FIREBASE ---
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -45,7 +45,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==============================================================================
-# 2. INICIALIZAÇÃO DE VARIÁVEIS (SESSION STATE)
+# 2. INICIALIZAÇÃO DE VARIÁVEIS
 # ==============================================================================
 if 'TG_TOKEN' not in st.session_state: st.session_state['TG_TOKEN'] = ""
 if 'TG_CHAT' not in st.session_state: st.session_state['TG_CHAT'] = ""
@@ -53,9 +53,6 @@ if 'API_KEY' not in st.session_state: st.session_state['API_KEY'] = ""
 if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
 if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
 if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 
-if 'bi_enviado_data' not in st.session_state: st.session_state['bi_enviado_data'] = ""
-if 'confirmar_reset' not in st.session_state: st.session_state['confirmar_reset'] = False
-if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 if 'stake_padrao' not in st.session_state: st.session_state['stake_padrao'] = 10.0
 if 'banca_inicial' not in st.session_state: st.session_state['banca_inicial'] = 100.0
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
@@ -76,55 +73,40 @@ if 'financeiro_enviado' not in st.session_state: st.session_state['financeiro_en
 if 'bigdata_enviado' not in st.session_state: st.session_state['bigdata_enviado'] = False
 if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'] = False
 
-# ==============================================================================
-# 2.1 CONEXÃO FIREBASE (BIG DATA)
-# ==============================================================================
+# 2.1 Conexão Firebase
 db_firestore = None
-# Tenta conectar apenas se a chave existir nos Secrets
 if "FIREBASE_CONFIG" in st.secrets:
     try:
-        # Evita reinicializar o app se já estiver rodando
         if not firebase_admin._apps:
-            # Carrega o JSON que você colou nos secrets
             fb_creds = json.loads(st.secrets["FIREBASE_CONFIG"])
             cred = credentials.Certificate(fb_creds)
             firebase_admin.initialize_app(cred)
-        
         db_firestore = firestore.client()
-        # st.toast("🔥 Firebase Conectado!") # Descomente se quiser ver o aviso
-    except Exception as e:
-        st.error(f"Erro na conexão Firebase: {e}")
+    except Exception as e: st.error(f"Erro Firebase: {e}")
 
-# ==============================================================================
-# 3. CONFIGURAÇÃO IA & CONEXÃO GSHEETS
-# ==============================================================================
+# 3. Conexão IA e Google Sheets
 IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
         genai.configure(api_key=st.secrets["GEMINI_KEY"])
         model_ia = genai.GenerativeModel('gemini-2.0-flash') 
         IA_ATIVADA = True
-    else:
-        st.error("⚠️ Chave GEMINI_KEY não encontrada nos Secrets!")
-except Exception as e:
-    st.error(f"❌ Erro ao conectar na IA: {e}")
-    IA_ATIVADA = False
+except: IA_ATIVADA = False
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Constantes de Colunas
-COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada']
+# --- COLUNAS ATUALIZADAS (COM OPINIAO_IA) ---
+COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada', 'Opiniao_IA']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
-# COLS_BIGDATA não é mais usado para salvar no Sheets, mas mantido para compatibilidade se necessário
-
+# Constantes Extras
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
 # ==============================================================================
-# 4. DEFINIÇÃO DE TODAS AS FUNÇÕES
+# 4. FUNÇÕES UTILITÁRIAS E DE DADOS
 # ==============================================================================
 
 def get_time_br(): return datetime.now(pytz.timezone('America/Sao_Paulo'))
@@ -172,6 +154,7 @@ def verificar_reset_diario():
         return True
     return False
 
+# --- EXTRAÇÃO DE DADOS COMPLETA (PEDIDO 2) ---
 def extrair_dados_completos(stats_api):
     if not stats_api: return "Dados indisponíveis."
     try:
@@ -179,27 +162,31 @@ def extrair_dados_completos(stats_api):
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
         texto = f"""
-        📊 ESTATÍSTICAS DETALHADAS (Casa x Visitante):
+        📊 ESTATÍSTICAS COMPLETAS (Casa x Visitante):
         - Posse: {gv(s1, 'Ball Possession')} x {gv(s2, 'Ball Possession')}
-        - Chutes Totais (No Gol): {gv(s1, 'Total Shots')}({gv(s1, 'Shots on Goal')}) x {gv(s2, 'Total Shots')}({gv(s2, 'Shots on Goal')})
-        - Chutes Dentro da Área: {gv(s1, 'Shots insidebox')} x {gv(s2, 'Shots insidebox')}
+        - Chutes Totais: {gv(s1, 'Total Shots')} x {gv(s2, 'Total Shots')}
+        - Chutes no Gol: {gv(s1, 'Shots on Goal')} x {gv(s2, 'Shots on Goal')}
+        - Chutes na Área: {gv(s1, 'Shots insidebox')} x {gv(s2, 'Shots insidebox')}
+        - Chutes Bloqueados: {gv(s1, 'Blocked Shots')} x {gv(s2, 'Blocked Shots')}
         - Escanteios: {gv(s1, 'Corner Kicks')} x {gv(s2, 'Corner Kicks')}
+        - Ataques: {gv(s1, 'Attacks')} x {gv(s2, 'Attacks')}
         - Ataques Perigosos: {gv(s1, 'Dangerous Attacks')} x {gv(s2, 'Dangerous Attacks')}
-        - Faltas Cometidas: {gv(s1, 'Fouls')} x {gv(s2, 'Fouls')}
+        - Faltas: {gv(s1, 'Fouls')} x {gv(s2, 'Fouls')}
         - Cartões (A/V): {gv(s1, 'Yellow Cards')}/{gv(s1, 'Red Cards')} x {gv(s2, 'Yellow Cards')}/{gv(s2, 'Red Cards')}
-        - Precisão de Passes: {gv(s1, 'Passes %')} x {gv(s2, 'Passes %')}
+        - Passes (Precisão): {gv(s1, 'Passes %')} x {gv(s2, 'Passes %')}
         """
         return texto
     except: return "Erro stats."
 
-# --- FUNÇÕES DE BANCO DE DADOS ---
+# --- FUNÇÕES DE BANCO DE DADOS (COM CORREÇÃO DE COLUNAS) ---
 def carregar_aba(nome_aba, colunas_esperadas):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
         if not df.empty:
+            # Garante que novas colunas (como Opiniao_IA) existam
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    if col == 'Odd': df[col] = "1.10"
+                    if col == 'Odd': df[col] = "1.20"
                     else: df[col] = ""
         if df.empty or len(df.columns) < len(colunas_esperadas): 
             return pd.DataFrame(columns=colunas_esperadas)
@@ -330,11 +317,13 @@ def carregar_tudo(force=False):
         st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
         st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
         st.session_state['df_vip'] = carregar_aba("Obs", COLS_OBS)
+        # Normalização de IDs
         if not st.session_state['df_black'].empty: st.session_state['df_black']['id'] = st.session_state['df_black']['id'].apply(normalizar_id)
         if not st.session_state['df_safe'].empty: st.session_state['df_safe']['id'] = st.session_state['df_safe']['id'].apply(normalizar_id)
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
         sanitizar_conflitos()
         st.session_state['last_static_update'] = now
+    
     if 'historico_full' not in st.session_state or force:
         df = carregar_aba("Historico", COLS_HIST)
         if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
@@ -360,10 +349,7 @@ def carregar_tudo(force=False):
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
     
-    # IMPORTANTE: Carregamento do BigData agora é via Firebase na aba de visualização, 
-    # não precisamos carregar tudo para a memória aqui.
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
-        # Apenas inicializa o set vazio ou recupera se quiser cachear IDs
         st.session_state['jogos_salvos_bigdata_carregados'] = True
     
     st.session_state['last_db_update'] = now
@@ -398,24 +384,17 @@ def atualizar_historico_ram(lista_atualizada_hoje):
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
 
-# ==============================================================================
-# NOVA FUNÇÃO DE SALVAMENTO NO FIREBASE
-# ==============================================================================
+# --- SALVAMENTO BIG DATA COMPLETO (PEDIDO 1) ---
 def salvar_bigdata(jogo_api, stats):
-    # Verifica se o Firebase está conectado
-    if not db_firestore: 
-        # Opcional: printar erro se quiser
-        return 
-
+    if not db_firestore: return
     try:
         fid = str(jogo_api['fixture']['id'])
-        # Verifica cache local para não re-salvar repetidamente na mesma sessão
         if fid in st.session_state['jogos_salvos_bigdata']: return 
 
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
-        # Cria o objeto JSON/Dict para salvar no banco NoSQL
+        # Estrutura Expandida para Big Data
         item_bigdata = {
             'fid': fid,
             'data_hora': get_time_br().strftime('%Y-%m-%d %H:%M'),
@@ -425,23 +404,23 @@ def salvar_bigdata(jogo_api, stats):
             'estatisticas': {
                 'chutes_total': gv(s1, 'Total Shots') + gv(s2, 'Total Shots'),
                 'chutes_gol': gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal'),
+                'chutes_fora': gv(s1, 'Shots off Goal') + gv(s2, 'Shots off Goal'),
                 'chutes_area': gv(s1, 'Shots insidebox') + gv(s2, 'Shots insidebox'),
+                'chutes_bloqueados': gv(s1, 'Blocked Shots') + gv(s2, 'Blocked Shots'),
                 'escanteios': gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks'),
+                'ataques': gv(s1, 'Attacks') + gv(s2, 'Attacks'),
+                'ataques_perigosos': gv(s1, 'Dangerous Attacks') + gv(s2, 'Dangerous Attacks'),
+                'faltas': gv(s1, 'Fouls') + gv(s2, 'Fouls'),
                 'posse_casa': str(gv(s1, 'Ball Possession')),
-                'posse_fora': str(gv(s2, 'Ball Possession')),
-                'cartoes': gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards'),
+                'cartoes_amarelos': gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards'),
+                'cartoes_vermelhos': gv(s1, 'Red Cards') + gv(s2, 'Red Cards'),
+                'passes_total': gv(s1, 'Passes Total') + gv(s2, 'Passes Total'),
                 'precisao_passes': f"{gv(s1, 'Passes %')}/{gv(s2, 'Passes %')}"
             }
         }
-        
-        # Grava no Firebase na coleção "BigData_Futebol" usando o FID como chave única
         db_firestore.collection("BigData_Futebol").document(fid).set(item_bigdata)
-        
-        # Atualiza cache local
         st.session_state['jogos_salvos_bigdata'].add(fid)
-        
-    except Exception as e:
-        print(f"Erro ao salvar no Firebase: {e}") # Log interno
+    except Exception as e: print(f"Erro Firebase: {e}")
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
@@ -452,7 +431,7 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# --- FUNÇÕES QUE FALTAVAM (RANKING, AGENDA, ODDS, INTELIGENCIA) ---
+# --- CACHES ---
 @st.cache_data(ttl=86400)
 def buscar_ranking(api_key, league_id, season):
     try:
@@ -472,6 +451,7 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
+# --- ODDS (PEDIDO 5 - Ajuste para 1.20) ---
 def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
@@ -512,9 +492,9 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
                             if raw_odd > 1.20:
                                 if best_odd == "0.00": best_odd = "{:.2f}".format(raw_odd)
                         except: pass
-        if best_odd == "0.00": return "1.10"
+        if best_odd == "0.00": return "1.20" # AJUSTADO PARA 1.20
         return best_odd
-    except: return "1.10"
+    except: return "1.20"
 
 def buscar_inteligencia(estrategia, liga, jogo):
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -550,82 +530,42 @@ def buscar_inteligencia(estrategia, liga, jogo):
     str_fontes = "+".join(fontes) if fontes else "Geral"
     return f"\n{'🔥' if prob_final >= 80 else '🔮' if prob_final > 40 else '⚠️'} <b>Prob: {prob_final:.0f}% ({str_fontes})</b>"
 
-# --- Funções IA e Lógica ---
 def calcular_odd_media_historica(estrategia):
-    """
-    Calcula a média real das odds obtidas nessa estratégia no passado,
-    mas aplica um TETO MÁXIMO (Capping) para não inflar resultados
-    quando a odd real estiver faltando.
-    """
     df = st.session_state.get('historico_full', pd.DataFrame())
-    PADRAO_CONSERVADOR = 1.20
-    TETO_MAXIMO_FALLBACK = 1.50 # Se não souber a odd, nunca assuma mais que 1.50
-    
+    PADRAO_CONSERVADOR = 1.20 # AJUSTADO
+    TETO_MAXIMO_FALLBACK = 1.50
     if df.empty: return PADRAO_CONSERVADOR
-    
     try:
-        # Filtra a estratégia específica
         df_strat = df[df['Estrategia'] == estrategia].copy()
-        
-        # Converte para numérico e limpa erros
         df_strat['Odd_Num'] = pd.to_numeric(df_strat['Odd'], errors='coerce')
-        
-        # Filtra odds válidas (reais) para calcular a média
         df_validas = df_strat[(df_strat['Odd_Num'] > 1.15) & (df_strat['Odd_Num'] < 50.0)]
-        
-        if df_validas.empty:
-            return PADRAO_CONSERVADOR
-            
+        if df_validas.empty: return PADRAO_CONSERVADOR
         media = df_validas['Odd_Num'].mean()
-        
-        # --- TRAVA DE SEGURANÇA (NOVA LÓGICA) ---
-        # Mesmo que a média histórica seja alta (ex: 4.98), se estamos
-        # "chutando" o valor por falta de dados, aplicamos um teto.
         media_segura = min(media, TETO_MAXIMO_FALLBACK)
-        
         if media_segura < 1.15: return PADRAO_CONSERVADOR
-        
         return float(f"{media_segura:.2f}")
-    except:
-        return PADRAO_CONSERVADOR
+    except: return PADRAO_CONSERVADOR
 
 def obter_odd_final_para_calculo(odd_registro, estrategia):
-    """
-    Lógica de Decisão:
-    1. Tenta usar a odd que foi salva.
-    2. Se for 'podre' (<= 1.15), busca a média histórica TRAVADA pelo teto.
-    """
     try:
         valor = float(odd_registro)
-        # Se o valor salvo for um placeholder de erro ou zero
-        if valor <= 1.15:
-            return calcular_odd_media_historica(estrategia)
+        if valor <= 1.15: return calcular_odd_media_historica(estrategia)
         return valor
-    except:
-        return calcular_odd_media_historica(estrategia)
+    except: return calcular_odd_media_historica(estrategia)
 
-# AJUSTE NA IA: Lógica de consulta expandida com correlação de dados
+# --- IA COM AUDITORIA (PEDIDO 2 e 6) ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     if not IA_ATIVADA: return ""
-    
-    # --- Análise do Histórico da Estratégia ---
     df = st.session_state.get('historico_full', pd.DataFrame())
-    resumo_historico = "Sem dados históricos suficientes desta estratégia."
-    
+    resumo_historico = "Sem dados históricos."
     if not df.empty:
         df_strat = df[df['Estrategia'] == estrategia]
-        total_entradas = len(df_strat)
-        if total_entradas > 0:
+        total = len(df_strat)
+        if total > 0:
             greens = len(df_strat[df_strat['Resultado'].str.contains('GREEN', na=False)])
             reds = len(df_strat[df_strat['Resultado'].str.contains('RED', na=False)])
-            winrate = (greens / total_entradas * 100)
-            resumo_historico = (
-                f"PERFORMANCE HISTÓRICA DO ROBÔ NA ESTRATÉGIA '{estrategia}':\n"
-                f"- Total de Entradas Passadas: {total_entradas}\n"
-                f"- Taxa de Acerto (Winrate): {winrate:.1f}%\n"
-                f"- Greens: {greens} | Reds: {reds}\n"
-                "USE ESTE DADO HISTÓRICO COMO PESO FORTE NA SUA DECISÃO."
-            )
+            winrate = (greens / total * 100)
+            resumo_historico = f"Histórico: {winrate:.1f}% Winrate em {total} jogos."
 
     if st.session_state['ia_bloqueada_ate']:
         agora = datetime.now()
@@ -635,23 +575,21 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     dados_ricos = extrair_dados_completos(stats_raw)
     
     prompt = f"""
-    Atue como um Trader Esportivo Especialista em Análise de Dados e In-Play. Você deve validar uma entrada.
+    Trader Esportivo Sênior. Valide entrada no mercado de GOLS (Over).
     
-    CONTEXTO DO JOGO AO VIVO:
-    - Jogo: {dados_jogo['jogo']}
-    - Tempo: {dados_jogo['tempo']}' | Placar: {dados_jogo['placar']}
-    - Estatísticas Ao Vivo Detalhadas: {dados_ricos}
-    
-    ESTRATÉGIA APLICADA: "{estrategia}"
+    JOGO: {dados_jogo['jogo']} ({dados_jogo['tempo']}min - Placar: {dados_jogo['placar']})
+    ESTRATÉGIA: {estrategia}
     {resumo_historico}
     
-    MISSÃO: Analise a correlação entre os novos dados fornecidos. Considere que:
-    1. Grande volume de Chutes dentro da área e Escanteios indica pressão real e perigo iminente.
-    2. Precisão de passes baixa somada a muitas faltas indica jogo truncado, desorganizado e sem ritmo de gol.
-    3. Cartões vermelhos mudam drasticamente o favoritismo e o comportamento tático.
+    STATS AO VIVO:
+    {dados_ricos}
     
-    Analise se o cenário favorece essa estratégia e se ela costuma ser lucrativa historicamente.
-    Responda ESTRITAMENTE neste formato: "Aprovado" ou "Arriscado" | [Motivo ultra curto com base na correlação dos dados, máximo 8 palavras].
+    CRITÉRIOS DE DECISÃO:
+    1. Aprove se houver PRESSÃO REAL (Muitos chutes na área, escanteios, ataques perigosos).
+    2. Recuse (Arriscado) se for pressão falsa (Posse inútil, chutes de longe, jogo parado com muitas faltas).
+    3. Cartão vermelho para favorito = Arriscado.
+    
+    Responda ESTRITAMENTE neste formato: "Aprovado" ou "Arriscado" | [Motivo max 6 palavras]
     """
     
     try:
@@ -677,10 +615,9 @@ def analisar_bi_com_ia():
         total = len(df_f); greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
         resumo = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}%").to_dict()
         prompt = f"""
-        Analise o dia ({hoje_str}):
-        Total: {total}, Greens: {greens}
+        Analise o dia ({hoje_str}): Total {total}, Greens {greens}.
         Estratégias: {json.dumps(resumo)}
-        3 dicas curtas para amanhã.
+        Dê 3 insights táticos curtos para melhorar amanhã.
         """
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
@@ -696,70 +633,84 @@ def analisar_financeiro_com_ia(stake, banca):
         df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
         df_hoje = df[df['Data_Str'] == hoje_str].copy()
         if df_hoje.empty: return "Sem operações hoje."
-        lucro_total = 0.0; investido = 0.0; qtd=0; odds_greens = []
+        lucro_total = 0.0; investido = 0.0
         for _, row in df_hoje.iterrows():
             res = str(row['Resultado'])
-            # Usando a nova função para cálculo realista
             odd_final = obter_odd_final_para_calculo(row['Odd'], row['Estrategia'])
             if 'GREEN' in res:
-                lucro = (stake * odd_final) - stake
-                lucro_total += lucro; investido += stake; qtd+=1
-                if odd_final > 1: odds_greens.append(odd_final)
+                lucro_total += (stake * odd_final) - stake; investido += stake
             elif 'RED' in res:
-                lucro_total -= stake; investido += stake; qtd+=1
+                lucro_total -= stake; investido += stake
         roi = (lucro_total / investido * 100) if investido > 0 else 0
-        odd_media = (sum(odds_greens)/len(odds_greens)) if odds_greens else 0
-        banca_atual = banca + lucro_total
         prompt_fin = f"""
-        Gestor Financeiro. Dia:
-        - Banca Ini: R$ {banca:.2f} | Fim: R$ {banca_atual:.2f}
-        - Stake: R$ {stake:.2f} | Entradas: {qtd}
-        - Lucro: R$ {lucro_total:.2f} | ROI: {roi:.2f}% | Odd Média: {odd_media:.2f}
-        Feedback curto sobre saúde financeira.
+        Analista Financeiro. Hoje:
+        Investido: R$ {investido:.2f} | Lucro: R$ {lucro_total:.2f} | ROI: {roi:.2f}%
+        A curva de capital está {'Crescente' if lucro_total > 0 else 'Decrescente'}.
+        Dê um feedback de gestão de risco curto e direto.
         """
         response = model_ia.generate_content(prompt_fin)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
-    except Exception as e: return f"Erro Fin: {e}"
+    except: return "Erro Fin."
 
 def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
-    # Tenta usar os dados do Firebase (mais robusto)
     if db_firestore:
         try:
             docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(100).stream()
             data = [d.to_dict() for d in docs]
             if len(data) < 5: return "Coletando dados no Firebase... Aguarde mais jogos."
-            amostra = json.dumps(data) # Transforma em texto para a IA ler
+            amostra = json.dumps(data)
         except: return "Erro ao ler Firebase."
-    else:
-        # Fallback para o CSV antigo se Firebase falhar
-        df_bd = carregar_aba("BigData", COLS_BIGDATA)
-        if len(df_bd) < 5: return "Coletando dados... Preciso de mais jogos finalizados."
-        amostra = df_bd.tail(50).to_csv(index=False)
+    else: return "Firebase Offline."
 
     try:
         prompt_criacao = f"""
-        Cientista de Dados. Analise esta amostra de jogos (JSON/CSV): {amostra}
-        MISSÃO: Padrão ESTATÍSTICO GLOBAL lucrativo (Cantos, Cartões).
-        Saída: Nome, Regra e Lógica.
+        Cientista de Dados. Analise esta amostra de 100 jogos (JSON): {amostra}
+        Encontre um padrão ESTATÍSTICO GLOBAL onde a probabilidade de gol no final é > 80%.
+        Saída: Nome da Estratégia, Regra Lógica (ex: Chutes > X e Posse < Y) e Explicação.
         """
         response = model_ia.generate_content(prompt_criacao)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
-    except Exception as e: return f"Erro na criação: {e}"
+    except: return "Erro criação."
 
-# --- Telegram & Notifications ---
-def _worker_telegram(token, chat_id, msg):
-    try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
+# --- TELEGRAM REPORT BI (PEDIDO 3) ---
+def enviar_relatorio_bi(token, chat_ids):
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return
+    try:
+        df = df.copy()
+        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
+        df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+        
+        hoje = pd.to_datetime(get_time_br().date())
+        # Filtros de Tempo
+        d_hoje = df[df['Data_DT'] == hoje]
+        d_7d = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
+        d_30d = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
+        
+        def calc_resumo(d):
+            t = len(d); g = d['Resultado'].str.contains('GREEN').sum(); r = d['Resultado'].str.contains('RED').sum()
+            wr = (g/t*100) if t>0 else 0
+            return f"{g}G-{r}R ({wr:.0f}%)"
+
+        msg = f"""📊 <b>RELATÓRIO DE PERFORMANCE</b>
+        
+        📆 <b>Hoje:</b> {calc_resumo(d_hoje)}
+        WK <b>7 Dias:</b> {calc_resumo(d_7d)}
+        MO <b>30 Dias:</b> {calc_resumo(d_30d)}
+        ∞ <b>Total:</b> {calc_resumo(df)}
+        """
+        ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+        for cid in ids:
+            t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
+            t.daemon = True; t.start()
     except: pass
 
-def _worker_telegram_photo(token, chat_id, photo_buffer, caption):
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendPhoto"
-        files = {'photo': photo_buffer}
-        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'}
-        requests.post(url, files=files, data=data, timeout=10)
+def _worker_telegram(token, chat_id, msg):
+    try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
     except: pass
 
 def enviar_telegram(token, chat_ids, msg):
@@ -772,44 +723,12 @@ def enviar_telegram(token, chat_ids, msg):
 def enviar_analise_estrategia(token, chat_ids):
     sugestao = criar_estrategia_nova_ia()
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
-    msg = f"🧪 <b>LABORATÓRIO DE ESTRATÉGIAS (IA)</b>\n\n{sugestao}"
+    msg = f"🧪 <b>LABORATÓRIO BIG DATA (IA)</b>\n\n{sugestao}"
     for cid in ids: enviar_telegram(token, cid, msg)
 
 def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
     msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro Líquido:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}\n\n<i>Cálculo baseado na gestão configurada.</i>"
     enviar_telegram(token, chat_ids, msg)
-
-def enviar_relatorio_bi(token, chat_ids):
-    df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return
-    try:
-        df = df.copy()
-        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
-        df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-    except: return
-    
-    hoje = pd.to_datetime(get_time_br().date())
-    mask_mes = df['Data_DT'] >= (hoje - timedelta(days=30))
-    t_a = len(df)
-    g_a = df['Resultado'].str.contains('GREEN').sum()
-    w_a = (g_a/t_a*100) if t_a>0 else 0
-
-    if token and chat_ids:
-        plt.style.use('dark_background')
-        fig, ax = plt.subplots(figsize=(7, 4))
-        stats = df[mask_mes][df[mask_mes]['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-        if not stats.empty:
-            c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
-            c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
-            ax.set_title(f'PERFORMANCE 30 DIAS', color='white', fontsize=12)
-            ax.legend(title='', frameon=False)
-            plt.tight_layout()
-            buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
-            msg = f"📊 <b>RELATÓRIO BI</b>\n\n♾️ <b>TOTAL:</b> {t_a} (WR: {w_a:.1f}%)"
-            ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
-            for cid in ids: buf.seek(0); _worker_telegram_photo(token, cid, buf, msg)
-            plt.close(fig)
 
 def verificar_automacao_bi(token, chat_ids, stake_padrao):
     agora = get_time_br()
@@ -824,23 +743,19 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
     if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
         enviar_relatorio_bi(token, chat_ids)
         st.session_state['bi_enviado'] = True
-        st.toast("📊 Relatório BI Enviado!")
     if agora.hour == 23 and agora.minute >= 35 and not st.session_state['ia_enviada']:
         analise = analisar_bi_com_ia()
         msg_ia = f"🧠 <b>CONSULTORIA DIÁRIA DA IA</b>\n\n{analise}"
         enviar_telegram(token, chat_ids, msg_ia)
         st.session_state['ia_enviada'] = True
-        st.toast("🤖 Relatório IA Enviado!")
     if agora.hour == 23 and agora.minute >= 40 and not st.session_state['financeiro_enviado']:
         analise_fin = analisar_financeiro_com_ia(stake_padrao, st.session_state.get('banca_inicial', 100))
         msg_fin = f"💰 <b>CONSULTORIA FINANCEIRA</b>\n\n{analise_fin}"
         enviar_telegram(token, chat_ids, msg_fin)
         st.session_state['financeiro_enviado'] = True
-        st.toast("💰 Relatório Financeiro Enviado!")
     if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
         enviar_analise_estrategia(token, chat_ids)
         st.session_state['bigdata_enviado'] = True
-        st.toast("🧪 Sugestão de Estratégia Enviada!")
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
@@ -851,10 +766,8 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             msg_final = f"🌅 <b>INSIGHTS MATINAIS (IA + API)</b>\n\n{insights}"
             for cid in ids: enviar_telegram(token, cid, msg_final)
             st.session_state['matinal_enviado'] = True
-            st.toast("Insights Matinais Enviados!")
 
 def gerar_insights_matinais_ia(api_key):
-    """ Sniper Matinal + Registro no BI """
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
@@ -899,7 +812,7 @@ def gerar_insights_matinais_ia(api_key):
                         "Placar_Sinal": aposta, 
                         "Estrategia": "Sniper Matinal", "Resultado": "Pendente", 
                         "HomeID": str(j['teams']['home']['id']), "AwayID": str(j['teams']['away']['id']), 
-                        "Odd": "1.70", "Odd_Atualizada": ""
+                        "Odd": "1.70", "Odd_Atualizada": "", "Opiniao_IA": "Sniper"
                     }
                     adicionar_historico(item_bi)
                     time.sleep(1)
@@ -984,7 +897,6 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             dt_sinal = pytz.timezone('America/Sao_Paulo').localize(dt_sinal)
             minutos_passados = (agora - dt_sinal).total_seconds() / 60
             
-            # --- MELHORIA: Retry de Odd se a salva for ruim ou antiga ---
             odd_atual_memoria = float(str(s.get('Odd', 0)))
             if minutos_passados >= 3 and (not s.get('Odd_Atualizada') or odd_atual_memoria <= 1.15):
                 jogo_live = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
@@ -1082,10 +994,8 @@ def momentum(fid, sog_h, sog_a):
 
 def deve_buscar_stats(tempo, gh, ga, status):
     if 5 <= tempo <= 15: return True
-    if tempo <= 30 and (gh + ga) >= 2: return True
     if 70 <= tempo <= 85 and abs(gh - ga) <= 1: return True
-    if tempo <= 60 and abs(gh - ga) <= 1: return True
-    if status == 'HT' and gh == 0 and ga == 0: return True
+    if status == 'HT': return True
     return False
 
 def fetch_stats_single(fid, api_key):
@@ -1113,477 +1023,126 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
-        def get_v(l, t): v = next((x['value'] for x in l if x['type']==t), 0); return v if v is not None else 0
+        def get_v(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
-        tot_chutes = sh_h + sh_a; tot_gol = sog_h + sog_a
-        txt_stats = f"{tot_chutes} Chutes (🎯 {tot_gol} no Gol)"
+        rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
+        SINAIS = []
+        if 75 <= tempo <= 85 and (sh_h+sh_a) >= 16:
+            SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Over Limit", "stats": f"{sh_h+sh_a} Chutes", "rh": rh, "ra": ra})
+        return SINAIS
     except: return []
-    fid = j['fixture']['id']; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-    rh, ra = momentum(fid, sog_h, sog_a)
-    SINAIS = []
-    if tempo <= 30 and (gh+ga) >= 2: 
-        SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": txt_stats, "rh": rh, "ra": ra})
-    if (gh + ga) == 0:
-        if (tempo <= 2 and (sog_h + sog_a) >= 1) or (tempo <= 10 and (sh_h + sh_a) >= 2):
-            SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": txt_stats, "rh": rh, "ra": ra})
-    if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(gh-ga) <= 1: 
-        SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final - Limite)", "stats": txt_stats, "rh": rh, "ra": ra})
-    if tempo <= 60:
-        if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
-        if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
-    if rank_home and rank_away:
-        is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
-        if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
-            if tempo <= 5 and (sh_h + sh_a) >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve abrir placar)", "stats": f"Rank: {rank_home}x{rank_away}", "rh": rh, "ra": ra})
-        if 5 <= tempo <= 15:
-            if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
-            if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
-        if is_top_home and is_top_away and tempo <= 7:
-            if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": txt_stats, "rh": rh, "ra": ra})
-        if is_mid_home and is_mid_away:
-            if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": txt_stats, "rh": rh, "ra": ra})
-            is_bot_home_morno = rank_home >= 10; is_bot_away_morno = rank_away >= 10
-            if is_bot_home_morno and is_bot_away_morno:
-                if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
-    if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
-        if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
-    return SINAIS
-
-def resetar_sistema_completo():
-    st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
-    st.session_state['historico_sinais'] = []
-    st.session_state['df_black'] = pd.DataFrame(columns=COLS_BLACK)
-    st.session_state['df_safe'] = pd.DataFrame(columns=COLS_SAFE)
-    st.session_state['df_vip'] = pd.DataFrame(columns=COLS_OBS)
-    st.session_state['alvos_do_dia'] = {}
-    st.session_state['alertas_enviados'] = set()
-    st.session_state['multiplas_enviadas'] = set()
-    st.session_state['memoria_pressao'] = {}
-    st.session_state['controle_stats'] = {}
-    st.session_state['jogos_salvos_bigdata'] = set()
-    st.session_state['jogos_salvos_bigdata_carregados'] = False
-    try:
-        conn.clear(worksheet="Historico"); salvar_aba("Historico", st.session_state['historico_full'])
-        conn.clear(worksheet="Blacklist"); salvar_aba("Blacklist", st.session_state['df_black'])
-        conn.clear(worksheet="Seguras"); salvar_aba("Seguras", st.session_state['df_safe'])
-        conn.clear(worksheet="Obs"); salvar_aba("Obs", st.session_state['df_vip'])
-        conn.clear(worksheet="BigData") 
-    except: pass
-    st.cache_data.clear()
-    st.toast("♻️ SISTEMA COMPLETAMENTE RESETADO!")
 
 # ==============================================================================
-# 5. SIDEBAR E LOOP PRINCIPAL (EXECUÇÃO)
+# 5. LOOP PRINCIPAL
 # ==============================================================================
 with st.sidebar:
     st.title("❄️ Neves Analytics")
-    with st.expander("⚙️ Configurações", expanded=True):
-        st.session_state['API_KEY'] = st.text_input("Chave API:", value=st.session_state['API_KEY'], type="password")
-        st.session_state['TG_TOKEN'] = st.text_input("Token Telegram:", value=st.session_state['TG_TOKEN'], type="password")
-        st.session_state['TG_CHAT'] = st.text_input("Chat IDs:", value=st.session_state['TG_CHAT'])
-        INTERVALO = st.slider("Ciclo (s):", 60, 300, 60) 
-        if st.button("🧹 Limpar Cache"): 
-            st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
-        st.write("---")
-        if st.button("🧠 Pedir Análise do BI"):
-            if IA_ATIVADA:
-                with st.spinner("🤖 O Consultor Neves está analisando seus dados..."):
-                    analise = analisar_bi_com_ia()
-                    st.markdown("### 📝 Relatório do Consultor")
-                    st.info(analise)
-            else: st.error("IA Desconectada.")
-        if st.button("🧪 Criar Nova Estratégia (Big Data)"):
-            if IA_ATIVADA:
-                with st.spinner("🤖 Analisando padrões globais no Big Data..."):
-                    sugestao = criar_estrategia_nova_ia()
-                    st.markdown("### 💡 Sugestão da IA")
-                    st.success(sugestao)
-            else: st.error("IA Desconectada.")
-
-        if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
-        if st.button("💰 Enviar Relatório Financeiro"):
-            if 'last_fin_stats' in st.session_state:
-                s = st.session_state['last_fin_stats']
-                enviar_relatorio_financeiro(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], s['cenario'], s['lucro'], s['roi'], s['entradas'])
-                st.toast("Relatório Financeiro Enviado!")
-            else: st.error("Abra a aba Financeiro primeiro.")
-
-    with st.expander("💰 Gestão de Banca", expanded=False):
-        stake_padrao = st.number_input("Valor da Aposta (R$)", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
-        banca_inicial = st.number_input("Banca Inicial (R$)", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
-        st.session_state['stake_padrao'] = stake_padrao
-        st.session_state['banca_inicial'] = banca_inicial
-        
-    with st.expander("📶 Consumo API", expanded=False):
-        verificar_reset_diario()
-        u = st.session_state['api_usage']; perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
-        st.progress(perc); st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
-    
-    with st.expander("🤖 Consumo IA (Gemini)", expanded=False):
-        u_ia = st.session_state['gemini_usage']
-        perc_ia = min(u_ia['used'] / u_ia['limit'], 1.0)
-        st.progress(perc_ia)
-        st.caption(f"Requições Hoje: **{u_ia['used']}** / {u_ia['limit']}")
-        if st.button("🔓 Destravar IA Agora"):
-            st.session_state['ia_bloqueada_ate'] = None
-            st.toast("✅ IA Destravada Manualmente!")
-
-    st.write("---")
+    st.session_state['API_KEY'] = st.text_input("Chave API:", value=st.session_state['API_KEY'], type="password")
+    st.session_state['TG_TOKEN'] = st.text_input("Token Telegram:", value=st.session_state['TG_TOKEN'], type="password")
+    st.session_state['TG_CHAT'] = st.text_input("Chat IDs:", value=st.session_state['TG_CHAT'])
+    INTERVALO = st.slider("Ciclo (s):", 60, 300, 60)
     st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
     
-    # Status da IA e Firebase
-    if IA_ATIVADA:
-        if st.session_state['ia_bloqueada_ate']:
-            ag = datetime.now()
-            if ag < st.session_state['ia_bloqueada_ate']:
-                m_rest = int((st.session_state['ia_bloqueada_ate'] - ag).total_seconds()/60)
-                st.markdown(f'<div class="status-warning">⚠️ IA PAUSADA (Proteção) - Volta em {m_rest} min</div>', unsafe_allow_html=True)
-            else: st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
-        else: st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
-    else: st.markdown('<div class="status-error">❌ IA DESCONECTADA</div>', unsafe_allow_html=True)
-
-    if db_firestore:
-        st.markdown('<div class="status-active">🔥 FIREBASE CONECTADO</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="status-warning">⚠️ FIREBASE OFFLINE</div>', unsafe_allow_html=True)
-
     st.markdown("---")
-    st.markdown("### ⚠️ Zona de Perigo")
-    if st.button("☢️ ZERAR ROBÔ", type="primary", use_container_width=True): st.session_state['confirmar_reset'] = True
-    if st.session_state.get('confirmar_reset'):
-        st.error("Tem certeza? Isso apaga TODO o histórico do Google Sheets.")
-        c1, c2 = st.columns(2)
-        if c1.button("✅ SIM"): resetar_sistema_completo(); st.session_state['confirmar_reset'] = False; st.rerun()
-        if c2.button("❌ NÃO"): st.session_state['confirmar_reset'] = False; st.rerun()
+    if st.button("🧪 Criar Nova Estratégia (Big Data)"):
+        with st.spinner("Analisando Big Data..."):
+            res = criar_estrategia_nova_ia()
+            st.success(res)
 
 if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
-        carregar_tudo()
-        s_padrao = st.session_state.get('stake_padrao', 10.0)
-        b_inicial = st.session_state.get('banca_inicial', 100.0)
-        safe_token = st.session_state.get('TG_TOKEN', '')
-        safe_chat = st.session_state.get('TG_CHAT', '')
-        safe_api = st.session_state.get('API_KEY', '')
+        # Carregamento estático
+        if 'df_black' not in st.session_state:
+            st.session_state['df_black'] = carregar_aba("Blacklist", COLS_BLACK)
+            st.session_state['df_safe'] = carregar_aba("Seguras", COLS_SAFE)
+            st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
 
-        verificar_automacao_bi(safe_token, safe_chat, s_padrao)
-        verificar_alerta_matinal(safe_token, safe_chat, safe_api)
-        
-        ids_black = [normalizar_id(x) for x in st.session_state['df_black']['id'].values]
-        df_obs = st.session_state.get('df_vip', pd.DataFrame()); count_obs = len(df_obs)
-        df_safe_show = st.session_state.get('df_safe', pd.DataFrame()); count_safe = len(df_safe_show)
-        ids_safe = [normalizar_id(x) for x in df_safe_show['id'].values]
-        hoje_real = get_time_br().strftime('%Y-%m-%d')
-        if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
-             df_full = st.session_state['historico_full']
-             st.session_state['historico_sinais'] = df_full[df_full['Data'] == hoje_real].to_dict('records')[::-1]
-
-        api_error = False
+        api_key = st.session_state['API_KEY']
         jogos_live = []
         try:
             url = "https://v3.football.api-sports.io/fixtures"
-            resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
-            update_api_usage(resp.headers); res = resp.json()
-            jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
-            if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
-        except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
+            res = requests.get(url, headers={"x-apisports-key": api_key}, params={"live": "all"}).json()
+            jogos_live = res.get('response', [])
+        except: st.error("Erro Conexão API")
 
-        if not api_error: 
-            check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
-            conferir_resultados_sniper(jogos_live) 
-            verificar_var_rollback(jogos_live, safe_token, safe_chat)
-        
-        radar = []; agenda = []
-        if not api_error:
-            # 1. COLETA DE STATS FINAIS PARA BIG DATA (FIREBASE)
-            jogos_para_baixar = []
+        if jogos_live:
+            # 1. BIG DATA (FIREBASE)
+            jogos_para_stats = []
             for j in jogos_live:
-                lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
-                if lid in ids_black: continue
-                tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
-                gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-                t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
-                ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
-                
-                # Se o jogo acabou, salva no Firebase
-                if st_short == 'FT':
-                    if str(fid) not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
-                elif deve_buscar_stats(tempo, gh, ga, st_short):
-                    if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
-            
-            if jogos_para_baixar:
-                novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, safe_api)
+                fid = j['fixture']['id']
+                st_short = j['fixture']['status']['short']
+                tempo = j['fixture']['status']['elapsed'] or 0
+                if st_short == 'FT' and str(fid) not in st.session_state['jogos_salvos_bigdata']:
+                    jogos_para_stats.append(j)
+                elif deve_buscar_stats(tempo, j['goals']['home'], j['goals']['away'], st_short):
+                    jogos_para_stats.append(j)
+
+            if jogos_para_stats:
+                novas_stats = atualizar_stats_em_paralelo(jogos_para_stats, api_key)
                 for fid, stats in novas_stats.items():
-                    jogo_ft = next((x for x in jogos_para_baixar if x['fixture']['id'] == fid and x['fixture']['status']['short'] == 'FT'), None)
-                    if jogo_ft: 
-                        salvar_bigdata(jogo_ft, stats) # Salva no Firebase
+                    jogo_ref = next((x for x in jogos_para_stats if x['fixture']['id'] == fid), None)
+                    if jogo_ref and jogo_ref['fixture']['status']['short'] == 'FT':
+                        salvar_bigdata(jogo_ref, stats)
                     else:
-                        st.session_state['controle_stats'][fid] = datetime.now()
                         st.session_state[f"st_{fid}"] = stats
-            
+
             # 2. PROCESSAMENTO DE SINAIS
-            candidatos_multipla = []; ids_no_radar = []
+            radar = []
             for j in jogos_live:
-                lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
-                if lid in ids_black: continue
-                nome_liga_show = j['league']['name']
-                if lid in ids_safe: nome_liga_show += " 🛡️"
-                elif lid in df_obs['id'].values: nome_liga_show += " ⚠️"
-                else: nome_liga_show += " ❓" 
-                ids_no_radar.append(fid)
-                tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
-                home = j['teams']['home']['name']; away = j['teams']['away']['name']
-                placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-                if st_short == 'FT': continue 
-                stats = st.session_state.get(f"st_{fid}", [])
-                status_vis = "👁️" if stats else "💤"
-                rank_h = None; rank_a = None
-                if j['league']['id'] in LIGAS_TABELA:
-                    rk = buscar_ranking(safe_api, j['league']['id'], j['league']['season'])
-                    rank_h = rk.get(home); rank_a = rk.get(away)
-                lista_sinais = []
+                fid = j['fixture']['id']; tempo = j['fixture']['status']['elapsed'] or 0
+                if j['fixture']['status']['short'] == 'FT': continue
+                
+                stats = st.session_state.get(f"st_{fid}")
                 if stats:
-                    lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
-                    salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'], tem_tabela=(rank_h is not None))
-                    resetar_erros(lid)
-                    # Lógica de Múltipla HT
-                    if st_short == 'HT' and gh == 0 and ga == 0:
-                        try:
-                            s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
-                            v1 = next((x['value'] for x in s1 if x['type']=='Total Shots'), 0) or 0
-                            v2 = next((x['value'] for x in s2 if x['type']=='Total Shots'), 0) or 0
-                            sg1 = next((x['value'] for x in s1 if x['type']=='Shots on Goal'), 0) or 0
-                            sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
-                            if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
-                        except: pass
-                if lista_sinais:
-                    status_vis = f"✅ {len(lista_sinais)} Sinais"
-                    for s in lista_sinais:
-                        rh = s.get('rh', 0); ra = s.get('ra', 0)
-                        txt_pressao = gerar_barra_pressao(rh, ra) 
-                        uid_normal = f"{fid}_{s['tag']}"
-                        uid_super = f"SUPER_ODD_{fid}_{s['tag']}"
-                        odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga)
-                        try: odd_val = float(odd_atual_str)
-                        except: odd_val = 0.0
-                        if uid_normal not in st.session_state['alertas_enviados']:
-                            destaque_odd = ""
-                            if odd_val >= 1.80:
-                                destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
-                                st.session_state['alertas_enviados'].add(uid_super)
-                            st.session_state['alertas_enviados'].add(uid_normal)
-                            item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": ""}
-                            if adicionar_historico(item):
-                                prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                                opiniao_ia = ""
-                                if IA_ATIVADA:
-                                    try:
-                                        time.sleep(1)
-                                        opiniao_ia = consultar_ia_gemini({'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar}, s['tag'], stats)
-                                    except: pass
-                                msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
-                                enviar_telegram(safe_token, safe_chat, msg)
-                                st.toast(f"Sinal: {s['tag']}")
-                        elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
-                            st.session_state['alertas_enviados'].add(uid_super)
-                            msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
-                            enviar_telegram(safe_token, safe_chat, msg_super)
-                            st.toast(f"💎 Odd Subiu: {s['tag']}")
-                radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
-            if candidatos_multipla:
-                novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
-                if novos:
-                    msg = "<b>🚀 OPORTUNIDADE DE MÚLTIPLA (HT) 🚀</b>\n" + "".join([f"\n⚽ {c['jogo']} ({c['stats']})\n⚠️ AÇÃO: {c['indica']}" for c in novos])
-                    for c in novos: st.session_state['multiplas_enviadas'].add(c['fid'])
-                    enviar_telegram(safe_token, safe_chat, msg)
-            prox = buscar_agenda_cached(safe_api, hoje_real); agora = get_time_br()
-            for p in prox:
-                try:
-                    if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and p['fixture']['id'] not in ids_no_radar:
-                        if datetime.fromisoformat(p['fixture']['date']) > agora:
-                            l_id = normalizar_id(p['league']['id']); l_nm = p['league']['name']
-                            if l_id in ids_safe: l_nm += " 🛡️"
-                            elif l_id in df_obs['id'].values: l_nm += " ⚠️"
-                            agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
-                except: pass
-        if st.session_state.get('precisa_salvar') and 'historico_full' in st.session_state:
-            df_memoria = st.session_state['historico_full']
-            if not df_memoria.empty:
-                sucesso = salvar_aba("Historico", df_memoria)
-                if sucesso:
-                    st.session_state['precisa_salvar'] = False
-                    st.toast("💾 Dados salvos com sucesso!")
-        if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
-        else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
-        hist_hj = pd.DataFrame(st.session_state['historico_sinais'])
-        t, g, r, w = calcular_stats(hist_hj)
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
-        c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
-        c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{count_safe}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
-        st.write("")
-        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})", "💾 Big Data (Firebase)"])
-        with abas[0]: 
-            if radar: st.dataframe(pd.DataFrame(radar)[['Liga', 'Jogo', 'Tempo', 'Status']].astype(str), use_container_width=True, hide_index=True)
-            else: st.info("Buscando jogos...")
-        with abas[1]: 
-            if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
-            else: st.caption("Sem jogos futuros hoje.")
-        with abas[2]:
-            st.markdown("### 💰 Evolução Financeira (Cálculo Ajustado)")
-            c_fin1, c_fin2 = st.columns(2)
-            stake_padrao = c_fin1.number_input("Valor da Aposta (Stake):", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
-            banca_inicial = c_fin2.number_input("Banca Inicial:", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
-            st.session_state['stake_padrao'] = stake_padrao
-            st.session_state['banca_inicial'] = banca_inicial
-            
-            modo_simulacao = st.radio("Cenário de Entrada:", ["Todos os sinais", "Apenas 1 sinal por jogo", "Até 2 sinais por jogo"], horizontal=True)
-            
-            df_fin = st.session_state.get('historico_full', pd.DataFrame())
-            
-            if not df_fin.empty:
-                df_fin = df_fin.copy()
-                
-                # --- APLICAÇÃO DA NOVA LÓGICA DE ODD JUSTA COM TETO ---
-                df_fin['Odd_Calc'] = df_fin.apply(lambda row: obter_odd_final_para_calculo(row['Odd'], row['Estrategia']), axis=1)
-                
-                df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
-                df_fin = df_fin.sort_values(by=['FID', 'Hora'], ascending=[True, True])
-                
-                if modo_simulacao == "Apenas 1 sinal por jogo": df_fin = df_fin.groupby('FID').head(1)
-                elif modo_simulacao == "Até 2 sinais por jogo": df_fin = df_fin.groupby('FID').head(2)
-                
-                if not df_fin.empty:
-                    lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]
-                    qtd_greens = 0; qtd_reds = 0
-                    
-                    for idx, row in df_fin.iterrows():
-                        res = row['Resultado']
-                        odd = row['Odd_Calc']
-                        
-                        if 'GREEN' in res: 
-                            lucro = (stake_padrao * odd) - stake_padrao
-                            qtd_greens += 1
-                        else: 
-                            lucro = -stake_padrao
-                            qtd_reds += 1
+                    sinais = processar(j, stats, tempo, f"{j['goals']['home']}x{j['goals']['away']}")
+                    for s in sinais:
+                        uid = f"{fid}_{s['tag']}"
+                        if uid not in st.session_state['alertas_enviados']:
+                            opiniao_txt = consultar_ia_gemini({'jogo': f"{j['teams']['home']['name']} x {j['teams']['away']['name']}", 'tempo': tempo, 'placar': f"{j['goals']['home']}x{j['goals']['away']}"}, s['tag'], stats)
                             
-                        saldo_atual += lucro
-                        lucros.append(lucro)
-                        historico_saldo.append(saldo_atual)
-                    
-                    df_fin['Lucro'] = lucros
-                    total_lucro = sum(lucros)
-                    roi = (total_lucro / (len(df_fin) * stake_padrao)) * 100
-                    
-                    st.session_state['last_fin_stats'] = {'cenario': modo_simulacao, 'lucro': total_lucro, 'roi': roi, 'entradas': len(df_fin)}
-                    
-                    m1, m2, m3, m4 = st.columns(4)
-                    cor_delta = "normal" if total_lucro >= 0 else "inverse"
-                    m1.metric("Banca Atual", f"R$ {saldo_atual:.2f}")
-                    m2.metric("Lucro Líquido", f"R$ {total_lucro:.2f}", delta=f"{roi:.1f}%", delta_color=cor_delta)
-                    m3.metric("Entradas", len(df_fin))
-                    m4.metric("Winrate", f"{(qtd_greens/len(df_fin)*100):.1f}%")
-                    
-                    fig_fin = px.line(y=historico_saldo, x=range(len(historico_saldo)), title="Crescimento da Banca (Realista)")
-                    fig_fin.update_layout(xaxis_title="Entradas", yaxis_title="Saldo (R$)", template="plotly_dark")
-                    fig_fin.add_hline(y=banca_inicial, line_dash="dot", annotation_text="Início", annotation_position="bottom right", line_color="gray")
-                    st.plotly_chart(fig_fin, use_container_width=True)
-                    
-                    with st.expander("🕵️ Auditoria de Odds (Verifique se os valores estão realistas)"):
-                        st.dataframe(df_fin[['Data', 'Jogo', 'Estrategia', 'Odd', 'Odd_Calc', 'Resultado', 'Lucro']], use_container_width=True)
-                else: 
-                    st.info("Aguardando fechamento de sinais para calcular financeiro.")
-            else: 
-                st.info("Sem dados históricos para cálculo.")
-        with abas[3]: 
-            if not hist_hj.empty: 
-                df_show = hist_hj.copy()
-                if 'Jogo' in df_show.columns and 'Placar_Sinal' in df_show.columns:
-                    df_show['Jogo'] = df_show['Jogo'] + " (" + df_show['Placar_Sinal'].astype(str) + ")"
-                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada', 'Placar_Sinal']
-                cols_view = [c for c in df_show.columns if c not in colunas_esconder]
-                df_show = df_show[cols_view]
-                try: df_show['Odd'] = df_show['Odd'].astype(float)
-                except: pass
-                st.dataframe(df_show.style.format({"Odd": "{:.2f}"}), use_container_width=True, hide_index=True)
-            else: st.caption("Vazio.")
-        with abas[4]: 
-            st.markdown("### 📊 Inteligência de Mercado")
-            df_bi = st.session_state.get('historico_full', pd.DataFrame())
-            if df_bi.empty: st.warning("Sem dados históricos.")
-            else:
-                try:
-                    df_bi = df_bi.copy()
-                    df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-                    df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
-                    df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-                    hoje_str = get_time_br().strftime('%Y-%m-%d')
-                    df_bi_hoje = df_bi[df_bi['Data_Str'] == hoje_str]
-                    hoje = pd.to_datetime(get_time_br().date())
-                    if 'bi_filter' not in st.session_state: st.session_state['bi_filter'] = "Tudo"
-                    filtro = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"], key="bi_select")
-                    if filtro == "Hoje": df_show = df_bi_hoje
-                    elif filtro == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]
-                    elif filtro == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]
-                    else: df_show = df_bi 
-                    if not df_show.empty:
-                        gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum()
-                        tt = len(df_show); ww = (gr/tt*100) if tt>0 else 0
-                        m1, m2, m3, m4 = st.columns(4)
-                        m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
-                        st.divider()
-                        st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-                        if not st_s.empty:
-                            cts = st_s.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
-                            fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Performance por Estratégia", text='Qtd')
-                            fig.update_layout(template="plotly_dark"); st.plotly_chart(fig, use_container_width=True)
-                        st.markdown("### ⚽ Raio-X por Jogo (Volume de Sinais)")
-                        sinais_por_jogo = df_show['Jogo'].value_counts()
-                        c_vol1, c_vol2, c_vol3 = st.columns(3)
-                        c_vol1.metric("Jogos Únicos", len(sinais_por_jogo))
-                        c_vol2.metric("Média Sinais/Jogo", f"{sinais_por_jogo.mean():.1f}")
-                        c_vol3.metric("Máx Sinais num Jogo", sinais_por_jogo.max())
-                        st.caption("📋 Detalhe dos Jogos com Mais Sinais")
-                        detalhe = df_show.groupby('Jogo')['Resultado'].value_counts().unstack(fill_value=0)
-                        detalhe['Total'] = detalhe.sum(axis=1)
-                        if '✅ GREEN' not in detalhe: detalhe['✅ GREEN'] = 0
-                        if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
-                        st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
-                except Exception as e: st.error(f"Erro ao carregar BI: {e}")
-        with abas[5]: st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
-        with abas[6]: 
-            df_safe_show = st.session_state.get('df_safe', pd.DataFrame()).copy()
-            if not df_safe_show.empty:
-                def calc_risco(x):
-                    try: v = int(float(str(x)))
-                    except: v = 0
-                    return "🟢 100% Estável" if v == 0 else f"⚠️ Atenção ({v}/10)"
-                df_safe_show['Status Risco'] = df_safe_show['Strikes'].apply(calc_risco)
-                st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
-            else: st.info("Nenhuma liga segura ainda.")
-        with abas[7]: 
-            df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
-            if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
-            st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
-        with abas[8]:
-            st.markdown(f"### 💾 Banco de Dados de Partidas (Firebase)")
-            st.caption("A IA usa esses dados para criar novas estratégias. Os dados agora são salvos na nuvem do Google Firestore.")
-            
-            if db_firestore:
-                try:
-                    # Carrega apenas os últimos 50 jogos para não pesar a interface
-                    docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
-                    data = [d.to_dict() for d in docs]
-                    if data:
-                        st.success(f"🔥 {len(data)} Jogos Recentes Carregados do Firebase")
-                        st.dataframe(pd.DataFrame(data), use_container_width=True)
-                    else:
-                        st.info("Nenhum jogo salvo no Firebase ainda. Aguarde o término de uma partida.")
-                except Exception as e:
-                    st.error(f"Erro ao ler Firebase: {e}")
-            else:
-                st.warning("⚠️ Firebase não conectado. Adicione as credenciais nos Secrets.")
+                            # Captura a opinião da IA para o banco de dados
+                            opiniao_db = "Neutro"
+                            if "Aprovado" in opiniao_txt: opiniao_db = "Aprovado"
+                            elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
+                            
+                            odd_live = get_live_odds(fid, api_key, s['tag'])
+                            
+                            item = {
+                                "FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), 
+                                "Hora": get_time_br().strftime('%H:%M'), 
+                                "Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} x {j['teams']['away']['name']}", 
+                                "Placar_Sinal": f"{j['goals']['home']}x{j['goals']['away']}", 
+                                "Estrategia": s['tag'], "Resultado": "Pendente", 
+                                "HomeID": str(j['teams']['home']['id']), "AwayID": str(j['teams']['away']['id']), 
+                                "Odd": odd_live, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db
+                            }
+                            
+                            if adicionar_historico(item):
+                                msg = f"🚨 <b>SINAL: {s['tag']}</b>\n⚽ {j['teams']['home']['name']} x {j['teams']['away']['name']}\n⏰ {tempo}' min | Odd: @{odd_live}{opiniao_txt}"
+                                enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], msg)
+                                st.session_state['alertas_enviados'].add(uid)
+                
+                radar.append({"Liga": j['league']['name'], "Jogo": f"{j['teams']['home']['name']} x {j['teams']['away']['name']}", "Tempo": f"{tempo}'"})
+
+            # VISUALIZAÇÃO BI (Aba 4)
+            abas = st.tabs(["Radar", "Agenda", "Financeiro", "Histórico", "BI & Analytics", "Blacklist", "Seguras", "Obs", "Big Data"])
+            with abas[4]:
+                st.markdown("### 🧠 Performance da IA (Auditoria)")
+                df_hist = st.session_state.get('historico_full', pd.DataFrame())
+                if not df_hist.empty and 'Opiniao_IA' in df_hist.columns:
+                    df_ia = df_hist[df_hist['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                    if not df_ia.empty:
+                        # Tabela Dinâmica: Opinião IA x Resultado
+                        pivot = pd.crosstab(df_ia['Opiniao_IA'], df_ia['Resultado'], margins=True)
+                        st.dataframe(pivot, use_container_width=True)
+                        
+                        # Gráfico de Assertividade por Estratégia
+                        st.markdown("### 📊 Assertividade por Estratégia")
+                        resumo_strat = df_ia.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
+                        if '✅ GREEN' in resumo_strat.columns and '❌ RED' in resumo_strat.columns:
+                            resumo_strat['Winrate'] = (resumo_strat['✅ GREEN'] / (resumo_strat['✅ GREEN'] + resumo_strat['❌ RED']) * 100).round(1)
+                            st.dataframe(resumo_strat[['✅ GREEN', '❌ RED', 'Winrate']].sort_values('Winrate', ascending=False), use_container_width=True)
 
         for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
