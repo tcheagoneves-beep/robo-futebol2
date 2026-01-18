@@ -218,8 +218,8 @@ def sanitizar_conflitos():
             if motivo_atual != novo_motivo:
                 df_black.at[idx, 'Motivo'] = novo_motivo
                 alterou_black = True
-            df_vip = df_vip[~mask_vip]
-            alterou_vip = True
+                df_vip = df_vip[~mask_vip]
+                alterou_vip = True
         df_safe['id_norm'] = df_safe['id'].apply(normalizar_id)
         mask_safe = df_safe['id_norm'] == id_b
         if mask_safe.any():
@@ -973,6 +973,15 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     return resultados
 
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
+    # --- CORREÇÃO: INICIALIZAÇÃO DE VARIÁVEIS PARA EVITAR UnboundLocalError ---
+    is_top_home = False
+    is_top_away = False
+    is_bot_home = False
+    is_bot_away = False
+    is_mid_home = False
+    is_mid_away = False
+    # -------------------------------------------------------------------------
+
     if not stats: return []
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
@@ -1424,4 +1433,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
