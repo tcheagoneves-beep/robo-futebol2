@@ -1050,9 +1050,8 @@ with st.sidebar:
         if st.button("🧹 Limpar Cache"): 
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
         
-        # --- NOVO BOTAO DE PAUSE BIG DATA ---
         st.session_state.PAUSA_BIGDATA = st.toggle("⏸️ Pausar Big Data", value=st.session_state.PAUSA_BIGDATA)
-        
+
         st.write("---")
         if st.button("🧠 Pedir Análise do BI"):
             if IA_ATIVADA:
@@ -1155,6 +1154,17 @@ if st.session_state.ROBO_LIGADO:
             conferir_resultados_sniper(jogos_live) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
         
+        # --- ROTINA DE LIMPEZA DE MEMÓRIA (SANITY CHECK) ---
+        if not api_error:
+            ids_vivos = set(j['fixture']['id'] for j in jogos_live)
+            # Limpa stats de jogos que não estão mais live
+            chaves_para_remover = [k for k in st.session_state.keys() if k.startswith('st_') and int(k.split('_')[1]) not in ids_vivos]
+            for k in chaves_para_remover: del st.session_state[k]
+            # Limpa controle de tempo
+            ids_controle = list(st.session_state['controle_stats'].keys())
+            for fid in ids_controle: 
+                if fid not in ids_vivos: del st.session_state['controle_stats'][fid]
+
         radar = []; agenda = []
         if not api_error:
             jogos_para_baixar = []
@@ -1166,7 +1176,6 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                # --- MODIFICAÇÃO BIG DATA COM PAUSE ---
                 if st_short == 'FT' and not st.session_state.PAUSA_BIGDATA:
                     if fid not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
@@ -1204,15 +1213,6 @@ if st.session_state.ROBO_LIGADO:
                     lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
                     salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'], tem_tabela=(rank_h is not None))
                     resetar_erros(lid)
-                    if st_short == 'HT' and gh == 0 and ga == 0:
-                        try:
-                            s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
-                            v1 = next((x['value'] for x in s1 if x['type']=='Total Shots'), 0) or 0
-                            v2 = next((x['value'] for x in s2 if x['type']=='Total Shots'), 0) or 0
-                            sg1 = next((x['value'] for x in s1 if x['type']=='Shots on Goal'), 0) or 0
-                            sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
-                            if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
-                        except: pass
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
                     for s in lista_sinais:
@@ -1241,11 +1241,6 @@ if st.session_state.ROBO_LIGADO:
                                 msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>{prob}{opiniao_ia}"
                                 enviar_telegram(safe_token, safe_chat, msg)
                                 st.toast(f"Sinal: {s['tag']}")
-                        elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
-                            st.session_state['alertas_enviados'].add(uid_super)
-                            msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
-                            enviar_telegram(safe_token, safe_chat, msg_super)
-                            st.toast(f"💎 Odd Subiu: {s['tag']}")
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
             if candidatos_multipla:
                 novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
