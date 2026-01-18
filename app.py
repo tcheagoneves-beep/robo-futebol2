@@ -15,6 +15,7 @@ from streamlit_gsheets import GSheetsConnection
 import google.generativeai as genai
 import json
 import re
+import random
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO INICIAL E CSS
@@ -63,7 +64,6 @@ if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_env
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
 if 'jogos_salvos_bigdata' not in st.session_state: st.session_state['jogos_salvos_bigdata'] = set()
-if 'jogos_salvos_bigdata_carregados' not in st.session_state: st.session_state['jogos_salvos_bigdata_carregados'] = False
 if 'ia_bloqueada_ate' not in st.session_state: st.session_state['ia_bloqueada_ate'] = None
 if 'last_check_date' not in st.session_state: st.session_state['last_check_date'] = ""
 if 'bi_enviado' not in st.session_state: st.session_state['bi_enviado'] = False
@@ -95,7 +95,6 @@ COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
 COLS_BIGDATA = ['FID', 'Data', 'Liga', 'Jogo', 'Placar_Final', 'Chutes_Total', 'Chutes_Gol', 'Escanteios', 'Posse_Casa', 'Cartoes']
-
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
@@ -320,13 +319,8 @@ def carregar_tudo(force=False):
                 df = df.drop(columns=['Data_Temp'])
             except: pass
             st.session_state['historico_full'] = df
-            
-            # --- CORREÇÃO VISUAL: Mostra na tabela hoje OU pendentes de antes ---
             hoje = get_time_br().strftime('%Y-%m-%d')
-            mask_pendentes = (df['Resultado'] == 'Pendente')
-            mask_hoje = (df['Data'] == hoje)
-            st.session_state['historico_sinais'] = df[mask_pendentes | mask_hoje].to_dict('records')[::-1]
-            
+            st.session_state['historico_sinais'] = df[df['Data'] == hoje].to_dict('records')[::-1]
             if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
             for item in st.session_state['historico_sinais']:
                 fid_strat = f"{item['FID']}_{item['Estrategia']}"
@@ -337,16 +331,6 @@ def carregar_tudo(force=False):
             if 'historico_full' not in st.session_state:
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
-    
-    if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
-        try:
-            df_bd_load = carregar_aba("BigData", COLS_BIGDATA)
-            if not df_bd_load.empty:
-                fids_existentes = set(df_bd_load['FID'].astype(str).values)
-                st.session_state['jogos_salvos_bigdata'].update(fids_existentes)
-            st.session_state['jogos_salvos_bigdata_carregados'] = True
-        except: pass
-    
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
@@ -383,37 +367,27 @@ def salvar_bigdata(jogo_api, stats):
     try:
         fid = str(jogo_api['fixture']['id'])
         if fid in st.session_state['jogos_salvos_bigdata']: return 
-
         home = jogo_api['teams']['home']['name']; away = jogo_api['teams']['away']['name']
         placar = f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}"
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
-        
         chutes = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
         gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
         cantos = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
         cartoes = gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards') + gv(s1, 'Red Cards') + gv(s2, 'Red Cards')
+        ataques = gv(s1, 'Dangerous Attacks') + gv(s2, 'Dangerous Attacks')
         posse = f"{gv(s1, 'Ball Possession')}/{gv(s2, 'Ball Possession')}"
-        
+        faltas = gv(s1, 'Fouls') + gv(s2, 'Fouls')
         novo_item = {
-            'FID': fid, 
-            'Data': get_time_br().strftime('%Y-%m-%d'), 
-            'Liga': jogo_api['league']['name'], 
-            'Jogo': f"{home} x {away}",
-            'Placar_Final': placar, 
-            'Chutes_Total': chutes, 
-            'Chutes_Gol': gol,
-            'Escanteios': cantos, 
-            'Posse_Casa': str(posse), 
-            'Cartoes': cartoes
+            'FID': fid, 'Data': get_time_br().strftime('%Y-%m-%d'), 
+            'Liga': jogo_api['league']['name'], 'Jogo': f"{home} x {away}",
+            'Placar_Final': placar, 'Chutes_Total': chutes, 'Chutes_Gol': gol,
+            'Escanteios': cantos, 'Posse_Casa': str(posse), 'Faltas': faltas, 'Ataques_Perigosos': ataques
         }
-        
         df_bd = carregar_aba("BigData", COLS_BIGDATA)
         df_bd = pd.concat([df_bd, pd.DataFrame([novo_item])], ignore_index=True)
-        sucesso = salvar_aba("BigData", df_bd)
-        
-        if sucesso:
-            st.session_state['jogos_salvos_bigdata'].add(fid)
+        salvar_aba("BigData", df_bd)
+        st.session_state['jogos_salvos_bigdata'].add(fid)
     except: pass
 
 def calcular_stats(df_raw):
@@ -448,8 +422,7 @@ def buscar_agenda_cached(api_key, date_str):
 def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
-        # --- FIX ANTI-CACHE ---
-        params = {"fixture": fixture_id, "_": int(time.time())}
+        params = {"fixture": fixture_id}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         target_markets = []
         target_line = 0.0
@@ -525,69 +498,39 @@ def buscar_inteligencia(estrategia, liga, jogo):
     return f"\n{'🔥' if prob_final >= 80 else '🔮' if prob_final > 40 else '⚠️'} <b>Prob: {prob_final:.0f}% ({str_fontes})</b>"
 
 # --- Funções IA e Lógica ---
-def calcular_odd_media_historica(estrategia):
+def calcular_odd_dinamica(estrategia):
     df = st.session_state.get('historico_full', pd.DataFrame())
-    PADRAO_CONSERVADOR = 1.20
-    TETO_MAXIMO_FALLBACK = 1.50 
-    
-    if df.empty: return PADRAO_CONSERVADOR
+    if df.empty: return 1.65 
     try:
         df_strat = df[df['Estrategia'] == estrategia].copy()
+        if df_strat.empty: return 1.65
         df_strat['Odd_Num'] = pd.to_numeric(df_strat['Odd'], errors='coerce')
-        df_validas = df_strat[(df_strat['Odd_Num'] > 1.15) & (df_strat['Odd_Num'] < 50.0)]
-        if df_validas.empty: return PADRAO_CONSERVADOR
-        media = df_validas['Odd_Num'].mean()
-        media_segura = min(media, TETO_MAXIMO_FALLBACK)
-        if media_segura < 1.15: return PADRAO_CONSERVADOR
-        return float(f"{media_segura:.2f}")
-    except: return PADRAO_CONSERVADOR
+        df_limpo = df_strat[df_strat['Odd_Num'] > 1.15]
+        if df_limpo.empty: return 1.65
+        media_real = df_limpo['Odd_Num'].mean()
+        return float(f"{media_real:.2f}")
+    except: return 1.65
 
-def obter_odd_final_para_calculo(odd_registro, estrategia):
+def recuperar_odd_justa(odd_str, estrategia):
     try:
-        valor = float(odd_registro)
-        if valor <= 1.15: return calcular_odd_media_historica(estrategia)
-        return valor
-    except: return calcular_odd_media_historica(estrategia)
+        odd_val = float(odd_str)
+        if odd_val > 1.15: return odd_val
+    except: pass
+    return calcular_odd_dinamica(estrategia)
 
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     if not IA_ATIVADA: return ""
-    df = st.session_state.get('historico_full', pd.DataFrame())
-    resumo_historico = "Sem dados históricos suficientes desta estratégia."
-    
-    if not df.empty:
-        df_strat = df[df['Estrategia'] == estrategia]
-        total_entradas = len(df_strat)
-        if total_entradas > 0:
-            greens = len(df_strat[df_strat['Resultado'].str.contains('GREEN', na=False)])
-            reds = len(df_strat[df_strat['Resultado'].str.contains('RED', na=False)])
-            winrate = (greens / total_entradas * 100)
-            resumo_historico = (
-                f"PERFORMANCE HISTÓRICA DO ROBÔ NA ESTRATÉGIA '{estrategia}':\n"
-                f"- Total de Entradas Passadas: {total_entradas}\n"
-                f"- Taxa de Acerto (Winrate): {winrate:.1f}%\n"
-                f"- Greens: {greens} | Reds: {reds}\n"
-                "USE ESTE DADO HISTÓRICO COMO PESO FORTE NA SUA DECISÃO."
-            )
     if st.session_state['ia_bloqueada_ate']:
         agora = datetime.now()
         if agora < st.session_state['ia_bloqueada_ate']: return ""
         else: st.session_state['ia_bloqueada_ate'] = None
-        
     dados_ricos = extrair_dados_completos(stats_raw)
     prompt = f"""
-    Atue como um Trader Esportivo Sênior. Você deve validar uma entrada.
-    
-    CONTEXTO DO JOGO AO VIVO:
-    - Jogo: {dados_jogo['jogo']}
-    - Tempo: {dados_jogo['tempo']}' | Placar: {dados_jogo['placar']}
-    - Estatísticas Ao Vivo: {dados_ricos}
-    
-    ESTRATÉGIA APLICADA: "{estrategia}"
-    
-    {resumo_historico}
-    
-    Sua missão: Analise se o cenário do jogo AO VIVO favorece essa estratégia, mas considere se a estratégia costuma ser lucrativa historicamente.
-    Responda ESTRITAMENTE neste formato: "Aprovado" ou "Arriscado" + um motivo ultra curto (máximo 8 palavras).
+    Aja como Trader Profissional.
+    JOGO: {dados_jogo['jogo']} | TEMPO: {dados_jogo['tempo']}'
+    ESTRATÉGIA: "{estrategia}"
+    DADOS: {dados_ricos}
+    Responda APENAS: "Aprovado" ou "Arriscado" + motivo curto (max 10 palavras).
     """
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 10})
@@ -634,7 +577,7 @@ def analisar_financeiro_com_ia(stake, banca):
         lucro_total = 0.0; investido = 0.0; qtd=0; odds_greens = []
         for _, row in df_hoje.iterrows():
             res = str(row['Resultado'])
-            odd_final = obter_odd_final_para_calculo(row['Odd'], row['Estrategia'])
+            odd_final = recuperar_odd_justa(row['Odd'], row['Estrategia'])
             if 'GREEN' in res:
                 lucro = (stake * odd_final) - stake
                 lucro_total += lucro; investido += stake; qtd+=1
@@ -779,12 +722,12 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             st.toast("Insights Matinais Enviados!")
 
 def gerar_insights_matinais_ia(api_key):
+    """ Sniper Matinal + Registro no BI """
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
         url = "https://v3.football.api-sports.io/fixtures"
-        # --- FIX ANTI-CACHE ---
-        params = {"date": hoje, "timezone": "America/Sao_Paulo", "_": int(time.time())}
+        params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         LIGAS_TOP = [71, 72, 39, 140, 78, 135, 61, 2]
@@ -800,8 +743,7 @@ def gerar_insights_matinais_ia(api_key):
                     ja_enviado = True; break
             if ja_enviado: continue
             url_pred = "https://v3.football.api-sports.io/predictions"
-            # --- FIX ANTI-CACHE ---
-            res_pred = requests.get(url_pred, headers={"x-apisports-key": api_key}, params={"fixture": fid, "_": int(time.time())}).json()
+            res_pred = requests.get(url_pred, headers={"x-apisports-key": api_key}, params={"fixture": fid}).json()
             if res_pred.get('response'):
                 pred = res_pred['response'][0]['predictions']
                 comp = res_pred['response'][0]['comparison']
@@ -886,74 +828,47 @@ def processar_resultado(sinal, jogo_api, token, chats):
         return True
     return False
 
-# --- FUNÇÃO CRÍTICA CORRIGIDA: AGORA OLHA TUDO ---
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
-    # CORREÇÃO: Pega o histórico COMPLETO, não apenas o de hoje
-    df_full = st.session_state.get('historico_full', pd.DataFrame())
-    if df_full.empty: return
-
-    # Filtra apenas o que está Pendente (independente da data)
-    pendentes = df_full[df_full['Resultado'] == 'Pendente'].to_dict('records')
-    
+    hist = st.session_state['historico_sinais']
+    pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
     if not pendentes: return
-    
+    hoje_str = get_time_br().strftime('%Y-%m-%d')
     agora = get_time_br()
     ids_live = [j['fixture']['id'] for j in jogos_live]
-    
     updates_buffer = []
-    
     for s in pendentes:
-        # CORREÇÃO: Removida a checagem de data que travava o robô
-
+        if s.get('Data') != hoje_str: continue
         fid = int(clean_fid(s.get('FID', 0)))
         strat = str(s.get('Estrategia', ''))
         key_green = f"RES_GREEN_{str(fid)}_{strat}"
-        
         if key_green in st.session_state.get('alertas_enviados', set()):
             s['Resultado'] = '✅ GREEN'
             updates_buffer.append(s)
             continue 
-
         if 'Odd_Atualizada' not in s: s['Odd_Atualizada'] = False
-        
-        # --- FIX ANTI-CACHE PARA JOGOS QUE SUMIRAM DO LIVE ---
+        try:
+            hora_str = f"{s['Data']} {s['Hora']}"
+            dt_sinal = datetime.strptime(hora_str, '%Y-%m-%d %H:%M')
+            dt_sinal = pytz.timezone('America/Sao_Paulo').localize(dt_sinal)
+            minutos_passados = (agora - dt_sinal).total_seconds() / 60
+            if (minutos_passados >= 3 and not s['Odd_Atualizada']) or (str(s['Odd']) == "0.00") or (str(s['Odd']) == "1.10"):
+                jogo_live = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
+                total_gols = (jogo_live['goals']['home'] or 0) + (jogo_live['goals']['away'] or 0) if jogo_live else 0
+                nova_odd = get_live_odds(fid, api_key, s['Estrategia'], total_gols)
+                if nova_odd != s['Odd']:
+                    s['Odd'] = nova_odd
+                    s['Odd_Atualizada'] = True
+                    updates_buffer.append(s)
+        except: pass
         jogo_encontrado = None
-        # 1. Tenta achar nos jogos ao vivo (cache local é ok aqui)
-        if fid > 0 and fid in ids_live: 
-            jogo_encontrado = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
-        # 2. Se não estiver ao vivo (Acabou ou Intervalo), busca API com TIMESTAMP
+        if fid > 0 and fid in ids_live: jogo_encontrado = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
         elif fid > 0:
             try:
-                time.sleep(0.1) # Delay suave
-                url_fix = "https://v3.football.api-sports.io/fixtures"
-                params_fix = {"id": fid, "timezone": "America/Sao_Paulo", "_": int(time.time())}
-                res = requests.get(url_fix, headers={"x-apisports-key": api_key}, params=params_fix).json()
+                res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
                 if res['response']: jogo_encontrado = res['response'][0]
             except: pass
-        
         if jogo_encontrado:
-            # Lógica de Atualização de Odd (Apenas se ainda for live)
-            if fid in ids_live:
-                 try:
-                    hora_str = f"{s['Data']} {s['Hora']}"
-                    dt_sinal = datetime.strptime(hora_str, '%Y-%m-%d %H:%M')
-                    dt_sinal = pytz.timezone('America/Sao_Paulo').localize(dt_sinal)
-                    minutos_passados = (agora - dt_sinal).total_seconds() / 60
-                    odd_atual_memoria = float(str(s.get('Odd', 0)))
-                    
-                    if minutos_passados >= 3 and (not s.get('Odd_Atualizada') or odd_atual_memoria <= 1.15):
-                        total_gols = (jogo_encontrado['goals']['home'] or 0) + (jogo_encontrado['goals']['away'] or 0)
-                        nova_odd = get_live_odds(fid, api_key, s['Estrategia'], total_gols)
-                        if nova_odd != s['Odd']:
-                            s['Odd'] = nova_odd
-                            s['Odd_Atualizada'] = True
-                            updates_buffer.append(s)
-                 except: pass
-
-            # Processa Resultado
-            if processar_resultado(s, jogo_encontrado, token, chats): 
-                updates_buffer.append(s)
-            
+            if processar_resultado(s, jogo_encontrado, token, chats): updates_buffer.append(s)
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
 def conferir_resultados_sniper(jogos_live):
@@ -1041,9 +956,7 @@ def deve_buscar_stats(tempo, gh, ga, status):
 def fetch_stats_single(fid, api_key):
     try:
         url = "https://v3.football.api-sports.io/fixtures/statistics"
-        # --- FIX ANTI-CACHE ---
-        params = {"fixture": fid, "_": int(time.time())}
-        r = requests.get(url, headers={"x-apisports-key": api_key}, params=params, timeout=3)
+        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
 
@@ -1114,7 +1027,6 @@ def resetar_sistema_completo():
     st.session_state['memoria_pressao'] = {}
     st.session_state['controle_stats'] = {}
     st.session_state['jogos_salvos_bigdata'] = set()
-    st.session_state['jogos_salvos_bigdata_carregados'] = False
     try:
         conn.clear(worksheet="Historico"); salvar_aba("Historico", st.session_state['historico_full'])
         conn.clear(worksheet="Blacklist"); salvar_aba("Blacklist", st.session_state['df_black'])
@@ -1183,7 +1095,17 @@ with st.sidebar:
 
     st.write("---")
     st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
-    
+    # TENTATIVA DE EVITAR CACHE DA API
+        try:
+            timestamp_cache = int(time.time())
+            url = "https://v3.football.api-sports.io/fixtures"
+            # Adicionei o parametro '_={timestamp_cache}' para forçar a API a não usar cache
+            resp = requests.get(url, headers={"x-apisports-key": safe_api}, 
+                              params={"live": "all", "timezone": "America/Sao_Paulo", "_": timestamp_cache}, 
+                              timeout=10)
+            update_api_usage(resp.headers); res = resp.json()
+            jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
+2. Consertar Relatório de BI (Trazer os números de volta)
     if IA_ATIVADA:
         if st.session_state['ia_bloqueada_ate']:
             ag = datetime.now()
@@ -1219,14 +1141,16 @@ if st.session_state.ROBO_LIGADO:
         df_obs = st.session_state.get('df_vip', pd.DataFrame()); count_obs = len(df_obs)
         df_safe_show = st.session_state.get('df_safe', pd.DataFrame()); count_safe = len(df_safe_show)
         ids_safe = [normalizar_id(x) for x in df_safe_show['id'].values]
-        
-        # --- VERIFICAÇÃO DE SINAIS HÍBRIDA (INCLUI PENDENTES VELHOS) ---
+        hoje_real = get_time_br().strftime('%Y-%m-%d')
+        if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
+             df_full = st.session_state['historico_full']
+             st.session_state['historico_sinais'] = df_full[df_full['Data'] == hoje_real].to_dict('records')[::-1]
+
         api_error = False
         jogos_live = []
         try:
             url = "https://v3.football.api-sports.io/fixtures"
-            # --- FIX ANTI-CACHE ---
-            resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"live": "all", "timezone": "America/Sao_Paulo", "_": int(time.time())}, timeout=10)
+            resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
             update_api_usage(resp.headers); res = resp.json()
             jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
@@ -1248,7 +1172,7 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 if st_short == 'FT':
-                    if str(fid) not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
+                    if fid not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
                 elif deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
             if jogos_para_baixar:
@@ -1292,8 +1216,6 @@ if st.session_state.ROBO_LIGADO:
                             sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
                             if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
                         except: pass
-                
-                # --- AQUI ESTAVA O ERRO DE INDENTAÇÃO (AGORA CORRIGIDO) ---
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
                     for s in lista_sinais:
@@ -1327,10 +1249,7 @@ if st.session_state.ROBO_LIGADO:
                             msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
                             enviar_telegram(safe_token, safe_chat, msg_super)
                             st.toast(f"💎 Odd Subiu: {s['tag']}")
-                
-                # --- AGORA FORA DO IF ---
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
-            
             if candidatos_multipla:
                 novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
                 if novos:
@@ -1356,10 +1275,10 @@ if st.session_state.ROBO_LIGADO:
                     st.toast("💾 Dados salvos com sucesso!")
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
         else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
-        hist_hj = pd.DataFrame(st.session_state.get('historico_sinais', []))
+        hist_hj = pd.DataFrame(st.session_state['historico_sinais'])
         t, g, r, w = calcular_stats(hist_hj)
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais (Hoje+Pend)</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
+        c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
         c3.markdown(f'<div class="metric-box"><div class="metric-title">Ligas Seguras</div><div class="metric-value">{count_safe}</div><div class="metric-sub">Validadas</div></div>', unsafe_allow_html=True)
         st.write("")
@@ -1371,70 +1290,41 @@ if st.session_state.ROBO_LIGADO:
             if agenda: st.dataframe(pd.DataFrame(agenda).sort_values('Hora').astype(str), use_container_width=True, hide_index=True)
             else: st.caption("Sem jogos futuros hoje.")
         with abas[2]:
-            st.markdown("### 💰 Evolução Financeira (Cálculo Ajustado)")
+            st.markdown("### 💰 Evolução Financeira")
             c_fin1, c_fin2 = st.columns(2)
             stake_padrao = c_fin1.number_input("Valor da Aposta (Stake):", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
             banca_inicial = c_fin2.number_input("Banca Inicial:", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
             st.session_state['stake_padrao'] = stake_padrao
             st.session_state['banca_inicial'] = banca_inicial
-            
             modo_simulacao = st.radio("Cenário de Entrada:", ["Todos os sinais", "Apenas 1 sinal por jogo", "Até 2 sinais por jogo"], horizontal=True)
-            
             df_fin = st.session_state.get('historico_full', pd.DataFrame())
-            
             if not df_fin.empty:
                 df_fin = df_fin.copy()
-                df_fin['Odd_Calc'] = df_fin.apply(lambda row: obter_odd_final_para_calculo(row['Odd'], row['Estrategia']), axis=1)
-                
+                df_fin['Odd_Num'] = pd.to_numeric(df_fin['Odd'], errors='coerce').fillna(0.0)
+                def ajustar_odd_row(r):
+                   if r['Odd_Num'] <= 1.15: return recuperar_odd_justa(r['Odd'], r['Estrategia'])
+                   return r['Odd_Num']
+                df_fin['Odd_Calc'] = df_fin.apply(ajustar_odd_row, axis=1)
                 df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
                 df_fin = df_fin.sort_values(by=['FID', 'Hora'], ascending=[True, True])
-                
                 if modo_simulacao == "Apenas 1 sinal por jogo": df_fin = df_fin.groupby('FID').head(1)
                 elif modo_simulacao == "Até 2 sinais por jogo": df_fin = df_fin.groupby('FID').head(2)
-                
                 if not df_fin.empty:
                     lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]
-                    qtd_greens = 0; qtd_reds = 0
-                    
                     for idx, row in df_fin.iterrows():
-                        res = row['Resultado']
-                        odd = row['Odd_Calc']
-                        
-                        if 'GREEN' in res: 
-                            lucro = (stake_padrao * odd) - stake_padrao
-                            qtd_greens += 1
-                        else: 
-                            lucro = -stake_padrao
-                            qtd_reds += 1
-                            
-                        saldo_atual += lucro
-                        lucros.append(lucro)
-                        historico_saldo.append(saldo_atual)
-                    
-                    df_fin['Lucro'] = lucros
-                    total_lucro = sum(lucros)
-                    roi = (total_lucro / (len(df_fin) * stake_padrao)) * 100
-                    
+                        res = row['Resultado']; odd = row['Odd_Calc']
+                        if 'GREEN' in res: lucro = (stake_padrao * odd) - stake_padrao
+                        else: lucro = -stake_padrao
+                        saldo_atual += lucro; lucros.append(lucro); historico_saldo.append(saldo_atual)
+                    df_fin['Lucro'] = lucros; total_lucro = sum(lucros); roi = (total_lucro / (len(df_fin) * stake_padrao)) * 100
                     st.session_state['last_fin_stats'] = {'cenario': modo_simulacao, 'lucro': total_lucro, 'roi': roi, 'entradas': len(df_fin)}
-                    
                     m1, m2, m3, m4 = st.columns(4)
-                    cor_delta = "normal" if total_lucro >= 0 else "inverse"
-                    m1.metric("Banca Atual", f"R$ {saldo_atual:.2f}")
-                    m2.metric("Lucro Líquido", f"R$ {total_lucro:.2f}", delta=f"{roi:.1f}%", delta_color=cor_delta)
-                    m3.metric("Entradas", len(df_fin))
-                    m4.metric("Winrate", f"{(qtd_greens/len(df_fin)*100):.1f}%")
-                    
-                    fig_fin = px.line(y=historico_saldo, x=range(len(historico_saldo)), title="Crescimento da Banca (Realista)")
-                    fig_fin.update_layout(xaxis_title="Entradas", yaxis_title="Saldo (R$)", template="plotly_dark")
-                    fig_fin.add_hline(y=banca_inicial, line_dash="dot", annotation_text="Início", annotation_position="bottom right", line_color="gray")
-                    st.plotly_chart(fig_fin, use_container_width=True)
-                    
-                    with st.expander("🕵️ Auditoria de Odds (Verifique se os valores estão realistas)"):
-                        st.dataframe(df_fin[['Data', 'Jogo', 'Estrategia', 'Odd', 'Odd_Calc', 'Resultado', 'Lucro']], use_container_width=True)
-                else: 
-                    st.info("Aguardando fechamento de sinais para calcular financeiro.")
-            else: 
-                st.info("Sem dados históricos para cálculo.")
+                    m1.metric("Banca Atual", f"R$ {saldo_atual:.2f}"); m2.metric("Lucro Líquido", f"R$ {total_lucro:.2f}", delta_color="normal")
+                    m3.metric("ROI Estimado", f"{roi:.1f}%"); m4.metric("Entradas", len(df_fin))
+                    fig_fin = px.line(y=historico_saldo, x=range(len(historico_saldo)), title="Crescimento da Banca")
+                    fig_fin.update_layout(xaxis_title="Entradas", yaxis_title="Saldo (R$)", template="plotly_dark"); st.plotly_chart(fig_fin, use_container_width=True)
+                else: st.info("Aguardando fechamento de sinais para calcular financeiro.")
+            else: st.info("Sem dados históricos para cálculo.")
         with abas[3]: 
             if not hist_hj.empty: 
                 df_show = hist_hj.copy()
