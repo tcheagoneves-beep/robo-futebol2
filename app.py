@@ -111,6 +111,20 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
+# --- [NOVO] MAPEAMENTO DE LÓGICA PARA IA ---
+MAPA_LOGICA_ESTRATEGIAS = {
+    "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
+    "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
+    "💰 Janela de Ouro": "70-75 min, Chutes >= 18, Diferença gols <= 1. Jogo pegado.",
+    "🟢 Blitz Casa": "Tempo <= 60, Casa perdendo ou empatando, Pressão(rh) >= 2 ou Chutes >= 8.",
+    "🟢 Blitz Visitante": "Tempo <= 60, Visitante perdendo ou empatando, Pressão(ra) >= 2 ou Chutes >= 8.",
+    "🔥 Massacre": "Favorito Top vs Zebra, Tempo <= 5, Chutes >= 1.",
+    "⚔️ Choque Líderes": "Dois Tops, Tempo <= 7, Chutes >= 2.",
+    "🥊 Briga de Rua": "Times Mid, Tempo <= 7, Chutes 2 a 3.",
+    "❄️ Jogo Morno": "Times Z4, Tempo 15-16, 0 Chutes. Under HT.",
+    "💎 GOLDEN BET": "75-85 min, Diferença <= 1, Chutes >= 16, SoG >= 8. Pressão extrema."
+}
+
 # ==============================================================================
 # 4. FUNÇÕES UTILITÁRIAS E DE DADOS
 # ==============================================================================
@@ -698,6 +712,96 @@ def criar_estrategia_nova_ia():
         return response.text
     except Exception as e: return f"Erro na criação: {e}"
 
+# --- [NOVO] FUNÇÃO PARA OTIMIZAR ESTRATÉGIAS EXISTENTES ---
+def otimizar_estrategias_existentes_ia():
+    if not IA_ATIVADA: return "⚠️ IA Desconectada."
+    if not db_firestore: return "⚠️ Firebase Offline (Necessário para cruzar dados)."
+
+    # 1. Carregar Histórico de Resultados (Sheets)
+    df_hist = st.session_state.get('historico_full', pd.DataFrame())
+    if df_hist.empty: return "Sem histórico suficiente para análise."
+    
+    # Filtra apenas jogos finalizados
+    df_closed = df_hist[df_hist['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
+    if df_closed.empty: return "Nenhum sinal finalizado para avaliar."
+
+    # 2. Carregar Big Data (Firebase) para ter contexto estatístico
+    # Pegamos os últimos 200 jogos para ter uma amostra relevante
+    try:
+        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(200).stream()
+        big_data_dict = {d.to_dict()['fid']: d.to_dict() for d in docs}
+    except Exception as e: return f"Erro ao ler Firebase: {e}"
+
+    # 3. Agrupar dados por Estratégia
+    analise_pacote = {}
+    
+    estrategias_unicas = df_closed['Estrategia'].unique()
+    
+    for strat in estrategias_unicas:
+        # Pula estratégias manuais ou desconhecidas
+        if strat not in MAPA_LOGICA_ESTRATEGIAS: continue
+
+        d_strat = df_closed[df_closed['Estrategia'] == strat]
+        total = len(d_strat)
+        if total < 5: continue # Ignora estratégias com poucos dados (pouca amostra)
+
+        greens = d_strat[d_strat['Resultado'].str.contains('GREEN')]
+        reds = d_strat[d_strat['Resultado'].str.contains('RED')]
+        winrate = (len(greens) / total) * 100
+
+        # Coleta estatísticas médias dos REDs para identificar falhas
+        stats_reds = []
+        for fid in reds['FID'].values:
+            fid_str = str(fid)
+            if fid_str in big_data_dict:
+                stats_reds.append(big_data_dict[fid_str].get('estatisticas', {}))
+        
+        # Se tiver dados suficientes de falhas, empacota para a IA
+        if stats_reds:
+            # Calcula média simples de alguns indicadores nos jogos que deram RED
+            try:
+                avg_chutes = sum([x.get('chutes_total', 0) for x in stats_reds]) / len(stats_reds)
+                avg_posse = sum([int(x.get('posse_casa', '0').replace('%','')) for x in stats_reds]) / len(stats_reds)
+            except: 
+                avg_chutes = 0; avg_posse = 0
+
+            analise_pacote[strat] = {
+                "Winrate Atual": f"{winrate:.1f}%",
+                "Regra Atual": MAPA_LOGICA_ESTRATEGIAS[strat],
+                "Total Entradas": total,
+                "Qtd Reds": len(reds),
+                "Perfil dos Jogos que deram RED (Médias)": {
+                    "Chutes Totais no jogo": f"{avg_chutes:.1f}",
+                    "Posse Casa": f"{avg_posse:.1f}%"
+                },
+                "Exemplo de um jogo RED": str(stats_reds[0]) if stats_reds else "N/A"
+            }
+
+    if not analise_pacote: return "Dados insuficientes (cruzamento Sheets x Firebase) para gerar insights."
+
+    # 4. Prompt para o Gemini
+    prompt_otimizacao = f"""
+    Atue como um Especialista em Data Science focado em Apostas Esportivas.
+    Eu tenho um Bot com estratégias definidas. Abaixo, apresento o desempenho delas e o perfil dos jogos onde elas FALHARAM (Reds).
+    
+    SEU OBJETIVO: Analisar os dados dos erros e sugerir UMA melhoria na lógica (código) para filtrar esses jogos ruins e aumentar o Winrate.
+    
+    DADOS DAS ESTRATÉGIAS:
+    {json.dumps(analise_pacote, indent=2)}
+
+    SAÍDA ESPERADA (Responda para cada estratégia listada):
+    1. Nome da Estratégia
+    2. Diagnóstico: Por que ela está falhando baseada nos dados dos Reds? (Ex: "Está entrando em jogos com poucos chutes")
+    3. AÇÃO SUGERIDA: Sugira uma alteração nos parâmetros do IF (Ex: "Aumentar filtro de Chutes de 8 para 10" ou "Adicionar filtro de Posse > 40%").
+    Seja técnico e direto.
+    """
+
+    try:
+        response = model_ia.generate_content(prompt_otimizacao)
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text
+    except Exception as e: return f"Erro na IA: {e}"
+
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
     except: pass
@@ -1188,6 +1292,22 @@ with st.sidebar:
                     st.markdown("### 💡 Sugestão da IA")
                     st.success(sugestao)
             else: st.error("IA Desconectada.")
+        
+        # --- [NOVO] BOTÃO DE OTIMIZAÇÃO NA SIDEBAR ---
+        if st.button("🔧 Otimizar Estratégias (IA)"):
+            if IA_ATIVADA and db_firestore:
+                with st.spinner("🕵️ Cruzando Greens/Reds com Big Data..."):
+                    relatorio_otimizacao = otimizar_estrategias_existentes_ia()
+                    
+                    st.markdown("### 🛠️ Plano de Melhoria")
+                    if "Erro" in relatorio_otimizacao or "Atenção" in relatorio_otimizacao:
+                        st.warning(relatorio_otimizacao)
+                    else:
+                        st.success("Análise Concluída!")
+                        with st.expander("Ver Sugestões Completas", expanded=True):
+                            st.write(relatorio_otimizacao)
+            else:
+                st.error("Requer IA Ativa e Conexão Firebase.")
 
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
         if st.button("💰 Enviar Relatório Financeiro"):
