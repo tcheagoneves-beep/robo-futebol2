@@ -4,6 +4,7 @@ import requests
 import time
 import os
 import threading
+import random # [NOVO] Para evitar travamento de fila
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CORREÇÃO DE GRÁFICO (Backend AGG) ---
@@ -111,7 +112,7 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# --- [NOVO] MAPEAMENTO DE LÓGICA PARA IA ---
+# --- MAPEAMENTO DE LÓGICA PARA IA ---
 MAPA_LOGICA_ESTRATEGIAS = {
     "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
     "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
@@ -421,6 +422,7 @@ def atualizar_historico_ram(lista_atualizada_hoje):
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
 
+# [MODIFICADO] Função com tratamento de erro e limpeza de dados
 def salvar_bigdata(jogo_api, stats):
     if not db_firestore: return
     try:
@@ -430,11 +432,14 @@ def salvar_bigdata(jogo_api, stats):
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
+        # Helper para evitar nulls no Firebase
+        def sanitize(val): return str(val) if val is not None else "0"
+
         item_bigdata = {
             'fid': fid,
             'data_hora': get_time_br().strftime('%Y-%m-%d %H:%M'),
-            'liga': jogo_api['league']['name'],
-            'jogo': f"{jogo_api['teams']['home']['name']} x {jogo_api['teams']['away']['name']}",
+            'liga': sanitize(jogo_api['league']['name']),
+            'jogo': f"{sanitize(jogo_api['teams']['home']['name'])} x {sanitize(jogo_api['teams']['away']['name'])}",
             'placar_final': f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}",
             'estatisticas': {
                 'chutes_total': gv(s1, 'Total Shots') + gv(s2, 'Total Shots'),
@@ -455,7 +460,9 @@ def salvar_bigdata(jogo_api, stats):
         }
         db_firestore.collection("BigData_Futebol").document(fid).set(item_bigdata)
         st.session_state['jogos_salvos_bigdata'].add(fid)
-    except Exception as e: pass
+        st.toast(f"💾 BigData Salvo: {item_bigdata['jogo']}")
+    except Exception as e:
+        st.error(f"Erro ao salvar no Firebase (FID {jogo_api['fixture']['id']}): {e}")
 
 def calcular_stats(df_raw):
     if df_raw.empty: return 0, 0, 0, 0
@@ -712,7 +719,6 @@ def criar_estrategia_nova_ia():
         return response.text
     except Exception as e: return f"Erro na criação: {e}"
 
-# --- [NOVO] FUNÇÃO PARA OTIMIZAR ESTRATÉGIAS EXISTENTES ---
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "⚠️ IA Desconectada."
     if not db_firestore: return "⚠️ Firebase Offline (Necessário para cruzar dados)."
@@ -1293,7 +1299,7 @@ with st.sidebar:
                     st.success(sugestao)
             else: st.error("IA Desconectada.")
         
-        # --- [NOVO] BOTÃO DE OTIMIZAÇÃO NA SIDEBAR ---
+        # --- BOTÃO DE OTIMIZAÇÃO NA SIDEBAR ---
         if st.button("🔧 Otimizar Estratégias (IA)"):
             if IA_ATIVADA and db_firestore:
                 with st.spinner("🕵️ Cruzando Greens/Reds com Big Data..."):
@@ -1308,6 +1314,37 @@ with st.sidebar:
                             st.write(relatorio_otimizacao)
             else:
                 st.error("Requer IA Ativa e Conexão Firebase.")
+        
+        # --- [NOVO] BOTÃO DE BACKFILL MANUAL ---
+        if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
+            with st.spinner("Buscando na API todos os jogos finalizados hoje..."):
+                hoje_real = get_time_br().strftime('%Y-%m-%d')
+                todos_jogos_hoje = buscar_agenda_cached(st.session_state['API_KEY'], hoje_real)
+                
+                # Filtra só o que acabou (FT) e ainda não tá no banco
+                jogos_ft_pendentes = []
+                for j in todos_jogos_hoje:
+                    try:
+                        if j['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
+                            fid = str(j['fixture']['id'])
+                            if fid not in st.session_state['jogos_salvos_bigdata']:
+                                jogos_ft_pendentes.append(j)
+                    except: pass
+                
+                if jogos_ft_pendentes:
+                    st.info(f"Encontrados {len(jogos_ft_pendentes)} jogos finalizados não salvos. Processando...")
+                    # Processa em paralelo (cuidado com o consumo da API aqui)
+                    stats_recuperadas = atualizar_stats_em_paralelo(jogos_ft_pendentes, st.session_state['API_KEY'])
+                    
+                    count_salvos = 0
+                    for fid, stats in stats_recuperadas.items():
+                        j_obj = next((x for x in jogos_ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
+                        if j_obj: 
+                            salvar_bigdata(j_obj, stats)
+                            count_salvos += 1
+                    st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
+                else:
+                    st.warning("Nenhum jogo finalizado pendente encontrado para hoje.")
 
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
         if st.button("💰 Enviar Relatório Financeiro"):
@@ -1430,21 +1467,24 @@ if st.session_state.ROBO_LIGADO:
                         st.session_state['controle_stats'][fid] = datetime.now()
                         st.session_state[f"st_{fid}"] = stats
             
-            # --- CORREÇÃO BIG DATA: Buscar FT na Agenda (pois somem do Live) ---
+            # --- [MODIFICADO] CORREÇÃO BIG DATA OTIMIZADA (Randomizada) ---
             prox = buscar_agenda_cached(safe_api, hoje_real); agora = get_time_br()
             
             ft_para_salvar = []
             for p in prox:
                 try:
+                    # Verifica se acabou e se NÃO foi salvo ainda
                     if p['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
                         fid_str = str(p['fixture']['id'])
                         if fid_str not in st.session_state['jogos_salvos_bigdata']:
                             ft_para_salvar.append(p)
                 except: pass
             
-            # Processa em lotes pequenos para não engasgar o loop
+            # Processa em lotes aleatórios para não travar a fila em um jogo ruim
             if ft_para_salvar:
-                lote = ft_para_salvar[:3] # 3 por ciclo
+                # Se tiver mais que 3, pega 3 aleatórios. Se tiver menos, pega todos.
+                lote = random.sample(ft_para_salvar, min(len(ft_para_salvar), 3)) 
+                
                 stats_ft = atualizar_stats_em_paralelo(lote, safe_api)
                 for fid, s in stats_ft.items():
                     j_obj = next((x for x in lote if x['fixture']['id'] == fid), None)
