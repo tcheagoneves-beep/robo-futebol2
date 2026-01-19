@@ -652,11 +652,12 @@ def analisar_bi_com_ia():
         if df_hoje.empty: return "Sem sinais hoje."
         df_f = df_hoje[df_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         total = len(df_f); greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
+        # [CORREÇÃO AQUI]: ensure_ascii=False permite passar Emojis e Acentos reais para a IA
         resumo = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}%").to_dict()
         prompt = f"""
         Analise o dia ({hoje_str}):
         Total: {total}, Greens: {greens}
-        Estratégias: {json.dumps(resumo)}
+        Estratégias: {json.dumps(resumo, ensure_ascii=False)}
         3 dicas curtas para amanhã.
         """
         response = model_ia.generate_content(prompt)
@@ -793,7 +794,7 @@ def otimizar_estrategias_existentes_ia():
     SEU OBJETIVO: Analisar os dados dos erros e sugerir UMA melhoria na lógica (código) para filtrar esses jogos ruins e aumentar o Winrate.
     
     DADOS DAS ESTRATÉGIAS:
-    {json.dumps(analise_pacote, indent=2)}
+    {json.dumps(analise_pacote, indent=2, ensure_ascii=False)}
 
     SAÍDA ESPERADA (Responda para cada estratégia listada):
     1. Nome da Estratégia
