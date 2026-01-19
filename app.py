@@ -361,7 +361,7 @@ def carregar_tudo(force=False):
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
         sanitizar_conflitos()
         st.session_state['last_static_update'] = now
-    
+     
     if 'historico_full' not in st.session_state or force:
         df = carregar_aba("Historico", COLS_HIST)
         if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
@@ -386,10 +386,10 @@ def carregar_tudo(force=False):
             if 'historico_full' not in st.session_state:
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
-    
+     
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
         st.session_state['jogos_salvos_bigdata_carregados'] = True
-    
+     
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
@@ -847,103 +847,134 @@ def enviar_relatorio_bi(token, chat_ids):
     if df.empty: return
     try:
         df = df.copy()
+        # Tratamento de datas
         df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
         df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
         df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
         
         hoje = pd.to_datetime(get_time_br().date())
+        
+        # --- DEFINIÇÃO DOS PERÍODOS ---
         d_hoje = df[df['Data_DT'] == hoje]
         d_7d = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
         d_30d = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
+        d_total = df
 
-        def calc_detalhado(d):
-            t = len(d); 
-            g = d['Resultado'].str.contains('GREEN').sum(); 
-            r = d['Resultado'].str.contains('RED').sum()
-            wr = (g/t*100) if t>0 else 0
+        # Função auxiliar para formatar texto (Green/Red)
+        def fmt_placar(d):
+            if d.empty: return "0G - 0R (0%)"
+            g = d['Resultado'].str.contains('GREEN', na=False).sum()
+            r = d['Resultado'].str.contains('RED', na=False).sum()
+            t = g + r
+            wr = (g/t*100) if t > 0 else 0
             return f"{g}G - {r}R ({wr:.0f}%)"
 
-        # --- CORREÇÃO DO ERRO DE ÍNDICE ---
-        stats = d_30d[d_30d['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        # --- NOVA LÓGICA: AUDITORIA DETALHADA DA IA ---
+        def fmt_ia_stats(periodo_df, label_periodo):
+            if 'Opiniao_IA' not in periodo_df.columns: return ""
+            # Filtra apenas finalizados
+            d_fin = periodo_df[periodo_df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+            
+            # Aprovados
+            d_aprov = d_fin[d_fin['Opiniao_IA'] == 'Aprovado']
+            stats_aprov = fmt_placar(d_aprov)
+            
+            # Arriscados
+            d_risk = d_fin[d_fin['Opiniao_IA'] == 'Arriscado']
+            stats_risk = fmt_placar(d_risk)
+            
+            return f"🤖 <b>IA ({label_periodo}):</b>\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}"
 
-        top_ligas_msg = ""
+        msg_ia_hoje = fmt_ia_stats(d_hoje, "Hoje")
+        msg_ia_7d = fmt_ia_stats(d_7d, "7 Dias")
+        msg_ia_30d = fmt_ia_stats(d_30d, "30 Dias")
+        msg_ia_total = fmt_ia_stats(d_total, "Geral")
+
+        # --- NOVA LÓGICA: DETETIVE DE LIGAS (Qual estratégia está falhando?) ---
+        df_finished = d_30d[d_30d['Resultado'].isin(['✅ GREEN', '❌ RED'])] # Analisa últimos 30 dias para ter amostra
+        
         piores_ligas_msg = ""
-
-        df_finished = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        top_ligas_msg = ""
 
         if not df_finished.empty:
-            grouped = df_finished.groupby('Liga')['Resultado'].apply(lambda x: (x.str.contains('GREEN').sum() / len(x) * 100, len(x), x.str.contains('RED').sum()))
-            stats_ligas = pd.DataFrame(grouped.tolist(), index=grouped.index, columns=['Winrate', 'Total', 'Reds'])
-            stats_ligas = stats_ligas[stats_ligas['Total'] >= 2]
+            # Agrupa por Liga
+            grouped = df_finished.groupby('Liga')['Resultado'].apply(lambda x: pd.Series({
+                'Winrate': (x.str.contains('GREEN').sum() / len(x) * 100),
+                'Total': len(x),
+                'Reds': x.str.contains('RED').sum()
+            })).unstack()
             
+            # Filtra ligas com pelo menos 3 jogos
+            stats_ligas = grouped[grouped['Total'] >= 3]
+
+            # Melhores Ligas
             melhores = stats_ligas.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(3)
-            top_ligas_msg = "\n".join([f"🏆 {liga}: {row['Winrate']:.0f}%" for liga, row in melhores.iterrows()])
+            top_ligas_msg = "\n".join([f"🏆 {liga}: {row['Winrate']:.0f}% ({int(row['Total'])}j)" for liga, row in melhores.iterrows()])
 
+            # Piores Ligas + DRILL DOWN (Qual estratégia?)
             piores = stats_ligas.sort_values(by=['Reds'], ascending=False).head(3)
-            piores_ligas_msg = "\n".join([f"💀 {liga}: {row['Reds']} Reds" for liga, row in piores.iterrows() if row['Reds'] > 0])
-        
-        ia_audit_msg = "<i>Sem dados suficientes para auditar a IA.</i>"
-        if 'Opiniao_IA' in df.columns:
-            df_ia = df[df['Resultado'].isin(['✅ GREEN', '❌ RED']) & (df['Opiniao_IA'].isin(['Aprovado', 'Arriscado']))]
-            if not df_ia.empty:
-                lines = []
-                for op in ['Aprovado', 'Arriscado']:
-                    d_op = df_ia[df_ia['Opiniao_IA'] == op]
-                    if not d_op.empty:
-                        total = len(d_op)
-                        greens = d_op['Resultado'].str.contains('GREEN').sum()
-                        wr = (greens / total * 100)
-                        lines.append(f"🤖 <b>IA {op.upper()}:</b> {wr:.1f}% ({greens}/{total})")
-                if lines:
-                    ia_audit_msg = "\n".join(lines)
+            lista_piores = []
+            for liga, row in piores.iterrows():
+                if row['Reds'] > 0:
+                    # Pega os dados só dessa liga ruim
+                    dados_liga = df_finished[(df_finished['Liga'] == liga) & (df_finished['Resultado'].str.contains('RED'))]
+                    # Conta qual estratégia deu mais red nela
+                    vilao = dados_liga['Estrategia'].value_counts().head(1)
+                    nome_vilao = vilao.index[0] if not vilao.empty else "Geral"
+                    qtd_vilao = vilao.values[0] if not vilao.empty else 0
+                    
+                    lista_piores.append(f"💀 {liga}: {int(row['Reds'])} Reds\n   ↳ <i>Culpa: {nome_vilao} ({qtd_vilao}R)</i>")
+            
+            piores_ligas_msg = "\n".join(lista_piores)
 
+        # Gera gráfico (mantido igual)
         insight_text = analisar_bi_com_ia()
-
+        
         if token and chat_ids:
             plt.style.use('dark_background')
             fig, ax = plt.subplots(figsize=(7, 4))
-            
-            # --- PLOTAGEM SEGURA ---
-            if not stats.empty:
-                c = stats.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
+            stats_plot = d_30d[d_30d['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+            if not stats_plot.empty:
+                c = stats_plot.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
                 c.plot(kind='bar', stacked=True, color=['#00FF00', '#FF0000'], ax=ax, width=0.6)
                 ax.set_title(f'PERFORMANCE 30 DIAS', color='white', fontsize=12)
-                ax.legend(title='', frameon=False)
                 plt.tight_layout()
                 buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=100, facecolor='#0E1117'); buf.seek(0)
                 
-                # 1. Manda a foto com legenda curta
-                msg_foto = "📊 <b>Gráfico de Performance (30 Dias)</b>\n👇 <i>Relatório detalhado abaixo</i>"
+                msg_foto = "📊 <b>Gráfico de Performance (30 Dias)</b>"
                 ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
                 for cid in ids: 
                     buf.seek(0)
                     _worker_telegram_photo(token, cid, buf, msg_foto)
                 
-                # 2. Manda o texto longo separado
-                msg_texto = f"""📈 <b>RELATÓRIO BI COMPLETO</b>
+                # --- MENSAGEM DE TEXTO FINAL FORMATADA ---
+                msg_texto = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>
                 
-📆 <b>HOJE:</b> {calc_detalhado(d_hoje)}
-🗓 <b>SEMANA:</b> {calc_detalhado(d_7d)}
-📅 <b>MÊS (30d):</b> {calc_detalhado(d_30d)}
-♾ <b>TOTAL GERAL:</b> {calc_detalhado(df)}
+📆 <b>HOJE:</b> {fmt_placar(d_hoje)}
+{msg_ia_hoje}
 
-🔍 <b>AUDITORIA DA IA:</b>
-{ia_audit_msg}
+🗓 <b>SEMANA:</b> {fmt_placar(d_7d)}
+{msg_ia_7d}
+
+📅 <b>MÊS (30d):</b> {fmt_placar(d_30d)}
+{msg_ia_30d}
+
+♾ <b>TOTAL GERAL:</b> {fmt_placar(d_total)}
+{msg_ia_total}
 
 💎 <b>TOP LIGAS (Winrate):</b>
 {top_ligas_msg}
 
-⚠️ <b>PIORES LIGAS (Reds):</b>
+⚠️ <b>LIGAS CRÍTICAS (Análise de Falha):</b>
 {piores_ligas_msg}
 
-🧠 <b>INSIGHT DA IA:</b>
+🧠 <b>INSIGHT GERAL DA IA:</b>
 {insight_text}
                 """
                 enviar_telegram(token, chat_ids, msg_texto)
-                
                 plt.close(fig)
             else:
-                st.warning("Sem dados suficientes nos últimos 30 dias para gerar gráfico.")
+                st.warning("Sem dados para gráfico.")
     except Exception as e: st.error(f"Erro ao gerar BI: {e}")
 
 def verificar_automacao_bi(token, chat_ids, stake_padrao):
@@ -1368,6 +1399,7 @@ with st.sidebar:
     
     with st.expander("🤖 Consumo IA (Gemini)", expanded=False):
         u_ia = st.session_state['gemini_usage']
+        u_ia['limit'] = 10000 
         perc_ia = min(u_ia['used'] / u_ia['limit'], 1.0)
         st.progress(perc_ia)
         st.caption(f"Requições Hoje: **{u_ia['used']}** / {u_ia['limit']}")
@@ -1400,7 +1432,11 @@ with st.sidebar:
     if st.session_state.get('confirmar_reset'):
         st.error("Tem certeza? Isso apaga TODO o histórico do Google Sheets.")
         c1, c2 = st.columns(2)
-        if c1.button("✅ SIM"): resetar_sistema_completo(); st.session_state['confirmar_reset'] = False; st.rerun()
+        if c1.button("✅ SIM"): 
+            st.cache_data.clear()
+            st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
+            salvar_aba("Historico", st.session_state['historico_full'])
+            st.session_state['confirmar_reset'] = False; st.rerun()
         if c2.button("❌ NÃO"): st.session_state['confirmar_reset'] = False; st.rerun()
 
 if st.session_state.ROBO_LIGADO:
@@ -1738,41 +1774,69 @@ if st.session_state.ROBO_LIGADO:
                         m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
                         st.divider()
                         
-                        # --- ANÁLISE DE LIGAS (NOVA) ---
-                        st.markdown("### 🏆 Melhores e Piores Ligas")
-                        col_top, col_worst = st.columns(2)
+                        # --- ANÁLISE DE LIGAS DETALHADA ---
+                        st.markdown("### 🏆 Melhores e Piores Ligas (Com Drill-Down)")
                         
                         df_finished = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                         if not df_finished.empty:
-                            liga_stats = df_finished.groupby('Liga')['Resultado'].apply(lambda x: pd.Series({
+                            # 1. Preparar dados
+                            stats_ligas = df_finished.groupby('Liga')['Resultado'].apply(lambda x: pd.Series({
                                 'Winrate': (x.str.contains('GREEN').sum() / len(x) * 100),
                                 'Total': len(x),
-                                'Reds': x.str.contains('RED').sum()
+                                'Reds': x.str.contains('RED').sum(),
+                                'Greens': x.str.contains('GREEN').sum()
                             })).unstack()
                             
-                            # Filtro mínimo de 2 jogos para não poluir
-                            liga_stats = liga_stats[liga_stats['Total'] >= 2]
+                            stats_ligas = stats_ligas[stats_ligas['Total'] >= 2] # Filtro mínimo
                             
-                            top_ligas = liga_stats.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(5)
-                            worst_ligas = liga_stats.sort_values(by=['Reds'], ascending=False).head(5)
+                            col_top, col_worst = st.columns(2)
                             
                             with col_top:
-                                st.caption("Ligas Mais Lucrativas (Winrate)")
-                                st.dataframe(top_ligas[['Winrate', 'Total']].style.format({'Winrate': '{:.1f}%'}), use_container_width=True)
+                                st.caption("🌟 Top Ligas (Mais Lucrativas)")
+                                top_ligas = stats_ligas.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(10)
+                                st.dataframe(top_ligas[['Winrate', 'Total', 'Greens']].style.format({'Winrate': '{:.1f}%'}), use_container_width=True)
                                 
                             with col_worst:
-                                st.caption("Ligas com Mais Reds (Cuidado)")
-                                st.dataframe(worst_ligas[['Reds', 'Total']], use_container_width=True)
-                        
+                                st.caption("💀 Ligas Críticas (Onde estamos errando?)")
+                                worst_ligas = stats_ligas.sort_values(by=['Reds'], ascending=False).head(10)
+                                
+                                # Cria uma lista visual para mostrar o motivo
+                                dados_drill = []
+                                for liga, row in worst_ligas.iterrows():
+                                    if row['Reds'] > 0:
+                                        # Filtra erros dessa liga específica
+                                        erros_liga = df_finished[(df_finished['Liga'] == liga) & (df_finished['Resultado'].str.contains('RED'))]
+                                        # Acha a estratégia vilã
+                                        pior_strat = erros_liga['Estrategia'].value_counts().head(1)
+                                        nome_strat = pior_strat.index[0] if not pior_strat.empty else "-"
+                                        qtd_strat = pior_strat.values[0] if not pior_strat.empty else 0
+                                        
+                                        dados_drill.append({
+                                            "Liga": liga,
+                                            "Total Reds": int(row['Reds']),
+                                            "Pior Estratégia": nome_strat,
+                                            "Reds na Estratégia": int(qtd_strat)
+                                        })
+                                
+                                if dados_drill:
+                                    df_drill = pd.DataFrame(dados_drill)
+                                    st.dataframe(df_drill, use_container_width=True, hide_index=True)
+                                else:
+                                    st.success("Nenhuma liga com Reds significativos no período.")
+
                         st.divider()
 
-                        # --- AUDITORIA DA IA ---
-                        st.markdown("### 🧠 Auditoria da IA (Aprovações vs Resultados)")
+                        # --- AUDITORIA DA IA POR PERÍODO (Visual) ---
+                        st.markdown("### 🧠 Auditoria da IA (Aprovações vs Resultado)")
                         if 'Opiniao_IA' in df_show.columns:
                             df_audit = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                             if not df_audit.empty:
+                                # Tabela pivot dinâmica
                                 pivot = pd.crosstab(df_audit['Opiniao_IA'], df_audit['Resultado'], margins=True)
-                                st.dataframe(pivot, use_container_width=True)
+                                # Adiciona % de acerto visualmente
+                                if '✅ GREEN' in pivot.columns and 'All' in pivot.columns:
+                                    pivot['Winrate %'] = (pivot['✅ GREEN'] / pivot['All'] * 100).round(1)
+                                st.dataframe(pivot.style.highlight_max(axis=0, color='#1F4025'), use_container_width=True)
 
                         st.markdown("### 📈 Performance por Estratégia")
                         st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
