@@ -1545,6 +1545,11 @@ if st.session_state.ROBO_LIGADO:
                             sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
                             if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
                         except: pass
+                
+                # [CORREÇÃO AQUI]: ELSE para tratar ligas sem stats
+                else:
+                    gerenciar_erros(lid, j['league']['country'], j['league']['name'], fid)
+
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
                     
