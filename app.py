@@ -1679,6 +1679,9 @@ if st.session_state.ROBO_LIGADO:
             
             modo_simulacao = st.radio("Cenário de Entrada:", ["Todos os sinais", "Apenas 1 sinal por jogo", "Até 2 sinais por jogo"], horizontal=True)
             
+            # --- [NOVO] FILTRO IA ---
+            filtrar_ia = st.checkbox("🤖 Somente Sinais APROVADOS pela IA")
+            
             df_fin = st.session_state.get('historico_full', pd.DataFrame())
             
             if not df_fin.empty:
@@ -1690,6 +1693,13 @@ if st.session_state.ROBO_LIGADO:
                 df_fin = df_fin[df_fin['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
                 df_fin = df_fin.sort_values(by=['FID', 'Hora'], ascending=[True, True])
                 
+                # Aplica o filtro da IA se marcado
+                if filtrar_ia:
+                    if 'Opiniao_IA' in df_fin.columns:
+                        df_fin = df_fin[df_fin['Opiniao_IA'] == 'Aprovado']
+                    else:
+                        st.warning("⚠️ Coluna de opinião da IA não encontrada nos dados históricos.")
+
                 if modo_simulacao == "Apenas 1 sinal por jogo": df_fin = df_fin.groupby('FID').head(1)
                 elif modo_simulacao == "Até 2 sinais por jogo": df_fin = df_fin.groupby('FID').head(2)
                 
@@ -1733,7 +1743,7 @@ if st.session_state.ROBO_LIGADO:
                     with st.expander("🕵️ Auditoria de Odds (Verifique se os valores estão realistas)"):
                         st.dataframe(df_fin[['Data', 'Jogo', 'Estrategia', 'Odd', 'Odd_Calc', 'Resultado', 'Lucro']], use_container_width=True)
                 else: 
-                    st.info("Aguardando fechamento de sinais para calcular financeiro.")
+                    st.info("Aguardando fechamento de sinais para calcular financeiro (ou nenhum sinal aprovado pela IA encontrado).")
             else: 
                 st.info("Sem dados históricos para cálculo.")
         with abas[3]: 
@@ -1794,7 +1804,8 @@ if st.session_state.ROBO_LIGADO:
                             with col_top:
                                 st.caption("🌟 Top Ligas (Mais Lucrativas)")
                                 top_ligas = stats_ligas.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(10)
-                                st.dataframe(top_ligas[['Winrate', 'Total', 'Greens']].style.format({'Winrate': '{:.1f}%'}), use_container_width=True)
+                                # [MODIFICADO] Formatação aplicada aqui
+                                st.dataframe(top_ligas[['Winrate', 'Total', 'Greens']].style.format({'Winrate': '{:.2f}%', 'Total': '{:.0f}', 'Greens': '{:.0f}'}), use_container_width=True)
                                 
                             with col_worst:
                                 st.caption("💀 Ligas Críticas (Onde estamos errando?)")
@@ -1835,16 +1846,28 @@ if st.session_state.ROBO_LIGADO:
                                 pivot = pd.crosstab(df_audit['Opiniao_IA'], df_audit['Resultado'], margins=True)
                                 # Adiciona % de acerto visualmente
                                 if '✅ GREEN' in pivot.columns and 'All' in pivot.columns:
-                                    pivot['Winrate %'] = (pivot['✅ GREEN'] / pivot['All'] * 100).round(1)
-                                st.dataframe(pivot.style.highlight_max(axis=0, color='#1F4025'), use_container_width=True)
+                                    pivot['Winrate %'] = (pivot['✅ GREEN'] / pivot['All'] * 100)
+                                
+                                # [MODIFICADO] Formatação aplicada aqui
+                                # Mapeia colunas dinamicamente para formatação
+                                format_dict = {'Winrate %': '{:.2f}%'}
+                                for col in pivot.columns:
+                                    if col != 'Winrate %':
+                                        format_dict[col] = '{:.0f}'
+                                        
+                                st.dataframe(pivot.style.format(format_dict, na_rep="-").highlight_max(axis=0, color='#1F4025'), use_container_width=True)
 
                         st.markdown("### 📈 Performance por Estratégia")
                         st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                         if not st_s.empty:
                             resumo_strat = st_s.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
                             if '✅ GREEN' in resumo_strat.columns and '❌ RED' in resumo_strat.columns:
-                                resumo_strat['Winrate'] = (resumo_strat['✅ GREEN'] / (resumo_strat['✅ GREEN'] + resumo_strat['❌ RED']) * 100).round(1)
-                                st.dataframe(resumo_strat.sort_values('Winrate', ascending=False), use_container_width=True)
+                                resumo_strat['Winrate'] = (resumo_strat['✅ GREEN'] / (resumo_strat['✅ GREEN'] + resumo_strat['❌ RED']) * 100)
+                                # [MODIFICADO] Formatação aplicada aqui
+                                format_strat = {'Winrate': '{:.2f}%'}
+                                for c in resumo_strat.columns:
+                                    if c != 'Winrate': format_strat[c] = '{:.0f}'
+                                st.dataframe(resumo_strat.sort_values('Winrate', ascending=False).style.format(format_strat), use_container_width=True)
                             
                             cts = st_s.groupby(['Estrategia', 'Resultado']).size().reset_index(name='Qtd')
                             fig = px.bar(cts, x='Estrategia', y='Qtd', color='Resultado', color_discrete_map={'✅ GREEN': '#00FF00', '❌ RED': '#FF0000'}, title="Volume de Sinais", text='Qtd')
