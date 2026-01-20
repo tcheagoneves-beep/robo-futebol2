@@ -663,65 +663,95 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     if not IA_ATIVADA: return ""
     
-    # --- 1. PREPARAÇÃO DOS DADOS ---
     dados_ricos = extrair_dados_completos(stats_raw)
     nome_strat = estrategia.upper()
     
-    # Histórico de Winrate
+    # Histórico (Contexto de Winrate)
     df = st.session_state.get('historico_full', pd.DataFrame())
-    resumo_historico = "Sem histórico suficiente."
+    resumo_historico = ""
     if not df.empty:
         df_strat = df[df['Estrategia'] == estrategia]
-        total = len(df_strat)
-        if total > 0:
+        if len(df_strat) > 0:
             greens = len(df_strat[df_strat['Resultado'].str.contains('GREEN', na=False)])
-            winrate = (greens / total * 100)
-            resumo_historico = f"Winrate Histórico: {winrate:.1f}% ({total} jogos)"
+            winrate = (greens / len(df_strat) * 100)
+            resumo_historico = f"Winrate histórico no bot: {winrate:.0f}%."
 
-    # --- 2. SELEÇÃO DO PERFIL ---
-    prompt_base = f"""
-    Analise a estratégia '{estrategia}'.
-    Jogo: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']}
-    Stats: {dados_ricos}
-    
-    REGRAS DE RESPOSTA:
-    1. Responda APENAS: "Aprovado" ou "Arriscado".
-    2. Adicione um hífen e um motivo curto e direto (sem enrolação).
-    3. NÃO use asteriscos (**), negrito ou markdown. Texto puro.
-    
-    Exemplo de formato desejado:
-    Aprovado - Pressão absurda e goleiro trabalhando muito.
-    Arriscado - Time tem posse mas não chuta no gol.
-    """
-    
-    # Personalização por Estratégia (Refinamento do Prompt)
-    if "GOLDEN" in nome_strat or "JANELA" in nome_strat:
-        prompt = f"Especialista Fim de Jogo. Foco em Eficiência (Chutes no Gol). {prompt_base}"
-    elif any(x in nome_strat for x in ["RELÂMPAGO", "CHOQUE", "BRIGA", "MASSACRE"]):
-        prompt = f"Especialista Início de Jogo. Foco em Intensidade Imediata. {prompt_base}"
-    elif "MORNO" in nome_strat or "UNDER" in nome_strat:
-        prompt = f"Especialista em Under. Foco em Ataques Fracos. {prompt_base}"
+    # --- REGRA GLOBAL DE FORMATO ---
+    regra_texto = "Responda SEM formatação (sem negrito, sem asteriscos). Seja direto."
+
+    # --- PERFIL 1: ESTRATÉGIAS DE UNDER (JOGO MORNO) ---
+    # Aqui a lógica é INVERSA: Queremos jogo ruim.
+    if "MORNO" in nome_strat or "UNDER" in nome_strat:
+        prompt = f"""
+        Atue como Especialista em UNDER GOLS.
+        Cenário: {dados_jogo['jogo']} | Stats: {dados_ricos}
+        
+        Sua Missão: Validar se o jogo vai continuar 0x0 ou com poucos gols.
+        Critério: Se tiver muitos chutes (mesmo pra fora) ou jogo aberto, REJEITE (Arriscado).
+        APROVE apenas se: Ataques inofensivos, bola presa no meio, times fracos.
+        
+        {regra_texto}
+        Responda: [Aprovado/Arriscado] - [Motivo curto]
+        """
+
+    # --- PERFIL 2: ESTRATÉGIAS DE OVER (TODAS AS OUTRAS) ---
+    # Golden, Blitz, Relâmpago, Massacre, Choque, etc.
+    # MENTALIDADE: Não importa quem ganha. Importa se a bola vai entrar.
     else:
-        prompt = f"Trader Esportivo Geral. {prompt_base}"
+        # Contexto específico de tempo para ajudar a IA
+        contexto_tempo = ""
+        if "GOLDEN" in nome_strat or "JANELA" in nome_strat:
+            contexto_tempo = "FIM DE JOGO (80min+). O time que perde precisa se expor. Cuidado apenas com 'Pressão Falsa' (chutes de longe)."
+        elif any(x in nome_strat for x in ["RELÂMPAGO", "CHOQUE", "BRIGA"]):
+            contexto_tempo = "INÍCIO DE JOGO. Buscamos intensidade imediata e defesas desatentas."
+        else:
+            contexto_tempo = "MEIO DO JOGO. Buscamos jogo aberto, trocação ou pressão forte."
 
-    # --- 3. EXECUÇÃO E LIMPEZA TOTAL ---
+        prompt = f"""
+        Atue como um PROFISSIONAL DE OVER GOLS (Caçador de Gols).
+        Estratégia: {estrategia} ({contexto_tempo})
+        Dados: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']}
+        Stats: {dados_ricos} | {resumo_historico}
+        
+        REGRA DE OURO (VISÃO DE APOSTADOR):
+        1. NÃO ANALISE QUEM VAI GANHAR. Analise se vai sair GOL.
+        2. Defesa Ruim = APROVADO. Se o favorito ataca mal e toma contra-ataque, isso é ÓTIMO para gols.
+        3. Jogo "Lá e Cá" (Trocação) = APROVADO.
+        4. Favorito Perdendo = APROVADO (Vai se lançar ao ataque e deixar espaço).
+        
+        QUANDO REJEITAR (Arriscado):
+        - Apenas se o jogo estiver TRAVADO, LENTO ou com times medrosos que não chutam.
+        - No Fim de Jogo (Golden), rejeite se for só "chuveirinho" sem direção (Chutes fora >>> Chutes no gol).
+        
+        {regra_texto}
+        Responda: [Aprovado/Arriscado] - [Motivo focado em chance de gol]
+        """
+
+    # --- EXECUÇÃO ---
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 12})
         st.session_state['gemini_usage']['used'] += 1
         
-        # Limpeza bruta da string
-        texto_ia = response.text.strip().replace('**', '').replace('*', '').replace('Motivo:', '')
+        # Limpeza total da resposta
+        texto_raw = response.text.strip()
+        texto_limpo = texto_raw.replace("**", "").replace("*", "").replace("Motivo:", "").replace("Here's", "")
         
-        # Define Veredito
-        veredicto = "Aprovado" if "Aprovado" in texto_ia else "Arriscado"
+        # Veredito Inteligente
+        veredicto = "Arriscado"
+        if "Aprovado" in texto_limpo or "aprovado" in texto_limpo: veredicto = "Aprovado"
+        
+        # Extração do motivo
+        motivo = texto_limpo
+        for divisor in ["-", ":", "\n"]:
+            if divisor in texto_limpo:
+                partes = texto_limpo.split(divisor, 1)
+                if len(partes) > 1: motivo = partes[1].strip(); break
+        
+        motivo = motivo.replace("Aprovado", "").replace("Arriscado", "").strip()
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         
-        # Separa o motivo
-        partes = texto_ia.split('-')
-        motivo = partes[1].strip() if len(partes) > 1 else texto_ia.replace(veredicto, '').strip()
+        return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto}</b> - {motivo[:130]}" 
         
-        # Retorna formatado e limpo (Limite aumentado para 160 chars)
-        return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto}</b> - {motivo[:160]}" 
     except Exception as e:
         if "429" in str(e): return "\n🤖 <b>IA:</b> (Ocupada)"
         return ""
@@ -1784,7 +1814,7 @@ if st.session_state.ROBO_LIGADO:
                 else:
                     gerenciar_erros(lid, j['league']['country'], j['league']['name'], fid)
 
-                if lista_sinais:
+if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
                     
                     # --- BUSCA MÉDIA DE GOLS DOS ÚLTIMOS 10 JOGOS ---
@@ -1794,21 +1824,23 @@ if st.session_state.ROBO_LIGADO:
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         txt_pressao = gerar_barra_pressao(rh, ra) 
                         
-                        # CRIAÇÃO DA CHAVE ÚNICA (Blindada)
+                        # --- CRIAÇÃO DA CHAVE ÚNICA (Blindada) ---
                         tag_limpa = str(s['tag']).strip()
                         fid_str = str(fid).strip()
+                        # Chave normal: 12345_Blitz Casa
                         uid_normal = f"{fid_str}_{tag_limpa}"
-                        uid_super = f"SUPER_ODD_{fid_str}_{tag_limpa}"
+                        # Chave Super Odd: SUPER_12345_Blitz Casa
+                        uid_super = f"SUPER_{fid_str}_{tag_limpa}"
                         
                         # --- TRAVA DE SEGURANÇA 1: Verifica ANTES de processar ---
                         if uid_normal in st.session_state['alertas_enviados']:
                             continue # Se já está na lista, pula IMEDIATAMENTE
                         
                         # --- TRAVA DE SEGURANÇA 2: Registra AGORA (Vacina) ---
-                        # Adiciona na lista de enviados ANTES de chamar a IA ou o Telegram.
-                        # Isso impede que o próximo ciclo (daqui a 1s) processe este mesmo jogo.
+                        # ADICIONA IMEDIATAMENTE para impedir que o robô processe de novo no próximo milissegundo
                         st.session_state['alertas_enviados'].add(uid_normal)
 
+                        # --- CÁLCULO DE ODDS ---
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga)
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
@@ -1816,6 +1848,7 @@ if st.session_state.ROBO_LIGADO:
                         destaque_odd = ""
                         if odd_val >= 1.80:
                             destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
+                            # Se for super odd de cara, já registra também
                             st.session_state['alertas_enviados'].add(uid_super)
                         
                         # Captura a opinião da IA (Se ativada)
@@ -1823,8 +1856,8 @@ if st.session_state.ROBO_LIGADO:
                         opiniao_db = "Neutro"
                         if IA_ATIVADA:
                             try:
-                                time.sleep(0.5) # Pequeno delay para não sobrecarregar
-                                # Passa o contexto correto para a função atualizada
+                                time.sleep(0.3) # Pequeno delay técnico
+                                # Passa o contexto correto
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
                                 opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats)
                                 
@@ -1835,7 +1868,7 @@ if st.session_state.ROBO_LIGADO:
                         
                         # Prepara os dados para salvar
                         item = {
-                            "FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), 
+                            "FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), 
                             "Hora": get_time_br().strftime('%H:%M'), 
                             "Liga": j['league']['name'], "Jogo": f"{home} x {away}", 
                             "Placar_Sinal": placar, "Estrategia": s['tag'], 
@@ -1857,7 +1890,11 @@ if st.session_state.ROBO_LIGADO:
                              st.session_state['alertas_enviados'].add(uid_super)
                              msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
                              enviar_telegram(safe_token, safe_chat, msg_super)
-                radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
+                    
+                    # Atualiza Radar
+                    radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
+            
+            # --- LOOP DE MÚLTIPLAS ---
             if candidatos_multipla:
                 novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
                 if novos:
@@ -1865,6 +1902,7 @@ if st.session_state.ROBO_LIGADO:
                     for c in novos: st.session_state['multiplas_enviadas'].add(c['fid'])
                     enviar_telegram(safe_token, safe_chat, msg)
             
+            # --- LOOP DE PRÓXIMOS JOGOS (AGENDA) ---
             for p in prox:
                 try:
                     if str(p['league']['id']) not in ids_black and p['fixture']['status']['short'] in ['NS', 'TBD'] and p['fixture']['id'] not in ids_no_radar:
