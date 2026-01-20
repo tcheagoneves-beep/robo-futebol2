@@ -1976,6 +1976,7 @@ if st.session_state.ROBO_LIGADO:
                         if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
                         st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
                 except Exception as e: st.error(f"Erro ao carregar BI: {e}")
+
  with abas[5]: 
             st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         
