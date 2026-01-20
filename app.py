@@ -65,8 +65,9 @@ if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] 
 if 'gemini_usage' not in st.session_state: st.session_state['gemini_usage'] = {'used': 0, 'limit': 10000}
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 
-# GARANTIA DE PERSISTÊNCIA DOS ALERTAS
+# GARANTIA DE PERSISTÊNCIA DOS ALERTAS E VAR
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+if 'var_avisado_cache' not in st.session_state: st.session_state['var_avisado_cache'] = set() # CORREÇÃO VAR
 
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
@@ -948,8 +949,18 @@ def enviar_relatorio_bi(token, chat_ids):
             wr = (g/t*100) if t > 0 else 0
             return f"{g}G - {r}R ({wr:.0f}%)"
 
+        # --- CORREÇÃO DA INDENTAÇÃO AQUI ---
+        def fmt_ia_stats(periodo_df, label_periodo):
+            if 'Opiniao_IA' not in periodo_df.columns: return ""
+            d_fin = periodo_df[periodo_df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+            stats_aprov = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Aprovado'])
+            stats_risk = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Arriscado'])
+            stats_sniper = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Sniper'])
+            return f"🤖 IA ({label_periodo}):\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}\n🎯 Sniper: {stats_sniper}"
+        # -----------------------------------
+
         insight_text = analisar_bi_com_ia()
-        msg_texto = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>\n📆 <b>HOJE:</b> {fmt_placar(d_hoje)}\n🗓 <b>SEMANA:</b> {fmt_placar(d_7d)}\n📅 <b>MÊS (30d):</b> {fmt_placar(d_30d)}\n♾ <b>TOTAL:</b> {fmt_placar(d_total)}\n\n🧠 <b>INSIGHT IA:</b>\n{insight_text}"""
+        msg_texto = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>\n📆 <b>HOJE:</b> {fmt_placar(d_hoje)}\n{fmt_ia_stats(d_hoje, "Hoje")}\n🗓 <b>SEMANA:</b> {fmt_placar(d_7d)}\n📅 <b>MÊS (30d):</b> {fmt_placar(d_30d)}\n♾ <b>TOTAL:</b> {fmt_placar(d_total)}\n\n🧠 <b>INSIGHT IA:</b>\n{insight_text}"""
         enviar_telegram(token, chat_ids, msg_texto)
     except Exception as e: st.error(f"Erro ao gerar BI: {e}")
 
@@ -1155,23 +1166,44 @@ def conferir_resultados_sniper(jogos_live, api_key):
                 st.session_state['precisa_salvar'] = True
     if updates: atualizar_historico_ram(updates)
 
+# --- [CORREÇÃO BLINDADA] VAR ANTI-FLOOD ---
 def verificar_var_rollback(jogos_live, token, chats):
+    if 'var_avisado_cache' not in st.session_state: 
+        st.session_state['var_avisado_cache'] = set()
+    
     hist = st.session_state['historico_sinais']
     greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
     if not greens: return
     updates = []
+    
     for s in greens:
         if "Morno" in s['Estrategia']: continue
         fid = int(clean_fid(s.get('FID', 0)))
         jogo_api = next((j for j in jogos_live if j['fixture']['id'] == fid), None)
+        
         if jogo_api:
-            gh = jogo_api['goals']['home'] or 0; ga = jogo_api['goals']['away'] or 0
+            gh = jogo_api['goals']['home'] or 0
+            ga = jogo_api['goals']['away'] or 0
+            
             try:
                 ph, pa = map(int, s['Placar_Sinal'].split('x'))
                 if (gh + ga) <= (ph + pa):
+                    assinatura_var = f"{fid}_{s['Estrategia']}_{gh}x{ga}"
+                    if assinatura_var in st.session_state['var_avisado_cache']:
+                        if s['Resultado'] != 'Pendente':
+                            s['Resultado'] = 'Pendente'
+                            updates.append(s)
+                        continue 
+                    
                     s['Resultado'] = 'Pendente'
                     st.session_state['precisa_salvar'] = True
                     updates.append(s)
+                    
+                    key_green = gerar_chave_universal(fid, s['Estrategia'], "GREEN")
+                    if 'alertas_enviados' in st.session_state and key_green in st.session_state['alertas_enviados']:
+                         st.session_state['alertas_enviados'].discard(key_green)
+                    
+                    st.session_state['var_avisado_cache'].add(assinatura_var)
                     enviar_telegram(token, chats, f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n⚽ {s['Jogo']}\n📉 Placar voltou: <b>{gh}x{ga}</b>")
             except: pass
     if updates: atualizar_historico_ram(updates)
@@ -1430,17 +1462,14 @@ if st.session_state.ROBO_LIGADO:
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         txt_pressao = gerar_barra_pressao(rh, ra) 
                         
-                        # --- [CORREÇÃO 3] TRAVA DUPLA CONTRA DUPLICIDADE (RAM + HISTÓRICO) ---
                         uid_normal = gerar_chave_universal(fid, s['tag'], "SINAL")
                         uid_super = f"SUPER_{uid_normal}"
                         
                         ja_enviado_total = False
                         
-                        # 1. Checa RAM (Rápido)
                         if uid_normal in st.session_state['alertas_enviados']: 
                             ja_enviado_total = True
                         
-                        # 2. Checa Banco de Dados (Seguro contra F5)
                         if not ja_enviado_total:
                             for item_hist in st.session_state['historico_sinais']:
                                 key_hist = gerar_chave_universal(item_hist['FID'], item_hist['Estrategia'], "SINAL")
@@ -1466,7 +1495,6 @@ if st.session_state.ROBO_LIGADO:
                             try:
                                 time.sleep(0.3)
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
-                                # AGORA PASSANDO RH E RA PARA A IA
                                 opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra)
                                 if "Aprovado" in opiniao_txt: opiniao_db = "Aprovado"
                                 elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
@@ -1588,18 +1616,7 @@ if st.session_state.ROBO_LIGADO:
                     df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
                     hoje = pd.to_datetime(get_time_br().date())
                     d_hoje = df_bi[df_bi['Data_DT'] == hoje]; d_7d = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]; d_30d = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]; d_total = df_bi
-                    def fmt_placar(d):
-                        if d.empty: return "0G - 0R (0%)"
-                        g = d['Resultado'].str.contains('GREEN', na=False).sum(); r = d['Resultado'].str.contains('RED', na=False).sum(); t = g + r; wr = (g/t*100) if t > 0 else 0
-                        return f"{g}G - {r}R ({wr:.0f}%)"
-                    def fmt_ia_stats(periodo_df, label_periodo):
-                        if 'Opiniao_IA' not in periodo_df.columns: return ""
-                        d_fin = periodo_df[periodo_df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-                        stats_aprov = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Aprovado'])
-                        stats_risk = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Arriscado'])
-                        return f"🤖 IA ({label_periodo}):\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}"
                     
-                    msg_ia_hoje = fmt_ia_stats(d_hoje, "Hoje"); msg_ia_7d = fmt_ia_stats(d_7d, "7 Dias"); msg_ia_30d = fmt_ia_stats(d_30d, "30 Dias"); msg_ia_total = fmt_ia_stats(d_total, "Geral")
                     if 'bi_filter' not in st.session_state: st.session_state['bi_filter'] = "Tudo"
                     filtro = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"], key="bi_select")
                     if filtro == "Hoje": df_show = d_hoje
@@ -1635,16 +1652,24 @@ if st.session_state.ROBO_LIGADO:
                                 if dados_drill: st.dataframe(pd.DataFrame(dados_drill), use_container_width=True, hide_index=True)
                                 else: st.success("Nenhuma liga com Reds significativos.")
                         st.divider()
+
+                        # --- [CORREÇÃO] TABELA DE AUDITORIA LIMPA ---
                         st.markdown("### 🧠 Auditoria da IA (Aprovações vs Resultado)")
                         if 'Opiniao_IA' in df_show.columns:
-                            df_audit = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                            df_audit = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
+                            categorias_desejadas = ['Aprovado', 'Arriscado', 'Sniper']
+                            df_audit = df_audit[df_audit['Opiniao_IA'].isin(categorias_desejadas)]
                             if not df_audit.empty:
-                                pivot = pd.crosstab(df_audit['Opiniao_IA'], df_audit['Resultado'], margins=True)
-                                if '✅ GREEN' in pivot.columns and 'All' in pivot.columns: pivot['Winrate %'] = (pivot['✅ GREEN'] / pivot['All'] * 100)
-                                format_dict = {'Winrate %': '{:.2f}%'}
-                                for col in pivot.columns:
-                                    if col != 'Winrate %': format_dict[col] = '{:.0f}'
-                                st.dataframe(pivot.style.format(format_dict, na_rep="-").highlight_max(axis=0, color='#1F4025'), use_container_width=True)
+                                pivot = pd.crosstab(df_audit['Opiniao_IA'], df_audit['Resultado'], margins=False)
+                                if '✅ GREEN' not in pivot.columns: pivot['✅ GREEN'] = 0
+                                if '❌ RED' not in pivot.columns: pivot['❌ RED'] = 0
+                                pivot['Total'] = pivot['✅ GREEN'] + pivot['❌ RED']
+                                pivot['Winrate %'] = (pivot['✅ GREEN'] / pivot['Total'] * 100)
+                                format_dict = {'Winrate %': '{:.2f}%', 'Total': '{:.0f}', '✅ GREEN': '{:.0f}', '❌ RED': '{:.0f}'}
+                                st.dataframe(pivot.style.format(format_dict).highlight_max(axis=0, color='#1F4025'), use_container_width=True)
+                            else: st.info("Nenhuma entrada Aprovada, Arriscada ou Sniper encontrada no período.")
+                        # ---------------------------------------------
+
                         st.markdown("### 📈 Performance por Estratégia")
                         st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                         if not st_s.empty:
@@ -1705,4 +1730,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
