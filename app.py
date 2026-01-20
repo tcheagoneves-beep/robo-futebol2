@@ -659,7 +659,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     dados_ricos = extrair_dados_completos(stats_raw)
     nome_strat = estrategia.upper()
     
-    # Histórico de Winrate (Contexto para a IA)
+    # Histórico de Winrate
     df = st.session_state.get('historico_full', pd.DataFrame())
     resumo_historico = "Sem histórico suficiente."
     if not df.empty:
@@ -668,97 +668,63 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
         if total > 0:
             greens = len(df_strat[df_strat['Resultado'].str.contains('GREEN', na=False)])
             winrate = (greens / total * 100)
-            resumo_historico = f"Teu Winrate Histórico aqui: {winrate:.1f}% ({total} jogos)"
+            resumo_historico = f"Winrate Histórico: {winrate:.1f}% ({total} jogos)"
 
-    # --- 2. SELEÇÃO DO PERFIL ESPECIALISTA ---
-    
-    # PERFIL A: FIM DE JOGO (Over Limit)
+    # --- 2. SELEÇÃO DO PERFIL (Mantendo a lógica especialista) ---
     if "GOLDEN" in nome_strat or "JANELA" in nome_strat:
         prompt = f"""
-        Atue como Especialista em Fim de Jogo (80min+). Valide entrada de OVER GOL.
-        Cenário: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']}
-        Stats: {dados_ricos}
+        Especialista Fim de Jogo (Live). Valide OVER GOL.
+        Jogo: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Stats: {dados_ricos}
         
-        CRITÉRIOS DE APROVAÇÃO (Filtro de Pressão Falsa):
-        1. O time que precisa marcar está chutando NO GOL (On Target)? (Se chuta muito pra fora, REJEITE).
-        2. O jogo está parando muito (Faltas/Cera)? (Se sim, REJEITE).
-        3. Goleiro fez defesas recentes? (Sinal de perigo real).
+        CRITÉRIOS:
+        1. Eficiência: O time chuta no gol (On Target)? Se chuta pra fora, REJEITE.
+        2. Ritmo: Jogo parando muito? REJEITE.
         
-        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto sobre Eficiência e Ritmo]
+        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto]
         """
-
-    # PERFIL B: INÍCIO DE JOGO (HT / Cedo)
     elif any(x in nome_strat for x in ["RELÂMPAGO", "CHOQUE", "BRIGA", "MASSACRE"]):
         prompt = f"""
-        Atue como Especialista em HT (1º Tempo). Valide entrada de GOL CEDO.
-        Cenário: {dados_jogo['jogo']} (Início) | Stats: {dados_ricos}
+        Especialista HT (Início). Valide GOL CEDO.
+        Jogo: {dados_jogo['jogo']} | Stats: {dados_ricos}
         
-        CRITÉRIOS DE APROVAÇÃO (Filtro de Intensidade):
-        1. O jogo começou frenético (Ataques lá e cá)?
-        2. Já teve chance clara ou defesa difícil nos primeiros minutos?
-        3. Se os times estão apenas se estudando/tocando bola no meio, REJEITE.
-        
-        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto sobre Intensidade Inicial]
+        CRITÉRIOS: Jogo frenético? Chance clara? Se for estudo/toque de lado, REJEITE.
+        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto]
         """
-
-    # PERFIL C: UNDER / JOGO MORNO (Apostar que NÃO sai gol)
     elif "MORNO" in nome_strat or "UNDER" in nome_strat:
         prompt = f"""
-        Atue como Especialista em UNDER (Jogos Ruins). Valide entrada de MENOS GOLS.
-        Cenário: {dados_jogo['jogo']} | Stats: {dados_ricos}
+        Especialista UNDER. Valide MENOS GOLS.
+        Jogo: {dados_jogo['jogo']} | Stats: {dados_ricos}
         
-        CRITÉRIOS DE APROVAÇÃO (Filtro de Perigo):
-        1. Os times são fracos ofensivamente? (Poucos chutes no gol).
-        2. A bola fica presa no meio campo?
-        3. CUIDADO: Se houver MUITOS chutes (mesmo pra fora), REJEITE o Under, pois o gol pode sair 'sem querer'.
-        
-        Responda: "Aprovado" (Se o jogo for horrível) ou "Arriscado" (Se estiver movimentado).
-        Formato: [Aprovado/Arriscado] - [Motivo curto]
+        CRITÉRIOS: Ataques fracos? Bola no meio? Se tiver muitos chutes, REJEITE (Arriscado).
+        Responda: "Aprovado" (Se for jogo ruim) ou "Arriscado".
         """
-
-    # PERFIL D: MEIO DO JOGO / BLITZ (Pressão Sustentada)
-    elif any(x in nome_strat for x in ["BLITZ", "PORTEIRA", "FAVORITO"]):
+    else: # Genérico
         prompt = f"""
-        Atue como Especialista em Leitura de Jogo. Valide entrada de PRESSÃO/OVER.
-        Cenário: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']}
-        Stats: {dados_ricos}
+        Analise estatisticamente '{estrategia}'.
+        Dados: {dados_ricos} | Contexto: {dados_jogo['jogo']}
         {resumo_historico}
-        
-        CRITÉRIOS DE APROVAÇÃO:
-        1. Existe um domínio claro de um dos times (Posse ofensiva + Chutes)?
-        2. A defesa adversária está cedendo muitos escanteios/chutes?
-        
-        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto sobre Domínio]
-        """
-
-    # PERFIL GENÉRICO (Fallback)
-    else:
-        prompt = f"""
-        Analise estatisticamente este jogo de futebol para a estratégia '{estrategia}'.
-        Dados: {dados_ricos}
-        Contexto: {dados_jogo['jogo']}
-        
-        Existe chance clara de Green baseada nos números?
         Responda: [Aprovado/Arriscado] - [Motivo]
         """
 
-    # --- 3. EXECUÇÃO ---
+    # --- 3. EXECUÇÃO E FORMATAÇÃO (AQUI ESTÁ A CORREÇÃO DO BI) ---
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 12})
         st.session_state['gemini_usage']['used'] += 1
         texto_ia = response.text.strip()
         
-        # Formatação visual
-        emoji = "✅" if "Aprovado" in texto_ia else "⚠️"
-        # Limita o tamanho do texto para não poluir o Telegram
+        # Define o Veredito para exibição e para o BI capturar
+        veredicto = "Aprovado" if "Aprovado" in texto_ia else "Arriscado"
+        emoji = "✅" if veredicto == "Aprovado" else "⚠️"
+        
+        # Limpa o texto para pegar o motivo, mas REMONTA a string com o veredito explícito
         texto_limpo = texto_ia.replace('\n', ' ').split('-')
         motivo_final = texto_limpo[1].strip() if len(texto_limpo) > 1 else texto_ia
         
-        return f"\n🤖 <b>IA:</b> {emoji} {motivo_final[:100]}" # Corta se for muito longo
+        # O BI precisa ler "Aprovado" ou "Arriscado" nesta string final:
+        return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto}</b> - {motivo_final[:90]}" 
     except Exception as e:
         if "429" in str(e): return "\n🤖 <b>IA:</b> (Ocupada)"
-        return ""
-def analisar_bi_com_ia():
+        return ""def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados."
@@ -1704,6 +1670,9 @@ if st.session_state.ROBO_LIGADO:
         except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
 
         if not api_error: 
+            # --- CORREÇÃO DE DUPLICIDADE: Remove jogos repetidos vindos da API ---
+            jogos_live = list({v['fixture']['id']: v for v in jogos_live}.values())
+            
             check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
             conferir_resultados_sniper(jogos_live, safe_api) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
