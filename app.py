@@ -1855,18 +1855,56 @@ if st.session_state.ROBO_LIGADO:
             else:
                 try:
                     df_bi = df_bi.copy()
+                    # Tratamento de datas
                     df_bi['Data_Str'] = df_bi['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
                     df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
                     df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-                    hoje_str = get_time_br().strftime('%Y-%m-%d')
-                    df_bi_hoje = df_bi[df_bi['Data_Str'] == hoje_str]
+                    
                     hoje = pd.to_datetime(get_time_br().date())
+                    
+                    # --- DEFINIÇÃO DOS PERÍODOS ---
+                    d_hoje = df_bi[df_bi['Data_DT'] == hoje]
+                    d_7d = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]
+                    d_30d = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]
+                    d_total = df_bi
+
+                    # Função auxiliar para formatar texto (Green/Red)
+                    def fmt_placar(d):
+                        if d.empty: return "0G - 0R (0%)"
+                        g = d['Resultado'].str.contains('GREEN', na=False).sum()
+                        r = d['Resultado'].str.contains('RED', na=False).sum()
+                        t = g + r
+                        wr = (g/t*100) if t > 0 else 0
+                        return f"{g}G - {r}R ({wr:.0f}%)"
+
+                    # --- NOVA LÓGICA: AUDITORIA DETALHADA DA IA ---
+                    def fmt_ia_stats(periodo_df, label_periodo):
+                        if 'Opiniao_IA' not in periodo_df.columns: return ""
+                        # Filtra apenas finalizados
+                        d_fin = periodo_df[periodo_df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                        
+                        # Aprovados
+                        d_aprov = d_fin[d_fin['Opiniao_IA'] == 'Aprovado']
+                        stats_aprov = fmt_placar(d_aprov)
+                        
+                        # Arriscados
+                        d_risk = d_fin[d_fin['Opiniao_IA'] == 'Arriscado']
+                        stats_risk = fmt_placar(d_risk)
+                        
+                        return f"🤖 IA ({label_periodo}):\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}"
+
+                    msg_ia_hoje = fmt_ia_stats(d_hoje, "Hoje")
+                    msg_ia_7d = fmt_ia_stats(d_7d, "7 Dias")
+                    msg_ia_30d = fmt_ia_stats(d_30d, "30 Dias")
+                    msg_ia_total = fmt_ia_stats(d_total, "Geral")
+
                     if 'bi_filter' not in st.session_state: st.session_state['bi_filter'] = "Tudo"
                     filtro = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"], key="bi_select")
-                    if filtro == "Hoje": df_show = df_bi_hoje
-                    elif filtro == "7 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]
-                    elif filtro == "30 Dias": df_show = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]
+                    if filtro == "Hoje": df_show = d_hoje
+                    elif filtro == "7 Dias": df_show = d_7d
+                    elif filtro == "30 Dias": df_show = d_30d
                     else: df_show = df_bi 
+                    
                     if not df_show.empty:
                         gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum()
                         tt = len(df_show); ww = (gr/tt*100) if tt>0 else 0
@@ -1894,7 +1932,6 @@ if st.session_state.ROBO_LIGADO:
                             with col_top:
                                 st.caption("🌟 Top Ligas (Mais Lucrativas)")
                                 top_ligas = stats_ligas.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(10)
-                                # [MODIFICADO] Formatação aplicada aqui
                                 st.dataframe(top_ligas[['Winrate', 'Total', 'Greens']].style.format({'Winrate': '{:.2f}%', 'Total': '{:.0f}', 'Greens': '{:.0f}'}), use_container_width=True)
                                 
                             with col_worst:
@@ -1938,13 +1975,12 @@ if st.session_state.ROBO_LIGADO:
                                 if '✅ GREEN' in pivot.columns and 'All' in pivot.columns:
                                     pivot['Winrate %'] = (pivot['✅ GREEN'] / pivot['All'] * 100)
                                 
-                                # [MODIFICADO] Formatação aplicada aqui
-                                # Mapeia colunas dinamicamente para formatação
+                                # Formatação aplicada aqui
                                 format_dict = {'Winrate %': '{:.2f}%'}
                                 for col in pivot.columns:
                                     if col != 'Winrate %':
                                         format_dict[col] = '{:.0f}'
-                                        
+                                    
                                 st.dataframe(pivot.style.format(format_dict, na_rep="-").highlight_max(axis=0, color='#1F4025'), use_container_width=True)
 
                         st.markdown("### 📈 Performance por Estratégia")
@@ -1953,7 +1989,6 @@ if st.session_state.ROBO_LIGADO:
                             resumo_strat = st_s.groupby(['Estrategia', 'Resultado']).size().unstack(fill_value=0)
                             if '✅ GREEN' in resumo_strat.columns and '❌ RED' in resumo_strat.columns:
                                 resumo_strat['Winrate'] = (resumo_strat['✅ GREEN'] / (resumo_strat['✅ GREEN'] + resumo_strat['❌ RED']) * 100)
-                                # [MODIFICADO] Formatação aplicada aqui
                                 format_strat = {'Winrate': '{:.2f}%'}
                                 for c in resumo_strat.columns:
                                     if c != 'Winrate': format_strat[c] = '{:.0f}'
@@ -1975,8 +2010,9 @@ if st.session_state.ROBO_LIGADO:
                         if '✅ GREEN' not in detalhe: detalhe['✅ GREEN'] = 0
                         if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
                         st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
-    except Exception as e:
-                st.error(f"Erro ao carregar BI: {e}")
+                
+                except Exception as e: 
+                    st.error(f"Erro ao carregar BI: {e}")
 
         with abas[5]: 
             st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
