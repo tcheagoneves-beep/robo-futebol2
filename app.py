@@ -1977,7 +1977,7 @@ if st.session_state.ROBO_LIGADO:
                         st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
                 except Exception as e: st.error(f"Erro ao carregar BI: {e}")
         with abas[5]: st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
-        with abas[6]: 
+       with abas[6]: 
             df_safe_show = st.session_state.get('df_safe', pd.DataFrame()).copy()
             if not df_safe_show.empty:
                 def calc_risco(x):
@@ -1986,12 +1986,15 @@ if st.session_state.ROBO_LIGADO:
                     return "🟢 100% Estável" if v == 0 else f"⚠️ Atenção ({v}/10)"
                 df_safe_show['Status Risco'] = df_safe_show['Strikes'].apply(calc_risco)
                 st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
-            else: st.info("Nenhuma liga segura ainda.")
-       with abas[7]: 
+            else: 
+                st.info("Nenhuma liga segura ainda.")
+
+        with abas[7]: 
             df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
-            if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
+            if not df_vip_show.empty: 
+                df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
-        
+
         with abas[8]:
             st.markdown(f"### 💾 Banco de Dados de Partidas (Firebase)")
             st.caption("A IA usa esses dados para criar novas estratégias. Os dados são salvos na nuvem.")
@@ -2002,7 +2005,7 @@ if st.session_state.ROBO_LIGADO:
                 if col_fb1.button("🔄 Carregar/Atualizar Tabela"):
                     try:
                         with st.spinner("Baixando dados do Firebase..."):
-                            # Carrega apenas os últimos 50 jogos
+                            # Carrega apenas os últimos 50 jogos para economizar
                             docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
                             data = [d.to_dict() for d in docs]
                             st.session_state['cache_firebase_view'] = data # Salva no cache da sessão
