@@ -65,7 +65,15 @@ if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used':
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
 if 'gemini_usage' not in st.session_state: st.session_state['gemini_usage'] = {'used': 0, 'limit': 10000}
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
-if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
+# GARANTIA DE PERSISTÊNCIA DOS ALERTAS
+if 'alertas_enviados' not in st.session_state: 
+    st.session_state['alertas_enviados'] = set()
+
+# Função auxiliar para garantir que o set não seja limpo
+def registrar_alerta(fid, tag):
+    chave = f"{fid}_{tag}"
+    st.session_state['alertas_enviados'].add(chave)
+    return chave
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
@@ -1785,40 +1793,70 @@ if st.session_state.ROBO_LIGADO:
                     for s in lista_sinais:
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         txt_pressao = gerar_barra_pressao(rh, ra) 
-                        uid_normal = f"{fid}_{s['tag']}"
-                        uid_super = f"SUPER_ODD_{fid}_{s['tag']}"
+                        
+                        # CRIAÇÃO DA CHAVE ÚNICA (Blindada)
+                        tag_limpa = str(s['tag']).strip()
+                        fid_str = str(fid).strip()
+                        uid_normal = f"{fid_str}_{tag_limpa}"
+                        uid_super = f"SUPER_ODD_{fid_str}_{tag_limpa}"
+                        
+                        # --- TRAVA DE SEGURANÇA 1: Verifica ANTES de processar ---
+                        if uid_normal in st.session_state['alertas_enviados']:
+                            continue # Se já está na lista, pula IMEDIATAMENTE
+                        
+                        # --- TRAVA DE SEGURANÇA 2: Registra AGORA (Vacina) ---
+                        # Adiciona na lista de enviados ANTES de chamar a IA ou o Telegram.
+                        # Isso impede que o próximo ciclo (daqui a 1s) processe este mesmo jogo.
+                        st.session_state['alertas_enviados'].add(uid_normal)
+
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga)
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
-                        if uid_normal not in st.session_state['alertas_enviados']:
-                            destaque_odd = ""
-                            if odd_val >= 1.80:
-                                destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
-                                st.session_state['alertas_enviados'].add(uid_super)
-                            st.session_state['alertas_enviados'].add(uid_normal)
-                            
-                            # Captura a opinião da IA para o banco de dados
-                            opiniao_txt = ""
-                            opiniao_db = "Neutro"
-                            if IA_ATIVADA:
-                                try:
-                                    time.sleep(1)
-                                    opiniao_txt = consultar_ia_gemini({'jogo': f"{home} x {away}", 'liga': j['league']['name'], 'tempo': tempo, 'placar': placar}, s['tag'], stats)
-                                    if "Aprovado" in opiniao_txt: opiniao_db = "Aprovado"
-                                    elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
-                                except: pass
-                            
-                            item = {"FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
-                            if adicionar_historico(item):
-                                prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                                msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{prob}{opiniao_txt}"
-                                enviar_telegram(safe_token, safe_chat, msg)
-                                st.toast(f"Sinal: {s['tag']}")
-                        elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
+                        
+                        destaque_odd = ""
+                        if odd_val >= 1.80:
+                            destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
                             st.session_state['alertas_enviados'].add(uid_super)
-                            msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
-                            enviar_telegram(safe_token, safe_chat, msg_super)
-                            st.toast(f"💎 Odd Subiu: {s['tag']}")
+                        
+                        # Captura a opinião da IA (Se ativada)
+                        opiniao_txt = ""
+                        opiniao_db = "Neutro"
+                        if IA_ATIVADA:
+                            try:
+                                time.sleep(0.5) # Pequeno delay para não sobrecarregar
+                                # Passa o contexto correto para a função atualizada
+                                dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
+                                opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats)
+                                
+                                # Captura veredito para o Banco de Dados (BI)
+                                if "Aprovado" in opiniao_txt: opiniao_db = "Aprovado"
+                                elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
+                            except: pass
+                        
+                        # Prepara os dados para salvar
+                        item = {
+                            "FID": fid, "Data": get_time_br().strftime('%Y-%m-%d'), 
+                            "Hora": get_time_br().strftime('%H:%M'), 
+                            "Liga": j['league']['name'], "Jogo": f"{home} x {away}", 
+                            "Placar_Sinal": placar, "Estrategia": s['tag'], 
+                            "Resultado": "Pendente", 
+                            "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", 
+                            "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", 
+                            "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db
+                        }
+                        
+                        # Salva no Histórico e Envia Telegram
+                        if adicionar_historico(item):
+                            prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
+                            msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{prob}{opiniao_txt}"
+                            enviar_telegram(safe_token, safe_chat, msg)
+                            st.toast(f"Sinal Enviado: {s['tag']}")
+                        
+                        # Caso especial: Sinal já enviado antes, mas agora bateu Super Odd (Atualização)
+                        elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
+                             st.session_state['alertas_enviados'].add(uid_super)
+                             msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
+                             enviar_telegram(safe_token, safe_chat, msg_super)
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
             if candidatos_multipla:
                 novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
