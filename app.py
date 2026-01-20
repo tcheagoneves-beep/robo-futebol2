@@ -2007,7 +2007,7 @@ if st.session_state.ROBO_LIGADO:
                 if col_fb1.button("🔄 Carregar/Atualizar Tabela"):
                     try:
                         with st.spinner("Baixando dados do Firebase..."):
-                            # Carrega apenas os últimos 50 jogos
+                            # Carrega apenas os últimos 50 jogos para economizar
                             docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
                             data = [d.to_dict() for d in docs]
                             st.session_state['cache_firebase_view'] = data # Salva no cache da sessão
