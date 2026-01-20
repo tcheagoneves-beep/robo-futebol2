@@ -1987,11 +1987,12 @@ if st.session_state.ROBO_LIGADO:
                 df_safe_show['Status Risco'] = df_safe_show['Strikes'].apply(calc_risco)
                 st.dataframe(df_safe_show[['País', 'Liga', 'Motivo', 'Status Risco']], use_container_width=True, hide_index=True)
             else: st.info("Nenhuma liga segura ainda.")
-        with abas[7]: 
+       with abas[7]: 
             df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
             if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
-       with abas[8]:
+        
+        with abas[8]:
             st.markdown(f"### 💾 Banco de Dados de Partidas (Firebase)")
             st.caption("A IA usa esses dados para criar novas estratégias. Os dados são salvos na nuvem.")
             
