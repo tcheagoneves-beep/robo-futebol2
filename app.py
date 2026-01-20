@@ -1074,52 +1074,125 @@ def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
+        # 1. Busca Jogos do Dia
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
-        LIGAS_TOP = [71, 72, 39, 140, 78, 135, 61, 2]
-        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP][:5] 
+        
+        # Filtra Top Ligas (Premier League, La Liga, Bundesliga, Serie A, Ligue 1, Brasileirão, Champions)
+        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3]
+        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP][:6] 
+        
         if not jogos_top: return "Nenhum jogo 'Top Tier' para análise matinal hoje."
+        
         relatorio_final = ""
+        
         for j in jogos_top:
             fid = j['fixture']['id']
-            time_casa = j['teams']['home']['name']; time_fora = j['teams']['away']['name']
+            time_casa = j['teams']['home']['name']
+            time_fora = j['teams']['away']['name']
+            
+            # Evita duplicidade (se já mandou hoje, pula)
             ja_enviado = False
             for s in st.session_state['historico_sinais']:
                 if str(s['FID']) == str(fid) and "Sniper" in s['Estrategia']:
                     ja_enviado = True; break
             if ja_enviado: continue
+
+            # 2. Busca Odds Pré-Live (CRUCIAL)
+            url_odds = "https://v3.football.api-sports.io/odds"
+            res_odds = requests.get(url_odds, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "6"}).json()
+            
+            odd_home = "N/A"
+            odd_away = "N/A"
+            str_odds = "Odds Indisponíveis"
+            
+            if res_odds.get('response'):
+                try:
+                    vals = res_odds['response'][0]['bookmakers'][0]['bets'][0]['values']
+                    for v in vals:
+                        if v['value'] == 'Home': odd_home = v['odd']
+                        if v['value'] == 'Away': odd_away = v['odd']
+                    str_odds = f"Odds: Casa @{odd_home} | Visitante @{odd_away}"
+                except: pass
+
+            # 3. Busca Estatísticas e Predições da API
             url_pred = "https://v3.football.api-sports.io/predictions"
             res_pred = requests.get(url_pred, headers={"x-apisports-key": api_key}, params={"fixture": fid}).json()
+            
             if res_pred.get('response'):
                 pred = res_pred['response'][0]['predictions']
                 comp = res_pred['response'][0]['comparison']
-                info_jogo = f"JOGO: {time_casa} vs {time_fora} | API Diz: {pred['advice']} | Prob: {pred['percent']} | Ataque: {comp['att']['home']}x{comp['att']['away']}"
+                
+                # Prepara o dossiê para a IA
+                info_jogo = (f"JOGO: {time_casa} (Casa) vs {time_fora} (Fora)\n"
+                             f"MERCADO: {str_odds}\n"
+                             f"DADOS API: Advice: {pred['advice']} | Chance Vitoria: {pred['percent']}\n"
+                             f"COMPARATIVO FORÇA (0-100%): \n"
+                             f"- Ataque: {comp['att']['home']} vs {comp['att']['away']}\n"
+                             f"- Defesa: {comp['def']['home']} vs {comp['def']['away']}\n"
+                             f"- Forma: {comp['form']['home']} vs {comp['form']['away']}")
+                
                 prompt_matinal = f"""
-                Analise: {info_jogo}
-                Se tiver oportunidade MUITO CLARA, responda ESTRITAMENTE no formato:
-                BET: [TIPO_APOSTA]
-                Tipos aceitos: OVER 2.5, UNDER 2.5, CASA VENCE, FORA VENCE, AMBAS MARCAM.
-                Se não, responda: SKIP
+                Atue como um Tipster Profissional de Elite. Analise este confronto:
+                {info_jogo}
+
+                SUA MISSÃO: Encontrar a MELHOR oportunidade de valor, não importa o mercado.
+                
+                REGRAS:
+                1. Analise Odds vs Probabilidade Real. Se o favorito paga pouco (Odd < 1.30), ignore a vitória seca e procure Gols ou Handicap.
+                2. Se os times têm defesa fraca, considere OVER GOLS ou AMBAS MARCAM.
+                3. Se o jogo é muito desequilibrado, considere ESCANTEIOS ou CARTÕES (se fizer sentido com o estilo dos times).
+                4. Seja CRIATIVO mas SEGURO.
+
+                FORMATO DE RESPOSTA OBRIGATÓRIO (Se não tiver aposta boa, responda SKIP):
+                BET: [MERCADO ESCOLHIDO] | MOTIVO: [EXPLICAÇÃO TÉCNICA CURTA EM 1 FRASE]
+
+                Exemplos de Saída:
+                - BET: CASA VENCE | MOTIVO: Casa tem 80% de forma e visitante perdeu as últimas 5.
+                - BET: OVER 2.5 GOLS | MOTIVO: Duas defesas fracas e ataques com média alta de gols.
+                - BET: OVER 9.5 ESCANTEIOS | MOTIVO: Times com alto volume de cruzamentos e finalizações.
                 """
+                
+                # Chama o Gemini
                 resp_ia = model_ia.generate_content(prompt_matinal)
                 st.session_state['gemini_usage']['used'] += 1
-                texto_ia = resp_ia.text.strip().upper()
-                if "BET:" in texto_ia:
-                    aposta = texto_ia.replace("BET:", "").strip()
-                    relatorio_final += f"🎯 <b>SNIPER: {time_casa} x {time_fora}</b>\n👉 {aposta}\n\n"
+                texto_ia = resp_ia.text.strip()
+                
+                # Processa a resposta
+                if "BET:" in texto_ia.upper():
+                    # Limpeza básica para separar a Aposta do Motivo
+                    try:
+                        partes = texto_ia.split('|')
+                        aposta_raw = partes[0].replace("BET:", "").strip()
+                        motivo_raw = partes[1].replace("MOTIVO:", "").strip() if len(partes) > 1 else "Análise técnica favorável."
+                    except:
+                        aposta_raw = texto_ia.replace("BET:", "").strip()
+                        motivo_raw = "Oportunidade identificada pela IA."
+
+                    # Adiciona ao relatório visual que vai pro Telegram
+                    relatorio_final += f"🎯 <b>SNIPER: {time_casa} x {time_fora}</b>\n👉 <b>{aposta_raw}</b>\n💡 <i>{motivo_raw}</i>\n📊 {str_odds}\n\n"
+                    
+                    # Define uma odd estimada para registro (apenas para controle financeiro, já que não temos odd de cantos/cartões na API free)
+                    odd_reg = "1.70" 
+                    if "CASA" in aposta_raw.upper() and odd_home != "N/A": odd_reg = odd_home
+                    elif "FORA" in aposta_raw.upper() and odd_away != "N/A": odd_reg = odd_away
+                    
+                    # Salva no histórico
                     item_bi = {
                         "FID": str(fid), "Data": hoje, "Hora": "08:00", 
                         "Liga": j['league']['name'], "Jogo": f"{time_casa} x {time_fora}", 
-                        "Placar_Sinal": aposta, 
+                        "Placar_Sinal": aposta_raw, # Agora salva "OVER 9.5 CANTOS" por exemplo
                         "Estrategia": "Sniper Matinal", "Resultado": "Pendente", 
                         "HomeID": str(j['teams']['home']['id']), "AwayID": str(j['teams']['away']['id']), 
-                        "Odd": "1.70", "Odd_Atualizada": "", "Opiniao_IA": "Sniper"
+                        "Odd": str(odd_reg), "Odd_Atualizada": "", "Opiniao_IA": "Sniper"
                     }
                     adicionar_historico(item_bi)
-                    time.sleep(1)
-        return relatorio_final if relatorio_final else "Sem oportunidades claras no Sniper."
+                    time.sleep(1.5) # Pausa leve para não sobrecarregar
+
+        return relatorio_final if relatorio_final else "Sem oportunidades de alto valor encontradas hoje."
+        
     except Exception as e: return f"Erro Matinal: {e}"
 
 def processar_resultado(sinal, jogo_api, token, chats):
@@ -2070,3 +2143,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
