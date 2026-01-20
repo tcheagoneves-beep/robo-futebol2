@@ -150,7 +150,7 @@ def formatar_inteiro_visual(val):
         return str(int(float(str(val))))
     except: return str(val)
 
-# --- [ATUALIZADO] FUNÇÃO UNIVERSAL DE CHAVES (SEGURANÇA DUPLICIDADE) ---
+# --- [CORREÇÃO 1] FUNÇÃO BLINDADA DE CHAVES ---
 def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     try:
         fid_clean = str(int(float(str(fid).strip())))
@@ -618,109 +618,92 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
         return valor
     except: return calcular_odd_media_historica(estrategia)
 
-# --- [ATUALIZADO] IA COM AJUSTE FINO E LEITURA DE PRESSÃO ---
+# --- [CORREÇÃO 2] IA "TRADER" COM TRAVA DE SEGURANÇA E LEITURA DE PRESSÃO ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra):
     if not IA_ATIVADA: return ""
 
-    # 1. Extração Cirúrgica de Dados (O que define o jogo)
+    # --- TRAVA DE SEGURANÇA (VALIDAÇÃO DE DADOS) ---
     try:
         s1 = stats_raw[0]['statistics']
         s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
-        # Dados Vitais
-        chutes_area_casa = gv(s1, 'Shots insidebox')
-        chutes_area_fora = gv(s2, 'Shots insidebox')
-        cantos_casa = gv(s1, 'Corner Kicks')
-        cantos_fora = gv(s2, 'Corner Kicks')
-        ataques_p_casa = gv(s1, 'Dangerous Attacks')
-        ataques_p_fora = gv(s2, 'Dangerous Attacks')
+        chutes_totais = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
+        ataques_totais = gv(s1, 'Dangerous Attacks') + gv(s2, 'Dangerous Attacks')
+        tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
+        tempo = int(tempo_str) if tempo_str.isdigit() else 0
+        
+        # REGRA 1: Se tem mais de 20 min de jogo e NADA aconteceu, a API pode estar travada.
+        if tempo > 20 and chutes_totais == 0 and ataques_totais == 0:
+            return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - API parece desatualizada (Dados zerados)."
+
     except:
         return "" # Se falhar a leitura, aborta
 
+    # --- FIM DA TRAVA ---
+
+    # Extração normal
+    chutes_area_casa = gv(s1, 'Shots insidebox')
+    chutes_area_fora = gv(s2, 'Shots insidebox')
+    cantos_casa = gv(s1, 'Corner Kicks')
+    cantos_fora = gv(s2, 'Corner Kicks')
+    
     dados_ricos = extrair_dados_completos(stats_raw)
     nome_strat = estrategia.upper()
     
-    # 2. Definição da "Persona" da IA baseada na Estratégia
-    # Aqui é o "Pulo do Gato": Mudamos o objetivo da IA conforme o robô
-    
+    # --- DETECÇÃO DE "MEMÓRIA FRIA" ---
+    # Se temos muitos chutes mas pressão zero, avisamos a IA que o robô pode ter reiniciado
+    aviso_memoria = ""
+    if (rh == 0 and ra == 0) and chutes_totais > 10:
+        aviso_memoria = "ATENÇÃO: O índice de pressão está zerado (possível reinício do bot), mas há MUITOS CHUTES. Confie nos Chutes e ignore a Pressão zerada."
+
     missao_ia = ""
     criterio_aprovacao = ""
     
-    # --- PERFIL A: UNDER / JOGO MORNO ---
+    # LÓGICA DE PERSONALIDADE (PERFIS)
     if "MORNO" in nome_strat or "UNDER" in nome_strat:
         missao_ia = "Seu objetivo é validar se o jogo vai CONTINUAR 0x0 ou com poucos gols."
-        criterio_aprovacao = """
-        APROVAR (Seguro): Se as defesas estiverem superando os ataques. Pressão baixa (0 ou 1). Poucos chutes na área.
-        REJEITAR (Arriscado): Se tiver qualquer sinal de 'Lá e Cá', pressão alta (>3) ou goleiro trabalhando.
-        Seu inimigo é o Gol. Se o jogo estiver animado, dê 'Arriscado'.
-        """
-
-    # --- PERFIL B: FIM DE JOGO (GOLDEN / JANELA) ---
+        criterio_aprovacao = "APROVAR: Defesas superando ataques. REJEITAR: Jogo aberto."
     elif "GOLDEN" in nome_strat or "JANELA" in nome_strat:
-        missao_ia = "Seu objetivo é validar se vai sair gol no FINAL (Desespero/Cansaço)."
-        criterio_aprovacao = """
-        APROVAR (Seguro): O time que está perdendo (ou empatando em casa) PRECISA estar amassando (Pressão >= 3).
-        REJEITAR (Arriscado): Se o time que precisa do gol desistiu (Pressão < 2) ou só toca de lado.
-        Procure por 'Blitz' e 'Chuveirinho na área'.
-        """
-
-    # --- PERFIL C: INÍCIO (RELÂMPAGO / MASSACRE / CHOQUE) ---
+        missao_ia = "Seu objetivo é validar se vai sair gol no FINAL (Desespero)."
+        criterio_aprovacao = "APROVAR: Pressão insana ou Blitz. REJEITAR: Jogo morto."
     elif any(x in nome_strat for x in ["RELÂMPAGO", "MASSACRE", "CHOQUE", "BRIGA"]):
-        missao_ia = "Seu objetivo é validar GOL CEDO (Defesa dormindo ou Intensidade insana)."
-        criterio_aprovacao = """
-        APROVAR (Seguro): Ataques Perigosos muito altos para o pouco tempo de jogo. Zaga batendo cabeça.
-        REJEITAR (Arriscado): Jogo de estudo, times se respeitando muito, posse de bola defensiva.
-        """
-
-    # --- PERFIL D: PADRÃO OVER (PORTEIRA / BLITZ / FAVORITO) ---
+        missao_ia = "Seu objetivo é validar GOL CEDO."
+        criterio_aprovacao = "APROVAR: Intensidade alta. REJEITAR: Jogo de estudo."
     else:
-        missao_ia = "Seu objetivo é validar GOL MADURO (Zaga Aberta)."
-        criterio_aprovacao = """
-        APROVAR (Seguro): Muitos chutes DENTRO da área. Jogo de transição rápida (não posse lenta).
-        REJEITAR (Arriscado): Muita posse de bola mas chute de longe (Arame liso). Pressão falsa.
-        """
+        missao_ia = "Seu objetivo é validar GOL MADURO."
+        criterio_aprovacao = "APROVAR: Muitos chutes na área. REJEITAR: Posse estéril."
 
-    # 3. Montagem do Prompt Técnico
     prompt = f"""
     Atue como TRADER ESPORTIVO PROFISSIONAL.
     
     CENÁRIO:
     Jogo: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
-    Estratégia Detectada: {estrategia}
+    Estratégia: {estrategia}
     
-    TERMÔMETRO DO JOGO (Momentum):
-    - Pressão Casa (0-5): {rh}
-    - Pressão Visitante (0-5): {ra}
-    - Chutes na Área (Perigo Real): Casa {chutes_area_casa} x {chutes_area_fora} Visitante
-    - Escanteios: Casa {cantos_casa} x {cantos_fora} Visitante
+    MOMENTUM:
+    - Pressão Casa: {rh} | Visitante: {ra}
+    - Chutes Área: {chutes_area_casa} x {chutes_area_fora}
+    - {aviso_memoria}
     
-    SUA MISSÃO:
-    {missao_ia}
-    
-    CRITÉRIOS DE DECISÃO:
-    {criterio_aprovacao}
-    
-    REGRA DE OURO DA API:
-    Use os dados de 'Pressão' e 'Chutes na Área' para fundamentar.
-    Não alucine. Se os números são baixos, o jogo é ruim.
+    DADOS TÉCNICOS:
+    {dados_ricos}
 
-    Responda EXATAMENTE neste formato (sem negrito):
-    [Aprovado/Arriscado] - [Motivo técnico curto e direto]
+    SUA MISSÃO: {missao_ia}
+    CRITÉRIOS: {criterio_aprovacao}
+
+    Responda EXATAMENTE neste formato:
+    [Aprovado/Arriscado] - [Motivo técnico curto]
     """
 
-    # 4. Envio e Tratamento
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 10})
         st.session_state['gemini_usage']['used'] += 1
         
         texto_limpo = response.text.strip().replace("**", "").replace("*", "")
-        
-        # Lógica visual
         veredicto = "Arriscado"
         if "Aprovado" in texto_limpo or "aprovado" in texto_limpo: veredicto = "Aprovado"
         
-        # Limpeza do motivo
         motivo = texto_limpo
         for div in ["-", ":", "\n"]:
             if div in texto_limpo:
@@ -1441,22 +1424,27 @@ if st.session_state.ROBO_LIGADO:
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         txt_pressao = gerar_barra_pressao(rh, ra) 
                         
-                        # --- [CRÍTICO] CHECAGEM DUPLA PARA EVITAR DUPLICIDADE ---
+                        # --- [CORREÇÃO 3] TRAVA DUPLA CONTRA DUPLICIDADE (RAM + HISTÓRICO) ---
                         uid_normal = gerar_chave_universal(fid, s['tag'], "SINAL")
                         uid_super = f"SUPER_{uid_normal}"
                         
-                        ja_foi_enviado = False
-                        if uid_normal in st.session_state['alertas_enviados']:
-                            ja_foi_enviado = True
-                        else:
-                            for h in st.session_state['historico_sinais']:
-                                chave_hist = gerar_chave_universal(h['FID'], h['Estrategia'], "SINAL")
-                                if chave_hist == uid_normal:
-                                    ja_foi_enviado = True
+                        ja_enviado_total = False
+                        
+                        # 1. Checa RAM (Rápido)
+                        if uid_normal in st.session_state['alertas_enviados']: 
+                            ja_enviado_total = True
+                        
+                        # 2. Checa Banco de Dados (Seguro contra F5)
+                        if not ja_enviado_total:
+                            for item_hist in st.session_state['historico_sinais']:
+                                key_hist = gerar_chave_universal(item_hist['FID'], item_hist['Estrategia'], "SINAL")
+                                if key_hist == uid_normal:
+                                    ja_enviado_total = True
                                     st.session_state['alertas_enviados'].add(uid_normal)
                                     break
                         
-                        if ja_foi_enviado: continue 
+                        if ja_enviado_total: continue 
+                        
                         st.session_state['alertas_enviados'].add(uid_normal)
 
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga)
