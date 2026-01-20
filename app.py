@@ -1814,7 +1814,8 @@ if st.session_state.ROBO_LIGADO:
                 else:
                     gerenciar_erros(lid, j['league']['country'], j['league']['name'], fid)
 
-       if lista_sinais:
+      # --- INICIO DO BLOCO SUBSTITUIDO ---
+                if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
                     
                     # --- BUSCA MÉDIA DE GOLS DOS ÚLTIMOS 10 JOGOS ---
@@ -1847,14 +1848,13 @@ if st.session_state.ROBO_LIGADO:
                             destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
                             st.session_state['alertas_enviados'].add(uid_super)
                         
-                        # Captura a opinião da IA
+                        # Captura a opinião da IA (Mentalidade Caçador de Gols)
                         opiniao_txt = ""
                         opiniao_db = "Neutro"
                         if IA_ATIVADA:
                             try:
                                 time.sleep(0.3)
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
-                                # Chama a função atualizada com a mentalidade de "Caçador de Gols"
                                 opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats)
                                 
                                 if "Aprovado" in opiniao_txt: opiniao_db = "Aprovado"
