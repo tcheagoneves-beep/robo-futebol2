@@ -1991,24 +1991,32 @@ if st.session_state.ROBO_LIGADO:
             df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
             if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
             st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
-        with abas[8]:
+       with abas[8]:
             st.markdown(f"### 💾 Banco de Dados de Partidas (Firebase)")
-            st.caption("A IA usa esses dados para criar novas estratégias. Os dados agora são salvos na nuvem do Google Firestore.")
+            st.caption("A IA usa esses dados para criar novas estratégias. Os dados são salvos na nuvem.")
             
             if db_firestore:
-                try:
-                    # Carrega apenas os últimos 50 jogos para não pesar a interface
-                    docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
-                    data = [d.to_dict() for d in docs]
-                    if data:
-                        st.success(f"🔥 {len(data)} Jogos Recentes Carregados do Firebase")
-                        st.dataframe(pd.DataFrame(data), use_container_width=True)
-                    else:
-                        st.info("Nenhum jogo salvo no Firebase ainda. Aguarde o término de uma partida.")
-                except Exception as e:
-                    st.error(f"Erro ao ler Firebase: {e}")
+                # Botão para carregar sob demanda (Economiza MUITA leitura)
+                col_fb1, col_fb2 = st.columns([1, 3])
+                if col_fb1.button("🔄 Carregar/Atualizar Tabela"):
+                    try:
+                        with st.spinner("Baixando dados do Firebase..."):
+                            # Carrega apenas os últimos 50 jogos
+                            docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
+                            data = [d.to_dict() for d in docs]
+                            st.session_state['cache_firebase_view'] = data # Salva no cache da sessão
+                            st.toast(f"Dados atualizados! ({len(data)} jogos)")
+                    except Exception as e:
+                        st.error(f"Erro ao ler Firebase: {e}")
+
+                # Exibe o que está no cache (Memória RAM) sem gastar leitura do banco
+                if 'cache_firebase_view' in st.session_state and st.session_state['cache_firebase_view']:
+                    st.success(f"📂 Visualizando {len(st.session_state['cache_firebase_view'])} registros (Cache Local)")
+                    st.dataframe(pd.DataFrame(st.session_state['cache_firebase_view']), use_container_width=True)
+                else:
+                    st.info("ℹ️ Clique no botão acima para visualizar os dados salvos (Isso consome leituras da cota).")
             else:
-                st.warning("⚠️ Firebase não conectado. Adicione as credenciais nos Secrets.")
+                st.warning("⚠️ Firebase não conectado.")
 
         for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
