@@ -1975,9 +1975,10 @@ if st.session_state.ROBO_LIGADO:
                         if '✅ GREEN' not in detalhe: detalhe['✅ GREEN'] = 0
                         if '❌ RED' not in detalhe: detalhe['❌ RED'] = 0
                         st.dataframe(detalhe[['Total', '✅ GREEN', '❌ RED']].sort_values('Total', ascending=False).head(10), use_container_width=True)
-                except Exception as e: st.error(f"Erro ao carregar BI: {e}")
+    except Exception as e:
+                st.error(f"Erro ao carregar BI: {e}")
 
- with abas[5]: 
+        with abas[5]: 
             st.dataframe(st.session_state['df_black'][['País', 'Liga', 'Motivo']], use_container_width=True, hide_index=True)
         
         with abas[6]: 
@@ -2008,7 +2009,7 @@ if st.session_state.ROBO_LIGADO:
                 if col_fb1.button("🔄 Carregar/Atualizar Tabela"):
                     try:
                         with st.spinner("Baixando dados do Firebase..."):
-                            # Carrega apenas os últimos 50 jogos para economizar
+                            # Carrega apenas os últimos 50 jogos
                             docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
                             data = [d.to_dict() for d in docs]
                             st.session_state['cache_firebase_view'] = data # Salva no cache da sessão
