@@ -654,50 +654,110 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
 
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
     if not IA_ATIVADA: return ""
+    
+    # --- 1. PREPARAÇÃO DOS DADOS ---
+    dados_ricos = extrair_dados_completos(stats_raw)
+    nome_strat = estrategia.upper()
+    
+    # Histórico de Winrate (Contexto para a IA)
     df = st.session_state.get('historico_full', pd.DataFrame())
-    resumo_historico = "Sem dados históricos suficientes desta estratégia."
+    resumo_historico = "Sem histórico suficiente."
     if not df.empty:
         df_strat = df[df['Estrategia'] == estrategia]
-        total_entradas = len(df_strat)
-        if total_entradas > 0:
+        total = len(df_strat)
+        if total > 0:
             greens = len(df_strat[df_strat['Resultado'].str.contains('GREEN', na=False)])
-            reds = len(df_strat[df_strat['Resultado'].str.contains('RED', na=False)])
-            winrate = (greens / total_entradas * 100)
-            resumo_historico = (
-                f"PERFORMANCE HISTÓRICA DO ROBÔ NA ESTRATÉGIA '{estrategia}':\n"
-                f"- Total de Entradas Passadas: {total_entradas}\n"
-                f"- Taxa de Acerto (Winrate): {winrate:.1f}%\n"
-                f"- Greens: {greens} | Reds: {reds}\n"
-                "USE ESTE DADO HISTÓRICO COMO PESO FORTE NA SUA DECISÃO."
-            )
-    if st.session_state['ia_bloqueada_ate']:
-        agora = datetime.now()
-        if agora < st.session_state['ia_bloqueada_ate']: return ""
-        else: st.session_state['ia_bloqueada_ate'] = None
-    dados_ricos = extrair_dados_completos(stats_raw)
-    prompt = f"""
-    Atue como um Trader Esportivo Sênior. Você deve validar uma entrada.
-    CONTEXTO DO JOGO AO VIVO:
-    - Jogo: {dados_jogo['jogo']}
-    - Tempo: {dados_jogo['tempo']}' | Placar: {dados_jogo['placar']}
-    - Estatísticas Ao Vivo: {dados_ricos}
-    ESTRATÉGIA APLICADA: "{estrategia}"
-    {resumo_historico}
-    Sua missão: Analise a correlação entre os dados (Pressão, Chutes na Área, Passes).
-    Se houver pressão real (chutes na área + escanteios), APROVE.
-    Se for jogo truncado (muitas faltas + passes errados), RECUSE (Arriscado).
-    Responda ESTRITAMENTE neste formato: "Aprovado" ou "Arriscado" + um motivo ultra curto (máximo 8 palavras).
-    """
+            winrate = (greens / total * 100)
+            resumo_historico = f"Teu Winrate Histórico aqui: {winrate:.1f}% ({total} jogos)"
+
+    # --- 2. SELEÇÃO DO PERFIL ESPECIALISTA ---
+    
+    # PERFIL A: FIM DE JOGO (Over Limit)
+    if "GOLDEN" in nome_strat or "JANELA" in nome_strat:
+        prompt = f"""
+        Atue como Especialista em Fim de Jogo (80min+). Valide entrada de OVER GOL.
+        Cenário: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']}
+        Stats: {dados_ricos}
+        
+        CRITÉRIOS DE APROVAÇÃO (Filtro de Pressão Falsa):
+        1. O time que precisa marcar está chutando NO GOL (On Target)? (Se chuta muito pra fora, REJEITE).
+        2. O jogo está parando muito (Faltas/Cera)? (Se sim, REJEITE).
+        3. Goleiro fez defesas recentes? (Sinal de perigo real).
+        
+        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto sobre Eficiência e Ritmo]
+        """
+
+    # PERFIL B: INÍCIO DE JOGO (HT / Cedo)
+    elif any(x in nome_strat for x in ["RELÂMPAGO", "CHOQUE", "BRIGA", "MASSACRE"]):
+        prompt = f"""
+        Atue como Especialista em HT (1º Tempo). Valide entrada de GOL CEDO.
+        Cenário: {dados_jogo['jogo']} (Início) | Stats: {dados_ricos}
+        
+        CRITÉRIOS DE APROVAÇÃO (Filtro de Intensidade):
+        1. O jogo começou frenético (Ataques lá e cá)?
+        2. Já teve chance clara ou defesa difícil nos primeiros minutos?
+        3. Se os times estão apenas se estudando/tocando bola no meio, REJEITE.
+        
+        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto sobre Intensidade Inicial]
+        """
+
+    # PERFIL C: UNDER / JOGO MORNO (Apostar que NÃO sai gol)
+    elif "MORNO" in nome_strat or "UNDER" in nome_strat:
+        prompt = f"""
+        Atue como Especialista em UNDER (Jogos Ruins). Valide entrada de MENOS GOLS.
+        Cenário: {dados_jogo['jogo']} | Stats: {dados_ricos}
+        
+        CRITÉRIOS DE APROVAÇÃO (Filtro de Perigo):
+        1. Os times são fracos ofensivamente? (Poucos chutes no gol).
+        2. A bola fica presa no meio campo?
+        3. CUIDADO: Se houver MUITOS chutes (mesmo pra fora), REJEITE o Under, pois o gol pode sair 'sem querer'.
+        
+        Responda: "Aprovado" (Se o jogo for horrível) ou "Arriscado" (Se estiver movimentado).
+        Formato: [Aprovado/Arriscado] - [Motivo curto]
+        """
+
+    # PERFIL D: MEIO DO JOGO / BLITZ (Pressão Sustentada)
+    elif any(x in nome_strat for x in ["BLITZ", "PORTEIRA", "FAVORITO"]):
+        prompt = f"""
+        Atue como Especialista em Leitura de Jogo. Valide entrada de PRESSÃO/OVER.
+        Cenário: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']}
+        Stats: {dados_ricos}
+        {resumo_historico}
+        
+        CRITÉRIOS DE APROVAÇÃO:
+        1. Existe um domínio claro de um dos times (Posse ofensiva + Chutes)?
+        2. A defesa adversária está cedendo muitos escanteios/chutes?
+        
+        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto sobre Domínio]
+        """
+
+    # PERFIL GENÉRICO (Fallback)
+    else:
+        prompt = f"""
+        Analise estatisticamente este jogo de futebol para a estratégia '{estrategia}'.
+        Dados: {dados_ricos}
+        Contexto: {dados_jogo['jogo']}
+        
+        Existe chance clara de Green baseada nos números?
+        Responda: [Aprovado/Arriscado] - [Motivo]
+        """
+
+    # --- 3. EXECUÇÃO ---
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 12})
         st.session_state['gemini_usage']['used'] += 1
-        return f"\n🤖 <b>IA:</b> {response.text.strip()}"
+        texto_ia = response.text.strip()
+        
+        # Formatação visual
+        emoji = "✅" if "Aprovado" in texto_ia else "⚠️"
+        # Limita o tamanho do texto para não poluir o Telegram
+        texto_limpo = texto_ia.replace('\n', ' ').split('-')
+        motivo_final = texto_limpo[1].strip() if len(texto_limpo) > 1 else texto_ia
+        
+        return f"\n🤖 <b>IA:</b> {emoji} {motivo_final[:100]}" # Corta se for muito longo
     except Exception as e:
-        if "429" in str(e) or "quota" in str(e).lower():
-            st.session_state['ia_bloqueada_ate'] = datetime.now() + timedelta(minutes=2)
-            return "\n🤖 <b>IA:</b> (Pausa 2m)"
+        if "429" in str(e): return "\n🤖 <b>IA:</b> (Ocupada)"
         return ""
-
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -2143,4 +2203,5 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
 
