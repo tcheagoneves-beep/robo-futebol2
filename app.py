@@ -1658,17 +1658,20 @@ if st.session_state.ROBO_LIGADO:
             url = "https://v3.football.api-sports.io/fixtures"
             resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
             update_api_usage(resp.headers); res = resp.json()
-            jogos_live = res.get('response', []) if not res.get('errors') else []; api_error = bool(res.get('errors'))
+            raw_live = res.get('response', []) if not res.get('errors') else []
+            
+            # --- TRAVA DE DUPLICIDADE GLOBAL ---
+            # Remove duplicatas IMEDIATAMENTE. O dicionário usa o ID como chave única.
+            dict_clean = {j['fixture']['id']: j for j in raw_live}
+            jogos_live = list(dict_clean.values())
+            # -----------------------------------
+
+            api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
         except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
 
-        if not api_error:
-            # === TRAVA DE DUPLICIDADE ===
-            # Cria um dicionário onde a chave é o ID. Se houver IDs iguais, o dicionário mantém apenas um.
-            dict_unicos = {j['fixture']['id']: j for j in jogos_live}
-            jogos_live = list(dict_unicos.values())
-            # ============================
-
+        if not api_error: 
+            # Agora todas as funções abaixo usam a lista 'jogos_live' já limpa
             check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
             conferir_resultados_sniper(jogos_live, safe_api) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
