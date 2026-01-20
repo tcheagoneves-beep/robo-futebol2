@@ -150,7 +150,7 @@ def formatar_inteiro_visual(val):
         return str(int(float(str(val))))
     except: return str(val)
 
-# --- [CORREÇÃO 1] FUNÇÃO BLINDADA DE CHAVES ---
+# --- FUNÇÃO BLINDADA DE CHAVES ---
 def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     try:
         fid_clean = str(int(float(str(fid).strip())))
@@ -618,7 +618,7 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
         return valor
     except: return calcular_odd_media_historica(estrategia)
 
-# --- [CORREÇÃO 2] IA "TRADER" COM TRAVA DE SEGURANÇA E LEITURA DE PRESSÃO ---
+# --- [IA REVISADA] FUNÇÃO "GOL GENÉRICO" (Team Agnostic) ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra):
     if not IA_ATIVADA: return ""
 
@@ -652,7 +652,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra):
     nome_strat = estrategia.upper()
     
     # --- DETECÇÃO DE "MEMÓRIA FRIA" ---
-    # Se temos muitos chutes mas pressão zero, avisamos a IA que o robô pode ter reiniciado
     aviso_memoria = ""
     if (rh == 0 and ra == 0) and chutes_totais > 10:
         aviso_memoria = "ATENÇÃO: O índice de pressão está zerado (possível reinício do bot), mas há MUITOS CHUTES. Confie nos Chutes e ignore a Pressão zerada."
@@ -671,8 +670,12 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra):
         missao_ia = "Seu objetivo é validar GOL CEDO."
         criterio_aprovacao = "APROVAR: Intensidade alta. REJEITAR: Jogo de estudo."
     else:
-        missao_ia = "Seu objetivo é validar GOL MADURO."
-        criterio_aprovacao = "APROVAR: Muitos chutes na área. REJEITAR: Posse estéril."
+        # AQUI MUDOU: VISÃO GERAL DE GOL (INDEPENDENTE DO TIME)
+        missao_ia = "Seu objetivo é validar GOL NA PARTIDA (Over Goals). Não importa quem marca."
+        criterio_aprovacao = """
+        APROVAR: Se qualquer um dos times estiver pressionando. Se a estratégia for 'Blitz Visitante' mas o Casa que chuta, APROVE também, pois o gol vai sair.
+        REJEITAR: Apenas se os DOIS times estiverem dormindo.
+        """
 
     prompt = f"""
     Atue como TRADER ESPORTIVO PROFISSIONAL.
@@ -691,6 +694,9 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra):
 
     SUA MISSÃO: {missao_ia}
     CRITÉRIOS: {criterio_aprovacao}
+    
+    REGRA DE OURO DO OVER: O lucro vem do GOL, não importa o lado.
+    Exemplo: Se a estratégia diz 'Blitz Visitante', mas quem está chutando é o Casa, APROVE! Pois o jogo está aberto e o gol vai sair. Não reprove só porque o lado da estratégia não bateu, foque no potencial de gol do JOGO.
 
     Responda EXATAMENTE neste formato:
     [Aprovado/Arriscado] - [Motivo técnico curto]
