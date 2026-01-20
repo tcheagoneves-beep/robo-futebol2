@@ -1221,32 +1221,76 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             if processar_resultado(s, jogo_encontrado, token, chats): updates_buffer.append(s)
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
-def conferir_resultados_sniper(jogos_live):
+def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
-    snipers_pendentes = [s for s in hist if s['Estrategia'] == "Sniper Matinal" and s['Resultado'] == "Pendente"]
+    # Filtra apenas Snipers Pendentes
+    snipers_pendentes = [s for s in hist if "Sniper" in s['Estrategia'] and s['Resultado'] == "Pendente"]
+    
     if not snipers_pendentes: return
+
     updates_buffer = []
+    # Cria mapa dos jogos ao vivo para acesso rápido
     ids_live_ou_fim = {str(j['fixture']['id']): j for j in jogos_live} 
+    
     for s in snipers_pendentes:
         fid = str(s['FID'])
+        jogo = None
+
+        # 1. Tenta achar no Live
         if fid in ids_live_ou_fim:
             jogo = ids_live_ou_fim[fid]
-            status = jogo['fixture']['status']['short']
-            if status in ['FT', 'AET', 'PEN']:
-                gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0
-                total_gols = gh + ga
-                target = s['Placar_Sinal'] 
-                resultado_final = None
-                if "OVER 2.5" in target: resultado_final = '✅ GREEN' if total_gols > 2.5 else '❌ RED'
-                elif "UNDER 2.5" in target: resultado_final = '✅ GREEN' if total_gols < 2.5 else '❌ RED'
-                elif "AMBAS MARCAM" in target: resultado_final = '✅ GREEN' if (gh > 0 and ga > 0) else '❌ RED'
-                elif "CASA VENCE" in target: resultado_final = '✅ GREEN' if gh > ga else '❌ RED'
-                elif "FORA VENCE" in target: resultado_final = '✅ GREEN' if ga > gh else '❌ RED'
-                if resultado_final:
-                    s['Resultado'] = resultado_final
-                    updates_buffer.append(s)
-                    enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], 
-                                    f"{resultado_final} <b>RESULTADO SNIPER</b>\n⚽ {s['Jogo']}\n🎯 {target}\n📉 Placar: {gh}x{ga}")
+        
+        # 2. Se não achar no Live, busca na API (Pode ter acabado e sumido do Live)
+        else:
+            try:
+                url = "https://v3.football.api-sports.io/fixtures"
+                # Busca direto pelo ID
+                res = requests.get(url, headers={"x-apisports-key": api_key}, params={"id": fid}).json()
+                if res.get('response'):
+                    jogo = res['response'][0]
+                    # Atualiza o contador de uso da API para não estourar
+                    update_api_usage(res.get('headers', {}))
+            except Exception as e:
+                print(f"Erro ao buscar Sniper ID {fid}: {e}")
+
+        # Se não conseguiu dados do jogo de jeito nenhum, pula
+        if not jogo: continue
+
+        # 3. Verifica o Status
+        status = jogo['fixture']['status']['short']
+        
+        # Só processa se o jogo terminou
+        if status in ['FT', 'AET', 'PEN', 'INT']: # INT = Interrompido (às vezes conta) ou FT
+            gh = jogo['goals']['home'] or 0
+            ga = jogo['goals']['away'] or 0
+            total_gols = gh + ga
+            target = s['Placar_Sinal'].upper().strip() # Garante formatação
+            
+            resultado_final = None
+
+            # Lógica de verificação
+            if "OVER 2.5" in target: 
+                resultado_final = '✅ GREEN' if total_gols > 2.5 else '❌ RED'
+            elif "UNDER 2.5" in target: 
+                resultado_final = '✅ GREEN' if total_gols < 2.5 else '❌ RED'
+            elif "AMBAS MARCAM" in target: 
+                resultado_final = '✅ GREEN' if (gh > 0 and ga > 0) else '❌ RED'
+            elif "CASA VENCE" in target: 
+                resultado_final = '✅ GREEN' if gh > ga else '❌ RED'
+            elif "FORA VENCE" in target: 
+                resultado_final = '✅ GREEN' if ga > gh else '❌ RED'
+            
+            # Se identificou o resultado
+            if resultado_final:
+                s['Resultado'] = resultado_final
+                updates_buffer.append(s)
+                
+                # Envia notificação
+                msg_sniper = f"{resultado_final} <b>RESULTADO SNIPER</b>\n⚽ {s['Jogo']}\n🎯 {target}\n📉 Placar Final: {gh}x{ga}"
+                enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], msg_sniper)
+                st.session_state['precisa_salvar'] = True
+
+    # Atualiza a memória se houver mudanças
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
 def verificar_var_rollback(jogos_live, token, chats):
@@ -1528,7 +1572,7 @@ if st.session_state.ROBO_LIGADO:
 
         if not api_error: 
             check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
-            conferir_resultados_sniper(jogos_live) 
+            conferir_resultados_sniper(jogos_live, safe_api) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
         
         radar = []; agenda = []
