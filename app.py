@@ -670,62 +670,53 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
             winrate = (greens / total * 100)
             resumo_historico = f"Winrate Histórico: {winrate:.1f}% ({total} jogos)"
 
-    # --- 2. SELEÇÃO DO PERFIL (Mantendo a lógica especialista) ---
+    # --- 2. SELEÇÃO DO PERFIL ---
+    prompt_base = f"""
+    Analise a estratégia '{estrategia}'.
+    Jogo: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']}
+    Stats: {dados_ricos}
+    
+    REGRAS DE RESPOSTA:
+    1. Responda APENAS: "Aprovado" ou "Arriscado".
+    2. Adicione um hífen e um motivo curto e direto (sem enrolação).
+    3. NÃO use asteriscos (**), negrito ou markdown. Texto puro.
+    
+    Exemplo de formato desejado:
+    Aprovado - Pressão absurda e goleiro trabalhando muito.
+    Arriscado - Time tem posse mas não chuta no gol.
+    """
+    
+    # Personalização por Estratégia (Refinamento do Prompt)
     if "GOLDEN" in nome_strat or "JANELA" in nome_strat:
-        prompt = f"""
-        Especialista Fim de Jogo (Live). Valide OVER GOL.
-        Jogo: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Stats: {dados_ricos}
-        
-        CRITÉRIOS:
-        1. Eficiência: O time chuta no gol (On Target)? Se chuta pra fora, REJEITE.
-        2. Ritmo: Jogo parando muito? REJEITE.
-        
-        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto]
-        """
+        prompt = f"Especialista Fim de Jogo. Foco em Eficiência (Chutes no Gol). {prompt_base}"
     elif any(x in nome_strat for x in ["RELÂMPAGO", "CHOQUE", "BRIGA", "MASSACRE"]):
-        prompt = f"""
-        Especialista HT (Início). Valide GOL CEDO.
-        Jogo: {dados_jogo['jogo']} | Stats: {dados_ricos}
-        
-        CRITÉRIOS: Jogo frenético? Chance clara? Se for estudo/toque de lado, REJEITE.
-        Responda ESTRITAMENTE: [Aprovado/Arriscado] - [Motivo curto]
-        """
+        prompt = f"Especialista Início de Jogo. Foco em Intensidade Imediata. {prompt_base}"
     elif "MORNO" in nome_strat or "UNDER" in nome_strat:
-        prompt = f"""
-        Especialista UNDER. Valide MENOS GOLS.
-        Jogo: {dados_jogo['jogo']} | Stats: {dados_ricos}
-        
-        CRITÉRIOS: Ataques fracos? Bola no meio? Se tiver muitos chutes, REJEITE (Arriscado).
-        Responda: "Aprovado" (Se for jogo ruim) ou "Arriscado".
-        """
-    else: # Genérico
-        prompt = f"""
-        Analise estatisticamente '{estrategia}'.
-        Dados: {dados_ricos} | Contexto: {dados_jogo['jogo']}
-        {resumo_historico}
-        Responda: [Aprovado/Arriscado] - [Motivo]
-        """
+        prompt = f"Especialista em Under. Foco em Ataques Fracos. {prompt_base}"
+    else:
+        prompt = f"Trader Esportivo Geral. {prompt_base}"
 
-    # --- 3. EXECUÇÃO E FORMATAÇÃO (AQUI ESTÁ A CORREÇÃO DO BI) ---
+    # --- 3. EXECUÇÃO E LIMPEZA TOTAL ---
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 12})
         st.session_state['gemini_usage']['used'] += 1
-        texto_ia = response.text.strip()
         
-        # Define o Veredito para exibição e para o BI capturar
+        # Limpeza bruta da string
+        texto_ia = response.text.strip().replace('**', '').replace('*', '').replace('Motivo:', '')
+        
+        # Define Veredito
         veredicto = "Aprovado" if "Aprovado" in texto_ia else "Arriscado"
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         
-        # Limpa o texto para pegar o motivo, mas REMONTA a string com o veredito explícito
-        texto_limpo = texto_ia.replace('\n', ' ').split('-')
-        motivo_final = texto_limpo[1].strip() if len(texto_limpo) > 1 else texto_ia
+        # Separa o motivo
+        partes = texto_ia.split('-')
+        motivo = partes[1].strip() if len(partes) > 1 else texto_ia.replace(veredicto, '').strip()
         
-        # O BI precisa ler "Aprovado" ou "Arriscado" nesta string final:
-        return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto}</b> - {motivo_final[:90]}" 
+        # Retorna formatado e limpo (Limite aumentado para 160 chars)
+        return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto}</b> - {motivo[:160]}" 
     except Exception as e:
         if "429" in str(e): return "\n🤖 <b>IA:</b> (Ocupada)"
         return ""
-
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -1671,10 +1662,13 @@ if st.session_state.ROBO_LIGADO:
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
         except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
 
-        if not api_error: 
-            # --- CORREÇÃO DE DUPLICIDADE: Remove jogos repetidos vindos da API ---
-            jogos_live = list({v['fixture']['id']: v for v in jogos_live}.values())
-            
+        if not api_error:
+            # === TRAVA DE DUPLICIDADE ===
+            # Cria um dicionário onde a chave é o ID. Se houver IDs iguais, o dicionário mantém apenas um.
+            dict_unicos = {j['fixture']['id']: j for j in jogos_live}
+            jogos_live = list(dict_unicos.values())
+            # ============================
+
             check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
             conferir_resultados_sniper(jogos_live, safe_api) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
