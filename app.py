@@ -4,7 +4,7 @@ import requests
 import time
 import os
 import threading
-import random # [NOVO] Para evitar travamento de fila
+import random 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CORREÇÃO DE GRÁFICO (Backend AGG) ---
@@ -267,7 +267,6 @@ def carregar_aba(nome_aba, colunas_esperadas):
         st.error(f"❌ Erro Crítico em '{nome_aba}'. Salvamento bloqueado até normalizar.")
         st.session_state['BLOQUEAR_SALVAMENTO'] = True
         return pd.DataFrame(columns=colunas_esperadas)
-
 def salvar_aba(nome_aba, df_para_salvar):
     # 1. Proteção contra ZERAR dados
     if nome_aba in ["Historico", "Seguras", "Obs"] and df_para_salvar.empty:
@@ -419,7 +418,7 @@ def carregar_tudo(force=False):
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
         sanitizar_conflitos()
         st.session_state['last_static_update'] = now
-      
+       
     if 'historico_full' not in st.session_state or force:
         df = carregar_aba("Historico", COLS_HIST)
         if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
@@ -444,10 +443,10 @@ def carregar_tudo(force=False):
             if 'historico_full' not in st.session_state:
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
-      
+       
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
         st.session_state['jogos_salvos_bigdata_carregados'] = True
-      
+       
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
@@ -1360,7 +1359,6 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
         return SINAIS
     except: return []
-
 # ==============================================================================
 # 5. SIDEBAR E LOOP PRINCIPAL (EXECUÇÃO)
 # ==============================================================================
@@ -1536,33 +1534,8 @@ if st.session_state.ROBO_LIGADO:
         radar = []; agenda = []
         if not api_error:
             # 1. COLETA DE STATS FINAIS PARA BIG DATA (FIREBASE)
-            # Mantém a coleta de FT normal (não filtra FT aqui)
-            jogos_para_baixar = []
-            for j in jogos_live:
-                lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
-                if lid in ids_black: continue
-                tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
-                gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-                t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
-                ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
-                
-                # Se o jogo acabou, salva no Firebase
-                if st_short == 'FT':
-                    if str(fid) not in st.session_state['jogos_salvos_bigdata']: jogos_para_baixar.append(j)
-                elif deve_buscar_stats(tempo, gh, ga, st_short):
-                    if (datetime.now() - ult_chk).total_seconds() > t_esp: jogos_para_baixar.append(j)
-            
-            if jogos_para_baixar:
-                novas_stats = atualizar_stats_em_paralelo(jogos_para_baixar, safe_api)
-                for fid, stats in novas_stats.items():
-                    jogo_ft = next((x for x in jogos_para_baixar if x['fixture']['id'] == fid and x['fixture']['status']['short'] == 'FT'), None)
-                    if jogo_ft: 
-                        salvar_bigdata(jogo_ft, stats) # Salva no Firebase
-                    else:
-                        st.session_state['controle_stats'][fid] = datetime.now()
-                        st.session_state[f"st_{fid}"] = stats
-            
             # --- [MODIFICADO] CORREÇÃO BIG DATA OTIMIZADA (Randomizada) ---
+            # Busca agenda de hoje apenas uma vez por ciclo (já tem cache)
             prox = buscar_agenda_cached(safe_api, hoje_real); agora = get_time_br()
             
             ft_para_salvar = []
@@ -1575,7 +1548,7 @@ if st.session_state.ROBO_LIGADO:
                             ft_para_salvar.append(p)
                 except: pass
             
-            # Processa em lotes aleatórios para não travar a fila em um jogo ruim
+            # Processa em lotes aleatórios para não travar a fila e não estourar a cota
             if ft_para_salvar:
                 # Se tiver mais que 3, pega 3 aleatórios. Se tiver menos, pega todos.
                 lote = random.sample(ft_para_salvar, min(len(ft_para_salvar), 3)) 
@@ -1617,6 +1590,20 @@ if st.session_state.ROBO_LIGADO:
                 
                 # (Redundante mas seguro, já filtramos acima)
                 if st_short == 'FT': continue 
+                
+                # Verifica se deve atualizar stats (para sinais)
+                stats = []
+                ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
+                t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
+
+                if deve_buscar_stats(tempo, gh, ga, st_short):
+                    if (datetime.now() - ult_chk).total_seconds() > t_esp:
+                         # Busca stats apenas deste jogo
+                         fid_res, s_res, h_res = fetch_stats_single(fid, safe_api)
+                         if s_res:
+                             st.session_state['controle_stats'][fid] = datetime.now()
+                             st.session_state[f"st_{fid}"] = s_res
+                             update_api_usage(h_res)
                 
                 stats = st.session_state.get(f"st_{fid}", [])
                 status_vis = "👁️" if stats else "💤"
