@@ -78,6 +78,8 @@ if 'ia_enviada' not in st.session_state: st.session_state['ia_enviada'] = False
 if 'financeiro_enviado' not in st.session_state: st.session_state['financeiro_enviado'] = False
 if 'bigdata_enviado' not in st.session_state: st.session_state['bigdata_enviado'] = False
 if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'] = False
+if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
+if 'BLOQUEAR_SALVAMENTO' not in st.session_state: st.session_state['BLOQUEAR_SALVAMENTO'] = False
 
 # 2.1 Conexão Firebase
 db_firestore = None
@@ -218,26 +220,82 @@ def buscar_media_gols_ultimos_jogos(api_key, home_id, away_id):
         return {'home': get_avg_goals(home_id, 'home'), 'away': get_avg_goals(away_id, 'away')}
     except: return {'home': '?', 'away': '?'}
 
-# --- FUNÇÕES DE BANCO DE DADOS ---
+# ==============================================================================
+# [CORREÇÃO] FUNÇÕES DE BANCO DE DADOS BLINDADAS (COM RETRY E MEMÓRIA)
+# ==============================================================================
+
 def carregar_aba(nome_aba, colunas_esperadas):
+    # Mapeia qual variável da sessão guarda esses dados para fallback
+    chave_memoria = ""
+    if nome_aba == "Historico": chave_memoria = 'historico_full'
+    elif nome_aba == "Seguras": chave_memoria = 'df_safe'
+    elif nome_aba == "Obs": chave_memoria = 'df_vip'
+    elif nome_aba == "Blacklist": chave_memoria = 'df_black'
+
     try:
+        # Tenta ler do Google Sheets
         df = conn.read(worksheet=nome_aba, ttl=0)
+        
+        # Validação básica
+        if df is None: raise Exception("API retornou None")
+
+        # Se leu vazio mas temos certeza que não deveria (Histórico/Seguras), suspeitamos de erro
+        if df.empty and nome_aba in ["Historico", "Seguras"] and chave_memoria in st.session_state and not st.session_state[chave_memoria].empty:
+             raise Exception(f"Leitura de {nome_aba} retornou vazio (Suspeita de falha na API)")
+
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
                     if col == 'Odd': df[col] = "1.20"
                     else: df[col] = ""
-        if df.empty or len(df.columns) < len(colunas_esperadas): 
-            return pd.DataFrame(columns=colunas_esperadas)
-        return df.fillna("").astype(str)
-    except: return pd.DataFrame(columns=colunas_esperadas)
+            # SUCESSO
+            return df.fillna("").astype(str)
+            
+        return pd.DataFrame(columns=colunas_esperadas)
+
+    except Exception as e:
+        print(f"⚠️ Falha ao ler {nome_aba}: {e}")
+        
+        # PLANO B: Usar a Memória RAM (Cache) se existir
+        if chave_memoria and chave_memoria in st.session_state:
+            df_ram = st.session_state[chave_memoria]
+            if not df_ram.empty:
+                st.toast(f"⚠️ {nome_aba}: Usando memória (Rede instável).", icon="💾")
+                return df_ram
+        
+        # PLANO C: Se não tem memória, retorna vazio MAS ativa a trava de segurança para não salvar
+        st.error(f"❌ Erro Crítico em '{nome_aba}'. Salvamento bloqueado até normalizar.")
+        st.session_state['BLOQUEAR_SALVAMENTO'] = True
+        return pd.DataFrame(columns=colunas_esperadas)
 
 def salvar_aba(nome_aba, df_para_salvar):
-    try: 
-        if nome_aba == "Historico" and df_para_salvar.empty: return False
-        conn.update(worksheet=nome_aba, data=df_para_salvar)
-        return True
-    except: return False
+    # 1. Proteção contra ZERAR dados
+    if nome_aba in ["Historico", "Seguras", "Obs"] and df_para_salvar.empty:
+        st.warning(f"⚠️ Salvamento abortado: Tentativa de limpar '{nome_aba}'. Dados mantidos na memória.")
+        return False
+
+    # 2. Se a leitura inicial falhou, não salvamos para não estragar a planilha
+    if st.session_state.get('BLOQUEAR_SALVAMENTO', False):
+        st.warning("⚠️ Modo de Segurança: Salvamento pausado.")
+        st.session_state['precisa_salvar'] = True 
+        return False
+
+    # 3. Retry Loop
+    max_tentativas = 3
+    for i in range(max_tentativas):
+        try:
+            conn.update(worksheet=nome_aba, data=df_para_salvar)
+            if nome_aba == "Historico": st.session_state['precisa_salvar'] = False
+            return True
+        except Exception as e:
+            time.sleep(1)
+    
+    # Falhou todas
+    st.toast(f"☁️ Erro ao salvar '{nome_aba}'. Tentarei no próximo ciclo.", icon="⏳")
+    st.session_state['precisa_salvar'] = True
+    return False
+
+# ==============================================================================
 
 def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
@@ -361,7 +419,7 @@ def carregar_tudo(force=False):
         if not st.session_state['df_vip'].empty: st.session_state['df_vip']['id'] = st.session_state['df_vip']['id'].apply(normalizar_id)
         sanitizar_conflitos()
         st.session_state['last_static_update'] = now
-     
+      
     if 'historico_full' not in st.session_state or force:
         df = carregar_aba("Historico", COLS_HIST)
         if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
@@ -386,10 +444,10 @@ def carregar_tudo(force=False):
             if 'historico_full' not in st.session_state:
                 st.session_state['historico_full'] = pd.DataFrame(columns=COLS_HIST)
                 st.session_state['historico_sinais'] = []
-     
+      
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
         st.session_state['jogos_salvos_bigdata_carregados'] = True
-     
+      
     st.session_state['last_db_update'] = now
 
 def adicionar_historico(item):
@@ -923,7 +981,7 @@ def enviar_relatorio_bi(token, chat_ids):
                     nome_vilao = vilao.index[0] if not vilao.empty else "Geral"
                     qtd_vilao = vilao.values[0] if not vilao.empty else 0
                     
-                    lista_piores.append(f"💀 {liga}: {int(row['Reds'])} Reds\n   ↳ <i>Culpa: {nome_vilao} ({qtd_vilao}R)</i>")
+                    lista_piores.append(f"💀 {liga}: {int(row['Reds'])} Reds\n  ↳ <i>Culpa: {nome_vilao} ({qtd_vilao}R)</i>")
             
             piores_ligas_msg = "\n".join(lista_piores)
 
@@ -1646,13 +1704,14 @@ if st.session_state.ROBO_LIGADO:
                             elif l_id in df_obs['id'].values: l_nm += " ⚠️"
                             agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
                 except: pass
-        if st.session_state.get('precisa_salvar') and 'historico_full' in st.session_state:
-            df_memoria = st.session_state['historico_full']
-            if not df_memoria.empty:
-                sucesso = salvar_aba("Historico", df_memoria)
-                if sucesso:
-                    st.session_state['precisa_salvar'] = False
-                    st.toast("💾 Dados salvos com sucesso!")
+        
+        # --- [BLOCO DE PERSISTÊNCIA E RETRY] ---
+        # Tenta salvar dados pendentes se houver (inclusive histórico)
+        if st.session_state.get('precisa_salvar'):
+            if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
+                st.caption("⏳ Sincronizando dados pendentes...")
+                salvar_aba("Historico", st.session_state['historico_full'])
+        
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
         else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         hist_hj = pd.DataFrame(st.session_state['historico_sinais'])
