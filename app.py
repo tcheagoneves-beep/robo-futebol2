@@ -1593,19 +1593,11 @@ if st.session_state.ROBO_LIGADO:
                         g = d['Resultado'].str.contains('GREEN', na=False).sum(); r = d['Resultado'].str.contains('RED', na=False).sum(); t = g + r; wr = (g/t*100) if t > 0 else 0
                         return f"{g}G - {r}R ({wr:.0f}%)"
                     def fmt_ia_stats(periodo_df, label_periodo):
-    # Note o espaço vazio antes do 'if' abaixo. Isso é obrigatório.
-    if 'Opiniao_IA' not in periodo_df.columns: return ""
-
-    # Filtra apenas jogos finalizados (Green ou Red)
-    d_fin = periodo_df[periodo_df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-
-    # Calcula individualmente apenas o que você quer
-    stats_aprov = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Aprovado'])
-    stats_risk = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Arriscado'])
-    stats_sniper = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Sniper'])
-
-    # Monta o texto apenas com essas 3 linhas
-    return f"🤖 IA ({label_periodo}):\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}\n🎯 Sniper: {stats_sniper}"
+                        if 'Opiniao_IA' not in periodo_df.columns: return ""
+                        d_fin = periodo_df[periodo_df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                        stats_aprov = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Aprovado'])
+                        stats_risk = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Arriscado'])
+                        return f"🤖 IA ({label_periodo}):\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}"
                     
                     msg_ia_hoje = fmt_ia_stats(d_hoje, "Hoje"); msg_ia_7d = fmt_ia_stats(d_7d, "7 Dias"); msg_ia_30d = fmt_ia_stats(d_30d, "30 Dias"); msg_ia_total = fmt_ia_stats(d_total, "Geral")
                     if 'bi_filter' not in st.session_state: st.session_state['bi_filter'] = "Tudo"
@@ -1644,34 +1636,15 @@ if st.session_state.ROBO_LIGADO:
                                 else: st.success("Nenhuma liga com Reds significativos.")
                         st.divider()
                         st.markdown("### 🧠 Auditoria da IA (Aprovações vs Resultado)")
-
-if 'Opiniao_IA' in df_show.columns:
-    # 1. Pega apenas jogos finalizados
-    df_audit = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
-    
-    # 2. FILTRO RIGOROSO: Mantém APENAS as categorias desejadas
-    categorias_desejadas = ['Aprovado', 'Arriscado', 'Sniper']
-    df_audit = df_audit[df_audit['Opiniao_IA'].isin(categorias_desejadas)]
-    
-    if not df_audit.empty:
-        # 3. Cria a tabela SEM margens (margins=False remove a linha "All")
-        pivot = pd.crosstab(df_audit['Opiniao_IA'], df_audit['Resultado'], margins=False)
-        
-        # Garante que as colunas Green/Red existam
-        if '✅ GREEN' not in pivot.columns: pivot['✅ GREEN'] = 0
-        if '❌ RED' not in pivot.columns: pivot['❌ RED'] = 0
-        
-        # Recalcula totais e winrate manualmente
-        pivot['Total'] = pivot['✅ GREEN'] + pivot['❌ RED']
-        pivot['Winrate %'] = (pivot['✅ GREEN'] / pivot['Total'] * 100)
-        
-        # Formatação visual
-        format_dict = {'Winrate %': '{:.2f}%', 'Total': '{:.0f}', '✅ GREEN': '{:.0f}', '❌ RED': '{:.0f}'}
-        
-        # Exibe a tabela limpa
-        st.dataframe(pivot.style.format(format_dict).highlight_max(axis=0, color='#1F4025'), use_container_width=True)
-    else:
-        st.info("Nenhuma entrada Aprovada, Arriscada ou Sniper encontrada no período.")
+                        if 'Opiniao_IA' in df_show.columns:
+                            df_audit = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                            if not df_audit.empty:
+                                pivot = pd.crosstab(df_audit['Opiniao_IA'], df_audit['Resultado'], margins=True)
+                                if '✅ GREEN' in pivot.columns and 'All' in pivot.columns: pivot['Winrate %'] = (pivot['✅ GREEN'] / pivot['All'] * 100)
+                                format_dict = {'Winrate %': '{:.2f}%'}
+                                for col in pivot.columns:
+                                    if col != 'Winrate %': format_dict[col] = '{:.0f}'
+                                st.dataframe(pivot.style.format(format_dict, na_rep="-").highlight_max(axis=0, color='#1F4025'), use_container_width=True)
                         st.markdown("### 📈 Performance por Estratégia")
                         st_s = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                         if not st_s.empty:
