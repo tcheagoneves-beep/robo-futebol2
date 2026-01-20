@@ -724,7 +724,9 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw):
         return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto}</b> - {motivo_final[:90]}" 
     except Exception as e:
         if "429" in str(e): return "\n🤖 <b>IA:</b> (Ocupada)"
-        return ""def analisar_bi_com_ia():
+        return ""
+
+def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados."
