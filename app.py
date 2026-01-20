@@ -1593,16 +1593,17 @@ if st.session_state.ROBO_LIGADO:
                         g = d['Resultado'].str.contains('GREEN', na=False).sum(); r = d['Resultado'].str.contains('RED', na=False).sum(); t = g + r; wr = (g/t*100) if t > 0 else 0
                         return f"{g}G - {r}R ({wr:.0f}%)"
                     def fmt_ia_stats(periodo_df, label_periodo):
+    # Note o espaço vazio antes do 'if' abaixo. Isso é obrigatório.
     if 'Opiniao_IA' not in periodo_df.columns: return ""
-    
+
     # Filtra apenas jogos finalizados (Green ou Red)
     d_fin = periodo_df[periodo_df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-    
+
     # Calcula individualmente apenas o que você quer
     stats_aprov = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Aprovado'])
     stats_risk = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Arriscado'])
     stats_sniper = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Sniper'])
-    
+
     # Monta o texto apenas com essas 3 linhas
     return f"🤖 IA ({label_periodo}):\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}\n🎯 Sniper: {stats_sniper}"
                     
