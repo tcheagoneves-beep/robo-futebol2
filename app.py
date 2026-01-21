@@ -1347,8 +1347,7 @@ with st.sidebar:
             salvar_aba("Historico", st.session_state['historico_full'])
             st.session_state['confirmar_reset'] = False; st.rerun()
         if c2.button("❌ NÃO"): st.session_state['confirmar_reset'] = False; st.rerun()
-
-if st.session_state.ROBO_LIGADO:
+            if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
         carregar_tudo()
         s_padrao = st.session_state.get('stake_padrao', 10.0)
@@ -1459,6 +1458,11 @@ if st.session_state.ROBO_LIGADO:
                     medias_gols = buscar_media_gols_ultimos_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
                     
                     for s in lista_sinais:
+                        # --- MODIFICAÇÃO PARA EXIBIR CLASSIFICAÇÃO ---
+                        nome_home_display = f"{home} ({rank_h}º)" if rank_h else home
+                        nome_away_display = f"{away} ({rank_a}º)" if rank_a else away
+                        # ---------------------------------------------
+
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         txt_pressao = gerar_barra_pressao(rh, ra) 
                         
@@ -1503,7 +1507,8 @@ if st.session_state.ROBO_LIGADO:
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
                         if adicionar_historico(item):
                             prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                            msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {home} 🆚 {away}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{prob}{opiniao_txt}"
+                            # MENSAGEM DO TELEGRAM ATUALIZADA AQUI:
+                            msg = f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{prob}{opiniao_txt}"
                             enviar_telegram(safe_token, safe_chat, msg)
                             st.toast(f"Sinal Enviado: {s['tag']}")
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
