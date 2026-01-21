@@ -144,7 +144,7 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# --- MAPEAMENTO DE LÓGICA PARA IA (ATUALIZADO COM BIG DATA) ---
+# --- MAPEAMENTO DE LÓGICA PARA IA (ATUALIZADO) ---
 MAPA_LOGICA_ESTRATEGIAS = {
     "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
     "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
@@ -1870,3 +1870,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+        
