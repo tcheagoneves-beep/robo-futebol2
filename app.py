@@ -144,7 +144,7 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# --- MAPEAMENTO DE LÓGICA PARA IA ---
+# --- MAPEAMENTO DE LÓGICA PARA IA (ATUALIZADO COM BIG DATA) ---
 MAPA_LOGICA_ESTRATEGIAS = {
     "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
     "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
@@ -155,7 +155,10 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "⚔️ Choque Líderes": "Dois Tops, Tempo <= 7, Chutes >= 2.",
     "🥊 Briga de Rua": "Times Mid, Tempo <= 7, Chutes 2 a 3.",
     "❄️ Jogo Morno": "Times Z4, Tempo 15-16, 0 Chutes. Under HT.",
-    "💎 GOLDEN BET": "75-85 min, Diferença <= 1, Chutes >= 16, SoG >= 8. Pressão extrema."
+    "💎 GOLDEN BET": "75-85 min, Diferença <= 1, Chutes >= 16, SoG >= 8. Pressão extrema.",
+    "🏹 Tiroteio Elite": "Ligas Top, Tempo 15-25, Chutes > 6. Jogo muito aberto.",
+    "⚡ Contra-Ataque Letal": "Posse < 35% mas vencendo ou empatando com SoG > 2.",
+    "🚩 Pressão Escanteios": "Muitos escanteios (>5) e chutes na área, indicando gol maduro."
 }
 
 # --- MAPA DE ODDS TEÓRICAS ---
@@ -169,7 +172,10 @@ MAPA_ODDS_TEORICAS = {
     "⚔️ Choque Líderes": {"min": 1.40, "max": 1.60},
     "🥊 Briga de Rua": {"min": 1.40, "max": 1.60},
     "❄️ Jogo Morno": {"min": 1.20, "max": 1.35},
-    "💎 GOLDEN BET": {"min": 1.80, "max": 2.40}
+    "💎 GOLDEN BET": {"min": 1.80, "max": 2.40},
+    "🏹 Tiroteio Elite": {"min": 1.40, "max": 1.60},
+    "⚡ Contra-Ataque Letal": {"min": 1.60, "max": 2.20},
+    "🚩 Pressão Escanteios": {"min": 1.50, "max": 1.80}
 }
 
 # ==============================================================================
@@ -803,20 +809,94 @@ def analisar_financeiro_com_ia(stake, banca):
 
 def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
-    if db_firestore:
-        try:
-            docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(100).stream()
-            data = [d.to_dict() for d in docs]
-            if len(data) < 5: return "Coletando dados..."
-            amostra = json.dumps(data) 
-        except: return "Erro Firebase."
-    else: return "Firebase Offline."
+    if not db_firestore: return "Firebase Offline."
+    
     try:
-        prompt_criacao = f"Cientista de Dados. Analise CSV (JSON): {amostra}. Crie padrão ESTATÍSTICO GLOBAL lucrativo. Saída: Nome, Regra e Lógica."
+        # 1. Busca mais dados (últimos 200 jogos para ter relevância estatística)
+        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(200).stream()
+        data_raw = [d.to_dict() for d in docs]
+        
+        if len(data_raw) < 10: return "Coletando dados... (Mínimo 10 jogos no BigData)"
+        
+        # 2. ENGENHERIA DE DADOS (O Segredo)
+        # Transformamos JSON bruto em DataFrame para criar métricas avançadas
+        df = pd.DataFrame(data_raw)
+        
+        # Extrair dados aninhados do JSON (estatisticas)
+        df['chutes_totais'] = df['estatisticas'].apply(lambda x: x.get('chutes_total', 0))
+        df['chutes_gol'] = df['estatisticas'].apply(lambda x: x.get('chutes_gol', 0))
+        df['escanteios'] = df['estatisticas'].apply(lambda x: x.get('escanteios', 0))
+        
+        # Tratamento do Placar para saber se foi Over/Under/HomeWin
+        def analisar_placar(placar):
+            try:
+                h, a = map(int, placar.split('x'))
+                return {'gols_total': h+a, 'vencedor': 'Casa' if h>a else 'Fora' if a>h else 'Empate'}
+            except: return {'gols_total': 0, 'vencedor': 'Empate'}
+            
+        dados_placar = df['placar_final'].apply(analisar_placar).apply(pd.Series)
+        df = pd.concat([df, dados_placar], axis=1)
+        
+        # 3. CRIAÇÃO DE MÉTRICAS AVANÇADAS (KPIs)
+        # Eficiência: Quantos chutes precisa para sair 1 gol?
+        df['eficiencia'] = (df['gols_total'] / df['chutes_gol']).fillna(0)
+        # Pressão: Soma de cantos e chutes no gol
+        df['indice_pressao'] = df['escanteios'] + df['chutes_gol']
+        
+        # 4. FILTRAR CENÁRIOS LUCRATIVOS (Para enviar o "filé mignon" pra IA)
+        # Vamos pegar os jogos que foram "Over 2.5" e ver o que eles tinham em comum
+        jogos_over = df[df['gols_total'] > 2.5]
+        media_chutes_over = jogos_over['chutes_totais'].mean()
+        media_pressao_over = jogos_over['indice_pressao'].mean()
+        
+        # Vamos pegar jogos onde a Zebra ganhou (Visitante venceu)
+        zebras = df[df['vencedor'] == 'Fora']
+        media_rating_zebra = 0
+        try: media_rating_zebra = pd.to_numeric(zebras['rating_away'], errors='coerce').mean()
+        except: pass
+
+        # 5. RESUMO ESTRUTURADO PARA A IA
+        # Ao invés de mandar 200 linhas brutas, mandamos um resumo estatístico rico
+        resumo_stat = f"""
+        DATASET ANALISADO: {len(df)} Jogos Reais.
+        
+        PADRÕES DOS JOGOS OVER 2.5 GOLS (Goleadas):
+        - Média de Chutes Totais nestes jogos: {media_chutes_over:.1f}
+        - Índice de Pressão (Cantos + Chutes Gol) nestes jogos: {media_pressao_over:.1f}
+        
+        PADRÕES DAS ZEBRAS (Visitante Venceu):
+        - Rating médio do Visitante quando venceu: {media_rating_zebra:.2f}
+        - Total de jogos onde visitante venceu: {len(zebras)}
+        
+        AMOSTRA DETALHADA DE 5 JOGOS ALEATÓRIOS (JSON):
+        {df[['jogo', 'placar_final', 'chutes_totais', 'indice_pressao', 'rating_home', 'rating_away']].sample(min(5, len(df))).to_json(orient='records')}
+        """
+
+        # 6. O PROMPT DE CIENTISTA DE DADOS
+        prompt_criacao = f"""
+        Atue como um CIENTISTA DE DADOS SÊNIOR especializado em Futebol e Betting.
+        Eu processei 200 jogos do meu banco de dados e calculei as seguintes métricas:
+        
+        {resumo_stat}
+        
+        SUA MISSÃO:
+        Identifique uma "Ineficiência de Mercado" ou um "Padrão de Ouro" com base nesses números.
+        Eu quero criar uma nova estratégia para meu robô.
+        
+        REQUISITOS DA RESPOSTA:
+        1. Nome da Estratégia (Criativo e Técnico).
+        2. A Regra Matemática (Ex: "Entrar se Chutes > X e Rating > Y"). NÃO use termos vagos como "pressão alta", use números.
+        3. A Justificativa Estatística (Por que isso funciona baseado nos dados acima?).
+        4. O Gatilho (Qual o momento exato de entrada? HT? FT? Minuto 70?).
+        
+        Seja direto. Não use disclaimers genéricos. Foque na matemática.
+        """
+        
         response = model_ia.generate_content(prompt_criacao)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
-    except Exception as e: return f"Erro na criação: {e}"
+
+    except Exception as e: return f"Erro na análise de Big Data: {e}"
 
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "⚠️ IA Desconectada."
@@ -856,8 +936,7 @@ def otimizar_estrategias_existentes_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro IA: {e}"
-
-def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
+        def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
@@ -866,6 +945,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
         SINAIS = []
+        
+        # --- ESTRATÉGIAS PADRÃO ---
         if tempo <= 30 and (j['goals']['home'] + j['goals']['away']) >= 2: 
             SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"{sh_h+sh_a} Chutes", "rh": rh, "ra": ra})
         if (j['goals']['home'] + j['goals']['away']) == 0:
@@ -876,6 +957,38 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if tempo <= 60:
             if j['goals']['home'] <= j['goals']['away'] and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
             if j['goals']['away'] <= j['goals']['home'] and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
+        
+        # --- NOVAS ESTRATÉGIAS BASEADAS NA ANÁLISE DO BIG DATA ---
+        
+        # 1. REGRA: Alto Volume em Ligas Específicas (Tiroteio Elite)
+        if 15 <= tempo <= 25:
+            total_chutes = sh_h + sh_a
+            if total_chutes >= 6 and (sog_h + sog_a) >= 3:
+                SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": "Over Gols HT/FT (Jogo Acelerado)", "stats": f"{total_chutes} Chutes em {tempo}min", "rh": rh, "ra": ra})
+
+        # 2. REGRA: Posse de Bola vs Eficiência (Contra-Ataque Letal)
+        try:
+            posse_h_val = next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")
+            posse_h = int(str(posse_h_val).replace('%', ''))
+        except: posse_h = 50
+        
+        if posse_h <= 35 and sog_h >= 2 and j['goals']['home'] >= j['goals']['away']:
+             SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Casa ou Over (Time reativo perigoso)", "stats": f"Posse {posse_h}% vs {sog_h} SoG", "rh": rh, "ra": ra})
+        elif posse_h >= 65 and sog_a >= 2 and j['goals']['away'] >= j['goals']['home']:
+             SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Visitante ou Over (Time reativo perigoso)", "stats": f"Posse {100-posse_h}% vs {sog_a} SoG", "rh": rh, "ra": ra})
+
+        # 3. REGRA: Escanteios como Indicador (Pressão Escanteios)
+        ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
+        chutes_area_h = get_v(stats_h, 'Shots insidebox'); chutes_area_a = get_v(stats_a, 'Shots insidebox')
+        
+        if tempo >= 30:
+            if ck_h >= 5 and chutes_area_h >= 4 and j['goals']['home'] <= j['goals']['away']:
+                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": "Over Gols ou Canto Limite (Pressão Total)", "stats": f"{ck_h} Cantos / {chutes_area_h} Ch. Área", "rh": rh, "ra": ra})
+            if ck_a >= 5 and chutes_area_a >= 4 and j['goals']['away'] <= j['goals']['home']:
+                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": "Over Gols ou Canto Limite (Pressão Total)", "stats": f"{ck_a} Cantos / {chutes_area_a} Ch. Área", "rh": rh, "ra": ra})
+
+        # --- FIM NOVAS ESTRATÉGIAS ---
+
         if rank_home and rank_away:
             is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
             if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
@@ -894,6 +1007,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
         return SINAIS
     except: return []
+
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -1756,4 +1870,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
