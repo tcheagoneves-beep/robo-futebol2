@@ -812,51 +812,61 @@ def criar_estrategia_nova_ia():
     if not db_firestore: return "Firebase Offline."
     
     try:
-        # 1. Busca mais dados (últimos 200 jogos para ter relevância estatística)
+        # 1. Busca dados
         docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(200).stream()
         data_raw = [d.to_dict() for d in docs]
         
         if len(data_raw) < 10: return "Coletando dados... (Mínimo 10 jogos no BigData)"
         
-        # 2. ENGENHERIA DE DADOS (O Segredo)
-        # Transformamos JSON bruto em DataFrame para criar métricas avançadas
+        # 2. ENGENHERIA DE DADOS
         df = pd.DataFrame(data_raw)
         
-        # Extrair dados aninhados do JSON (estatisticas)
-        df['chutes_totais'] = df['estatisticas'].apply(lambda x: x.get('chutes_total', 0))
-        df['chutes_gol'] = df['estatisticas'].apply(lambda x: x.get('chutes_gol', 0))
-        df['escanteios'] = df['estatisticas'].apply(lambda x: x.get('escanteios', 0))
+        # --- CORREÇÃO DO ERRO (VACINA) ---
+        # Se os dados antigos não tiverem rating, cria a coluna preenchida com 0
+        if 'rating_home' not in df.columns: df['rating_home'] = 0
+        if 'rating_away' not in df.columns: df['rating_away'] = 0
+        # ---------------------------------
         
-        # Tratamento do Placar para saber se foi Over/Under/HomeWin
+        # Extrair dados aninhados do JSON (estatisticas)
+        # Proteção extra caso estatisticas venha vazio
+        def get_stat(row, key):
+            return row.get(key, 0) if isinstance(row, dict) else 0
+
+        df['chutes_totais'] = df['estatisticas'].apply(lambda x: get_stat(x, 'chutes_total'))
+        df['chutes_gol'] = df['estatisticas'].apply(lambda x: get_stat(x, 'chutes_gol'))
+        df['escanteios'] = df['estatisticas'].apply(lambda x: get_stat(x, 'escanteios'))
+        
+        # Tratamento do Placar
         def analisar_placar(placar):
             try:
-                h, a = map(int, placar.split('x'))
+                h, a = map(int, str(placar).split('x'))
                 return {'gols_total': h+a, 'vencedor': 'Casa' if h>a else 'Fora' if a>h else 'Empate'}
             except: return {'gols_total': 0, 'vencedor': 'Empate'}
             
         dados_placar = df['placar_final'].apply(analisar_placar).apply(pd.Series)
         df = pd.concat([df, dados_placar], axis=1)
         
-        # 3. CRIAÇÃO DE MÉTRICAS AVANÇADAS (KPIs)
-        # Eficiência: Quantos chutes precisa para sair 1 gol?
+        # 3. CRIAÇÃO DE MÉTRICAS AVANÇADAS
         df['eficiencia'] = (df['gols_total'] / df['chutes_gol']).fillna(0)
-        # Pressão: Soma de cantos e chutes no gol
         df['indice_pressao'] = df['escanteios'] + df['chutes_gol']
         
-        # 4. FILTRAR CENÁRIOS LUCRATIVOS (Para enviar o "filé mignon" pra IA)
-        # Vamos pegar os jogos que foram "Over 2.5" e ver o que eles tinham em comum
+        # 4. FILTRAR CENÁRIOS
         jogos_over = df[df['gols_total'] > 2.5]
-        media_chutes_over = jogos_over['chutes_totais'].mean()
-        media_pressao_over = jogos_over['indice_pressao'].mean()
+        media_chutes_over = jogos_over['chutes_totais'].mean() if not jogos_over.empty else 0
+        media_pressao_over = jogos_over['indice_pressao'].mean() if not jogos_over.empty else 0
         
-        # Vamos pegar jogos onde a Zebra ganhou (Visitante venceu)
         zebras = df[df['vencedor'] == 'Fora']
         media_rating_zebra = 0
-        try: media_rating_zebra = pd.to_numeric(zebras['rating_away'], errors='coerce').mean()
-        except: pass
+        if not zebras.empty:
+            try: media_rating_zebra = pd.to_numeric(zebras['rating_away'], errors='coerce').mean()
+            except: pass
 
-        # 5. RESUMO ESTRUTURADO PARA A IA
-        # Ao invés de mandar 200 linhas brutas, mandamos um resumo estatístico rico
+        # 5. RESUMO PARA A IA
+        # Agora o .sample não vai dar erro pois garantimos as colunas lá em cima
+        amostra_cols = ['jogo', 'placar_final', 'chutes_totais', 'indice_pressao', 'rating_home', 'rating_away']
+        # Filtra apenas colunas que realmente existem para evitar erro no sample
+        cols_existentes = [c for c in amostra_cols if c in df.columns]
+        
         resumo_stat = f"""
         DATASET ANALISADO: {len(df)} Jogos Reais.
         
@@ -868,28 +878,23 @@ def criar_estrategia_nova_ia():
         - Rating médio do Visitante quando venceu: {media_rating_zebra:.2f}
         - Total de jogos onde visitante venceu: {len(zebras)}
         
-        AMOSTRA DETALHADA DE 5 JOGOS ALEATÓRIOS (JSON):
-        {df[['jogo', 'placar_final', 'chutes_totais', 'indice_pressao', 'rating_home', 'rating_away']].sample(min(5, len(df))).to_json(orient='records')}
+        AMOSTRA DETALHADA (JSON):
+        {df[cols_existentes].sample(min(5, len(df))).to_json(orient='records')}
         """
 
-        # 6. O PROMPT DE CIENTISTA DE DADOS
+        # 6. PROMPT
         prompt_criacao = f"""
-        Atue como um CIENTISTA DE DADOS SÊNIOR especializado em Futebol e Betting.
-        Eu processei 200 jogos do meu banco de dados e calculei as seguintes métricas:
-        
+        Atue como um CIENTISTA DE DADOS SÊNIOR (Betting).
+        Dados processados do meu banco:
         {resumo_stat}
         
-        SUA MISSÃO:
-        Identifique uma "Ineficiência de Mercado" ou um "Padrão de Ouro" com base nesses números.
-        Eu quero criar uma nova estratégia para meu robô.
+        SUA MISSÃO: Identifique um "Padrão de Ouro" estatístico nos dados acima.
+        Crie uma estratégia para meu robô.
         
-        REQUISITOS DA RESPOSTA:
-        1. Nome da Estratégia (Criativo e Técnico).
-        2. A Regra Matemática (Ex: "Entrar se Chutes > X e Rating > Y"). NÃO use termos vagos como "pressão alta", use números.
-        3. A Justificativa Estatística (Por que isso funciona baseado nos dados acima?).
-        4. O Gatilho (Qual o momento exato de entrada? HT? FT? Minuto 70?).
-        
-        Seja direto. Não use disclaimers genéricos. Foque na matemática.
+        REQUISITOS:
+        1. Nome Criativo.
+        2. Regra Matemática (Ex: Chutes > X, Pressão > Y).
+        3. Justificativa baseada nos números apresentados.
         """
         
         response = model_ia.generate_content(prompt_criacao)
@@ -936,7 +941,7 @@ def otimizar_estrategias_existentes_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro IA: {e}"
-def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
+    def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
@@ -1354,7 +1359,7 @@ def fetch_stats_single(fid, api_key):
         r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
-        # ==============================================================================
+# ==============================================================================
 # SIDEBAR E LOOP PRINCIPAL (EXECUÇÃO)
 # ==============================================================================
 with st.sidebar:
@@ -1870,5 +1875,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-        
-
