@@ -936,7 +936,7 @@ def otimizar_estrategias_existentes_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro IA: {e}"
-        def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
+def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
@@ -1871,3 +1871,4 @@ else:
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
         
+
