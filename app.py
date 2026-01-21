@@ -26,26 +26,54 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ==============================================================================
-# 1. CONFIGURAÇÃO INICIAL E CSS
+# 1. CONFIGURAÇÃO INICIAL E CSS (OTIMIZADO PARA MOBILE)
 # ==============================================================================
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 placeholder_root = st.empty()
 
 st.markdown("""
 <style>
+    /* Ajustes Gerais */
     .stApp {background-color: #0E1117; color: white;}
-    .main .block-container { max-width: 100%; padding: 1rem 1rem 5rem 1rem; }
-    .metric-box { background-color: #1A1C24; border: 1px solid #333; border-radius: 8px; padding: 15px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-    .metric-title {font-size: 12px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 5px;}
-    .metric-value {font-size: 24px; font-weight: bold; color: #00FF00;}
-    .metric-sub {font-size: 12px; color: #cccccc; margin-top: 5px;}
-    .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
-    .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
-    .status-warning { background-color: #3B3B10; color: #FFFF00; border: 1px solid #FFFF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 15px; font-weight: bold;}
-    .stButton button { width: 100%; height: 50px !important; font-size: 16px !important; font-weight: bold !important; background-color: #262730; border: 1px solid #4e4e4e; color: white; }
+    /* Aumenta o padding inferior para o footer não cobrir o último item */
+    .main .block-container { max-width: 100%; padding: 1rem 1rem 80px 1rem; }
+    
+    /* Cards de Métricas */
+    .metric-box { background-color: #1A1C24; border: 1px solid #333; border-radius: 8px; padding: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); margin-bottom: 10px; }
+    .metric-title {font-size: 10px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 2px;}
+    .metric-value {font-size: 20px; font-weight: bold; color: #00FF00;}
+    .metric-sub {font-size: 10px; color: #cccccc;}
+    
+    /* Status Box */
+    .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
+    .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
+    .status-warning { background-color: #3B3B10; color: #FFFF00; border: 1px solid #FFFF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
+    
+    /* Botões Otimizados para Toque (Mobile) */
+    .stButton button { width: 100%; height: 55px !important; font-size: 18px !important; font-weight: bold !important; background-color: #262730; border: 1px solid #4e4e4e; color: white; border-radius: 8px; }
     .stButton button:hover { border-color: #00FF00; color: #00FF00; }
-    .footer-timer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #0E1117; color: #FFD700; text-align: center; padding: 8px; font-size: 14px; border-top: 1px solid #333; z-index: 9999; }
-    .stDataFrame { font-size: 13px; }
+    
+    /* Footer Timer Mobile-Friendly */
+    .footer-timer { 
+        position: fixed; 
+        left: 0; 
+        bottom: 0; 
+        width: 100%; 
+        background-color: #0E1117; 
+        color: #FFD700; 
+        text-align: center; 
+        padding: 10px; 
+        font-size: 12px; 
+        border-top: 1px solid #333; 
+        z-index: 99999; 
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.5);
+    }
+    
+    .stDataFrame { font-size: 12px; }
+    
+    /* Ocultar menu padrão */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -130,8 +158,7 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "💎 GOLDEN BET": "75-85 min, Diferença <= 1, Chutes >= 16, SoG >= 8. Pressão extrema."
 }
 
-# --- MAPA DE ODDS TEÓRICAS (QUANDO A API FALHA) ---
-# Define a Odd Base (Minima) e a Odd Teto (Maxima) estimadas para cada estratégia
+# --- MAPA DE ODDS TEÓRICAS ---
 MAPA_ODDS_TEORICAS = {
     "🟣 Porteira Aberta": {"min": 1.50, "max": 1.80},
     "⚡ Gol Relâmpago": {"min": 1.30, "max": 1.45},
@@ -269,19 +296,11 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
 
 # --- RATING HÍBRIDO (FIREBASE + API FALLBACK) ---
 def buscar_rating_inteligente(api_key, team_id):
-    """
-    Busca rating médio no Firebase. Se tiver pouco dado, busca o último jogo na API.
-    """
-    media_db = 0.0
-    qtd_db = 0
-    
-    # 1. Tenta buscar do Firebase (Local - Custo Zero)
+    media_db = 0.0; qtd_db = 0
     if db_firestore:
         try:
-            # Busca jogos onde o time foi mandante OU visitante
             docs_h = db_firestore.collection("BigData_Futebol").where("home_id", "==", str(team_id)).limit(20).stream()
             docs_a = db_firestore.collection("BigData_Futebol").where("away_id", "==", str(team_id)).limit(20).stream()
-            
             notas = []
             for d in docs_h:
                 dados = d.to_dict()
@@ -289,23 +308,18 @@ def buscar_rating_inteligente(api_key, team_id):
             for d in docs_a:
                 dados = d.to_dict()
                 if 'rating_away' in dados and float(dados['rating_away']) > 0: notas.append(float(dados['rating_away']))
-            
             if len(notas) >= 3:
                 return f"{(sum(notas)/len(notas)):.2f} (Média {len(notas)}j)"
         except: pass
 
-    # 2. Fallback: Busca API Último Jogo (Custo 1 call)
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"team": team_id, "last": "1", "status": "FT"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         if not res.get('response'): return "N/A"
         last_fid = res['response'][0]['fixture']['id']
-        
-        # Busca Players
         url_stats = "https://v3.football.api-sports.io/fixtures/players"
         p_res = requests.get(url_stats, headers={"x-apisports-key": api_key}, params={"fixture": last_fid}).json()
-        
         if not p_res.get('response'): return "N/A"
         for t in p_res['response']:
             if t['team']['id'] == team_id:
@@ -542,7 +556,6 @@ def salvar_bigdata(jogo_api, stats):
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         def sanitize(val): return str(val) if val is not None else "0"
         
-        # BUSCA NOTAS PARA SALVAR (O investimento do futuro)
         rate_h = 0; rate_a = 0
         if 'API_KEY' in st.session_state:
             try:
@@ -567,11 +580,11 @@ def salvar_bigdata(jogo_api, stats):
             'fid': fid,
             'data_hora': get_time_br().strftime('%Y-%m-%d %H:%M'),
             'liga': sanitize(jogo_api['league']['name']),
-            'home_id': str(jogo_api['teams']['home']['id']), # Importante para busca
+            'home_id': str(jogo_api['teams']['home']['id']),
             'away_id': str(jogo_api['teams']['away']['id']),
             'jogo': f"{sanitize(jogo_api['teams']['home']['name'])} x {sanitize(jogo_api['teams']['away']['name'])}",
             'placar_final': f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}",
-            'rating_home': str(rate_h), # SALVANDO NO BANCO
+            'rating_home': str(rate_h),
             'rating_away': str(rate_a),
             'estatisticas': {
                 'chutes_total': gv(s1, 'Total Shots') + gv(s2, 'Total Shots'),
@@ -613,33 +626,20 @@ def buscar_agenda_cached(api_key, date_str):
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
 
-# --- NOVA FUNÇÃO DE ESTIMATIVA DE ODDS ---
 def estimar_odd_teorica(estrategia, tempo_jogo):
-    """
-    Gera uma Odd simulada realista baseada na estratégia e no tempo,
-    usada apenas quando a API não retorna o valor real.
-    """
     import random
-    
-    # 1. Pega os limites da estratégia ou usa um padrão neutro
     limites = MAPA_ODDS_TEORICAS.get(estrategia, {"min": 1.40, "max": 1.60})
     odd_base_min = limites['min']
     odd_base_max = limites['max']
-    
-    # 2. Ajuste pelo Tempo (Time Decay Simples para Over)
-    # Se o jogo está no final (ex: > 80), a odd tende ao teto ou passa dele
     fator_tempo = 0.0
     try:
         t = int(str(tempo_jogo).replace("'", ""))
-        if t > 80: fator_tempo = 0.20 # Odd explode no final
+        if t > 80: fator_tempo = 0.20
         elif t > 70: fator_tempo = 0.10
     except: pass
-
-    # 3. Calcula a Odd com uma variação aleatória para parecer mercado real
     odd_simulada = random.uniform(odd_base_min, odd_base_max) + fator_tempo
     return "{:.2f}".format(odd_simulada)
 
-# --- FUNÇÃO ATUALIZADA COM O CÁLCULO DE ODD ---
 def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0, tempo_jogo=0):
     try:
         url = "https://v3.football.api-sports.io/odds/live"
@@ -671,7 +671,6 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0, tempo_
                                 if raw_odd > 50: raw_odd = raw_odd / 1000
                                 return "{:.2f}".format(raw_odd)
                         except: pass
-        # Fallback Inteligente
         return estimar_odd_teorica(strategy_name, tempo_jogo)
     except: return estimar_odd_teorica(strategy_name, tempo_jogo)
 
@@ -704,20 +703,15 @@ def buscar_inteligencia(estrategia, liga, jogo):
     str_fontes = "+".join(fontes) if fontes else "Geral"
     return f"\n{'🔥' if prob_final >= 80 else '🔮' if prob_final > 40 else '⚠️'} <b>Prob: {prob_final:.0f}% ({str_fontes})</b>"
 
-# --- ODD PARA CÁLCULO FINANCEIRO ATUALIZADA ---
 def obter_odd_final_para_calculo(odd_registro, estrategia):
     try:
         valor = float(odd_registro)
         if valor <= 1.15: 
-            # Se a odd for muito baixa (erro), pega a média teórica da estratégia
             limites = MAPA_ODDS_TEORICAS.get(estrategia, {"min": 1.40, "max": 1.60})
             return (limites['min'] + limites['max']) / 2
         return valor
-    except: 
-        # Fallback genérico seguro
-        return 1.50
+    except: return 1.50
 
-# --- IA COM NOVOS DADOS ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context=""):
     if not IA_ATIVADA: return ""
     try:
@@ -733,25 +727,19 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     
     chutes_area_casa = gv(s1, 'Shots insidebox'); chutes_area_fora = gv(s2, 'Shots insidebox')
     dados_ricos = extrair_dados_completos(stats_raw)
-    nome_strat = estrategia.upper()
     aviso_memoria = ""
     if (rh == 0 and ra == 0) and chutes_totais > 10: aviso_memoria = "ATENÇÃO: Pressão zerada mas jogo movimentado."
     
-    # Prompt com DADOS EXTRAS (Histórico + Rating)
     prompt = f"""
     Atue como TRADER ESPORTIVO PROFISSIONAL.
     CENÁRIO: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
     Estratégia: {estrategia}
     
     MOMENTUM: Pressão {rh}x{ra} | Chutes Área {chutes_area_casa}x{chutes_area_fora} | {aviso_memoria}
-    
     {extra_context}
-    
     DADOS TÉCNICOS: {dados_ricos}
     
     MISSÃO: Validar se o jogo cumpre os requisitos para GOL.
-    CRITÉRIOS: APROVAR se houver pressão real. REJEITAR se jogo morto.
-    
     Responda EXATAMENTE: [Aprovado/Arriscado] - [Motivo curto usando dados de Rating/Histórico se disponíveis]
     """
     try:
@@ -807,7 +795,6 @@ def analisar_financeiro_com_ia(stake, banca):
             elif 'RED' in res:
                 lucro_total -= stake; investido += stake
         roi = (lucro_total / investido * 100) if investido > 0 else 0
-        odd_media = (sum(odds_greens)/len(odds_greens)) if odds_greens else 0
         prompt_fin = f"Gestor Financeiro. Dia: Banca Ini: {banca} | Fim: {banca+lucro_total}. Lucro: {lucro_total}. ROI: {roi}%. Feedback curto."
         response = model_ia.generate_content(prompt_fin)
         st.session_state['gemini_usage']['used'] += 1
@@ -907,8 +894,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
         return SINAIS
     except: return []
-
-def atualizar_stats_em_paralelo(jogos_alvo, api_key):
+        def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
@@ -919,22 +905,14 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
                 resultados[fid] = stats
                 update_api_usage(headers)
     return resultados
-    # ==============================================================================
+
+# ==============================================================================
 # BLOCO 2: TELEGRAM, LÓGICA DE JOGO E INTERFACE
 # ==============================================================================
 
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
     except: pass
-
-def _worker_telegram_photo(token, chat_id, photo_buffer, caption):
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendPhoto"
-        files = {'photo': photo_buffer}
-        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'HTML'}
-        res = requests.post(url, files=files, data=data, timeout=15)
-        if res.status_code != 200: st.error(f"Erro Telegram Foto ({res.status_code}): {res.text}")
-    except Exception as e: st.error(f"Erro envio foto: {e}")
 
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
@@ -1040,7 +1018,6 @@ def gerar_insights_matinais_ia(api_key):
                     ja_enviado = True; break
             if ja_enviado: continue
             
-            # --- COLETA DE DADOS AVANÇADOS (SNIPER) ---
             stats_50 = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             rate_h = buscar_rating_inteligente(api_key, j['teams']['home']['id'])
             rate_a = buscar_rating_inteligente(api_key, j['teams']['away']['id'])
@@ -1049,7 +1026,6 @@ def gerar_insights_matinais_ia(api_key):
             if stats_50:
                 txt_stats = f"HISTÓRICO (50j): Casa Over1.5 {stats_50['home']['over15_ft']}% | Fora Over1.5 {stats_50['away']['over15_ft']}%"
             txt_rating = f"RATING (MÉDIA/ÚLTIMO): Casa {rate_h} | Fora {rate_a}"
-            # ------------------------------------------
 
             url_odds = "https://v3.football.api-sports.io/odds"
             res_odds = requests.get(url_odds, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "6"}).json()
@@ -1073,17 +1049,14 @@ def gerar_insights_matinais_ia(api_key):
                 prompt_matinal = f"""
                 Atue como Tipster Profissional (Sniper). Analise:
                 {info_jogo}
-                
                 SUA MISSÃO: Encontre uma aposta de VALOR (Sniper) para este jogo.
                 REGRAS: 
                 1. Odds < 1.30 ignore vitória seca. 
                 2. OBRIGATÓRIO: Use o RATING e o HISTÓRICO 50 JOGOS para justificar sua escolha.
                 3. Se o Rating do favorito for baixo, cuidado.
-                
                 Formato Obrigatório: 
                 BET: [MERCADO] | MOTIVO: [Justificativa usando os dados fornecidos]
                 """
-                
                 resp_ia = model_ia.generate_content(prompt_matinal)
                 st.session_state['gemini_usage']['used'] += 1
                 texto_ia = resp_ia.text.strip()
@@ -1211,8 +1184,7 @@ def conferir_resultados_sniper(jogos_live, api_key):
     if updates: atualizar_historico_ram(updates)
 
 def verificar_var_rollback(jogos_live, token, chats):
-    if 'var_avisado_cache' not in st.session_state: 
-        st.session_state['var_avisado_cache'] = set()
+    if 'var_avisado_cache' not in st.session_state: st.session_state['var_avisado_cache'] = set()
     hist = st.session_state['historico_sinais']
     greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
     if not greens: return
@@ -1315,7 +1287,7 @@ with st.sidebar:
                     count_salvos = 0
                     for fid, stats in stats_recuperadas.items():
                         j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
-                        if j_obj: salvar_bigdata(j_obj, stats) # Corrigido 's' para 'stats'
+                        if j_obj: salvar_bigdata(j_obj, stats) 
                     st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
                 else: st.warning("Nenhum jogo finalizado pendente.")
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
@@ -1450,11 +1422,11 @@ if st.session_state.ROBO_LIGADO:
                 t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
                 if deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp:
-                         fid_res, s_res, h_res = fetch_stats_single(fid, safe_api)
-                         if s_res:
-                             st.session_state['controle_stats'][fid] = datetime.now()
-                             st.session_state[f"st_{fid}"] = s_res
-                             update_api_usage(h_res)
+                          fid_res, s_res, h_res = fetch_stats_single(fid, safe_api)
+                          if s_res:
+                              st.session_state['controle_stats'][fid] = datetime.now()
+                              st.session_state[f"st_{fid}"] = s_res
+                              update_api_usage(h_res)
                 stats = st.session_state.get(f"st_{fid}", [])
                 status_vis = "👁️" if stats else "💤"
                 
@@ -1482,19 +1454,16 @@ if st.session_state.ROBO_LIGADO:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
                     medias_gols = buscar_media_gols_ultimos_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
                     
-                    # --- COLETA DE DADOS AVANÇADOS ---
                     dados_50 = analisar_tendencia_50_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
                     nota_home = buscar_rating_inteligente(safe_api, j['teams']['home']['id'])
                     nota_away = buscar_rating_inteligente(safe_api, j['teams']['away']['id'])
                     
-                    # Prepara contexto para a IA
                     txt_history = ""
                     if dados_50:
                         txt_history = (f"HISTÓRICO 50 JOGOS: Casa(Over1.5: {dados_50['home']['over15_ft']}%, HT: {dados_50['home']['over05_ht']}%) "
                                        f"| Fora(Over1.5: {dados_50['away']['over15_ft']}%, HT: {dados_50['away']['over05_ht']}%)")
                     txt_rating_ia = f"RATING (MÉDIA/ÚLTIMO): Casa {nota_home} | Fora {nota_away}"
                     extra_ctx = f"{txt_history}\n{txt_rating_ia}"
-                    # ---------------------------------
 
                     for s in lista_sinais:
                         nome_home_display = f"{home} ({rank_h}º)" if rank_h else home
@@ -1516,9 +1485,7 @@ if st.session_state.ROBO_LIGADO:
                         
                         st.session_state['alertas_enviados'].add(uid_normal)
                         
-                        # --- MUDANÇA CRÍTICA AQUI: Passando 'tempo' para a função de odd ---
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga, tempo)
-                        # -------------------------------------------------------------------
 
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
@@ -1541,7 +1508,6 @@ if st.session_state.ROBO_LIGADO:
                         if adicionar_historico(item):
                             prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
                             
-                            # --- BLOCO VISUAL NOVO ---
                             texto_validacao = ""
                             if dados_50:
                                 h_stats = dados_50['home']; a_stats = dados_50['away']
@@ -1557,7 +1523,6 @@ if st.session_state.ROBO_LIGADO:
                             texto_sofa = ""
                             if nota_home != "N/A" and nota_away != "N/A":
                                 texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
-                            # -------------------------
 
                             msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
                             
@@ -1755,8 +1720,15 @@ if st.session_state.ROBO_LIGADO:
 
         with abas[7]: 
             df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
-            if not df_vip_show.empty: df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
-            st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
+            if not df_vip_show.empty: 
+                # Converte Strikes para número para ordenar corretamente
+                df_vip_show['Strikes_Num'] = pd.to_numeric(df_vip_show['Strikes'], errors='coerce').fillna(0).astype(int)
+                # Ordena do maior strike para o menor
+                df_vip_show = df_vip_show.sort_values(by='Strikes_Num', ascending=False)
+                # Formata visualmente
+                df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
+                st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
+            else: st.info("Nenhuma observação no momento.")
 
         with abas[8]:
             st.markdown(f"### 💾 Banco de Dados de Partidas (Firebase)")
