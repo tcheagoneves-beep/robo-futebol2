@@ -825,36 +825,97 @@ def criar_estrategia_nova_ia():
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "⚠️ IA Desconectada."
     if not db_firestore: return "⚠️ Firebase Offline."
+    
+    # 1. Carrega Histórico
     df_hist = st.session_state.get('historico_full', pd.DataFrame())
     if df_hist.empty: return "Sem histórico."
+    
+    # 2. Filtra Finalizados
     df_closed = df_hist[df_hist['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
-    if df_closed.empty: return "Nenhum sinal finalizado."
+    if df_closed.empty: return "Nenhum sinal finalizado para análise."
+
+    # 3. Carrega Big Data para cruzar estatísticas
     try:
-        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(200).stream()
+        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(300).stream()
         big_data_dict = {d.to_dict()['fid']: d.to_dict() for d in docs}
     except Exception as e: return f"Erro Firebase: {e}"
+
     analise_pacote = {}
     estrategias_unicas = df_closed['Estrategia'].unique()
+
+    # 4. Monta o Dossiê para a IA
     for strat in estrategias_unicas:
-        if strat not in MAPA_LOGICA_ESTRATEGIAS: continue
+        if strat not in MAPA_LOGICA_ESTRATEGIAS: continue # Pula estratégias desconhecidas
+        
         d_strat = df_closed[df_closed['Estrategia'] == strat]
         total = len(d_strat)
-        if total < 5: continue 
+        if total < 3: continue # Ignora amostra muito pequena
+        
         greens = d_strat[d_strat['Resultado'].str.contains('GREEN')]
         reds = d_strat[d_strat['Resultado'].str.contains('RED')]
         winrate = (len(greens) / total) * 100
+        
+        # Coleta estatísticas profundas dos REDS vs GREENS
         stats_reds = []
-        for fid in reds['FID'].values:
-            fid_str = str(fid)
-            if fid_str in big_data_dict:
-                stats_reds.append(big_data_dict[fid_str].get('estatisticas', {}))
-        if stats_reds:
-            try:
-                avg_chutes = sum([x.get('chutes_total', 0) for x in stats_reds]) / len(stats_reds)
-            except: avg_chutes = 0
-            analise_pacote[strat] = {"Winrate Atual": f"{winrate:.1f}%", "Qtd Reds": len(reds), "Perfil Reds (Chutes Média)": f"{avg_chutes:.1f}"}
-    if not analise_pacote: return "Dados insuficientes."
-    prompt_otimizacao = f"Analise os erros e sugira melhorias: {json.dumps(analise_pacote, indent=2, ensure_ascii=False)}"
+        stats_greens = []
+        
+        # Função auxiliar para pegar stats do BigData
+        def get_stats_list(df_subset):
+            lista_stats = []
+            for fid in df_subset['FID'].values:
+                fid_str = str(fid)
+                if fid_str in big_data_dict:
+                    lista_stats.append(big_data_dict[fid_str].get('estatisticas', {}))
+            return lista_stats
+
+        list_s_reds = get_stats_list(reds)
+        list_s_greens = get_stats_list(greens)
+
+        # Calcula médias para comparação
+        def media_campo(lista, campo):
+            vals = [float(x.get(campo, 0)) for x in lista if x.get(campo)]
+            return sum(vals)/len(vals) if vals else 0
+
+        # Monta o objeto rico para a IA
+        analise_pacote[strat] = {
+            "Descricao_Logica": MAPA_LOGICA_ESTRATEGIAS.get(strat, "Desconhecida"),
+            "Performance": {
+                "Winrate": f"{winrate:.1f}%",
+                "Total_Entradas": total,
+                "Qtd_Reds": len(reds)
+            },
+            "Raio_X_Comparativo": {
+                "Media_Chutes_Nos_Greens": f"{media_campo(list_s_greens, 'chutes_total'):.1f}",
+                "Media_Chutes_Nos_Reds": f"{media_campo(list_s_reds, 'chutes_total'):.1f}",
+                "Media_SoG_Nos_Reds": f"{media_campo(list_s_reds, 'chutes_gol'):.1f}", # SoG = Chutes no Gol
+                "Media_Escanteios_Nos_Reds": f"{media_campo(list_s_reds, 'escanteios_total'):.1f}"
+            }
+        }
+
+    if not analise_pacote: return "Dados insuficientes para análise robusta."
+
+    # 5. Prompt Melhorado (Dando Contexto para a IA)
+    prompt_otimizacao = f"""
+    Atue como um Especialista em Data Science de Apostas Esportivas (Senior).
+    
+    OBJETIVO: Analisar o desempenho das minhas estratégias atuais e sugerir refinos finos ("Fine Tuning") para reduzir os REDs.
+    
+    CONTEXTO:
+    - Abaixo apresento um JSON com minhas estratégias.
+    - "Descricao_Logica": A regra que o robô usa hoje para entrar.
+    - "Raio_X_Comparativo": A diferença estatística média entre os jogos que deram GREEN e os que deram RED.
+    
+    DADOS:
+    {json.dumps(analise_pacote, indent=2, ensure_ascii=False)}
+    
+    SUA TAREFA:
+    Para cada estratégia com Winrate abaixo de 70% ou com padrao claro nos Reds:
+    1. Aponte o padrão do erro (ex: "Nos Reds, a média de chutes é muito baixa").
+    2. Sugira UM ajuste na regra lógica (ex: "Aumentar filtro de chutes de 8 para 12").
+    
+    Seja direto e técnico. Não use emojis em excesso. Foco em matemática.
+    """
+    
     try:
         response = model_ia.generate_content(prompt_otimizacao)
         st.session_state['gemini_usage']['used'] += 1
