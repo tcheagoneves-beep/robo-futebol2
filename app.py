@@ -754,67 +754,53 @@ def criar_estrategia_nova_ia():
     if not db_firestore: return "Firebase Offline."
     
     try:
+        # Busca 200 jogos para ter profundidade
         docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(200).stream()
         data_raw = [d.to_dict() for d in docs]
         
         if len(data_raw) < 10: return "Coletando dados... (Mínimo 10 jogos no BigData)"
         
+        # Transformamos em DataFrame para limpeza rápida
         df = pd.DataFrame(data_raw)
         
-        if 'rating_home' not in df.columns: df['rating_home'] = 0
-        if 'rating_away' not in df.columns: df['rating_away'] = 0
-        
-        def get_stat(row, key):
-            return row.get(key, 0) if isinstance(row, dict) else 0
+        # Criamos uma string GIGANTE com o histórico real para a IA minerar
+        # Enviamos: Placar Final + Todas as Stats salvas no dicionário
+        historico_para_ia = ""
+        for _, row in df.head(150).iterrows():
+            historico_para_ia += f"Jogo: {row['jogo']} | Placar: {row['placar_final']} | Stats: {json.dumps(row.get('estatisticas', {}))} | Ratings: H:{row.get('rating_home')} A:{row.get('rating_away')}\n"
 
-        df['chutes_totais'] = df['estatisticas'].apply(lambda x: get_stat(x, 'chutes_total'))
-        df['chutes_gol'] = df['estatisticas'].apply(lambda x: get_stat(x, 'chutes_gol'))
-        df['escanteios'] = df['estatisticas'].apply(lambda x: get_stat(x, 'escanteios'))
-        
-        def analisar_placar(placar):
-            try:
-                h, a = map(int, str(placar).split('x'))
-                return {'gols_total': h+a, 'vencedor': 'Casa' if h>a else 'Fora' if a>h else 'Empate'}
-            except: return {'gols_total': 0, 'vencedor': 'Empate'}
-            
-        dados_placar = df['placar_final'].apply(analisar_placar).apply(pd.Series)
-        df = pd.concat([df, dados_placar], axis=1)
-        
-        df['eficiencia'] = (df['gols_total'] / df['chutes_gol']).fillna(0)
-        df['indice_pressao'] = df['escanteios'] + df['chutes_gol']
-        
-        jogos_over = df[df['gols_total'] > 2.5]
-        media_chutes_over = jogos_over['chutes_totais'].mean() if not jogos_over.empty else 0
-        media_pressao_over = jogos_over['indice_pressao'].mean() if not jogos_over.empty else 0
-        
-        zebras = df[df['vencedor'] == 'Fora']
-        media_rating_zebra = 0
-        if not zebras.empty:
-            try: media_rating_zebra = pd.to_numeric(zebras['rating_away'], errors='coerce').mean()
-            except: pass
+        prompt_analista_total = f"""
+        Atue como o MAIOR CIENTISTA DE DADOS de apostas esportivas do mundo.
+        Abaixo, entrego para você o histórico real de {len(df)} partidas monitoradas pelo meu robô, contendo Gols, Cantos, Posse, Ratings e tudo o que aconteceu no momento do sinal.
 
-        amostra_cols = ['jogo', 'placar_final', 'chutes_totais', 'indice_pressao', 'rating_home', 'rating_away']
-        cols_existentes = [c for c in amostra_cols if c in df.columns]
-        
-        resumo_stat = f"""
-        DATASET ANALISADO: {len(df)} Jogos Reais.
-        PADRÕES OVER 2.5 GOLS: Média Chutes {media_chutes_over:.1f}, Pressão {media_pressao_over:.1f}
-        PADRÕES ZEBRAS: Rating Visitante {media_rating_zebra:.2f}
-        AMOSTRA: {df[cols_existentes].sample(min(5, len(df))).to_json(orient='records')}
-        """
+        HISTÓRICO REAL:
+        {historico_para_ia}
 
-        prompt_criacao = f"""
-        Atue como CIENTISTA DE DADOS (Betting).
-        Dados: {resumo_stat}
-        MISSÃO: Identifique um "Padrão de Ouro" e crie uma estratégia.
-        SAÍDA: Nome, Regra Matemática (Ex: Chutes > X), Justificativa.
+        SUA MISSÃO:
+        Não seja genérico. Analise correlações ocultas. 
+        Exemplo: "Sempre que o Rating do Mandante é < 6.0 e o Visitante tem > 4 chutes, o jogo termina com X escanteios".
+
+        REQUISITOS DA RESPOSTA:
+        Crie 3 Estratégias DISTINTAS baseadas exclusivamente nos dados acima:
+        
+        1. ESTRATÉGIA DE GOLS (Foco em Over ou Under).
+        2. ESTRATÉGIA DE ESCANTEIOS (Foco em volume de cantos).
+        3. ESTRATÉGIA "SNIPER" (Foco em algo fora do comum: Cartões, Viradas, ou Zebras).
+
+        Para cada estratégia, forneça:
+        - Nome Técnico.
+        - Regra Matemática Rígida (Ex: Chutes > X + Posse < Y%).
+        - Gatilho de Tempo (Em qual minuto entrar).
+        - Justificativa (Cite exemplos desse histórico onde isso aconteceu).
+
+        FOQUE EM PADRÕES QUE SE REPETIRAM NO HISTÓRICO ACIMA.
         """
         
-        response = model_ia.generate_content(prompt_criacao)
+        response = model_ia.generate_content(prompt_analista_total)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
 
-    except Exception as e: return f"Erro na análise de Big Data: {e}"
+    except Exception as e: return f"Erro na mineração de Big Data: {e}"
 
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "⚠️ IA Desconectada."
@@ -1778,3 +1764,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
