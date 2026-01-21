@@ -1240,8 +1240,7 @@ def fetch_stats_single(fid, api_key):
         r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
-
-# ==============================================================================
+        # ==============================================================================
 # SIDEBAR E LOOP PRINCIPAL (EXECUÇÃO)
 # ==============================================================================
 with st.sidebar:
