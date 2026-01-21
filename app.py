@@ -1227,12 +1227,17 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
     hist = st.session_state['historico_sinais']
     pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
     if not pendentes: return
+    
     hoje_str = get_time_br().strftime('%Y-%m-%d')
     updates_buffer = []
     mapa_live = {j['fixture']['id']: j for j in jogos_live}
+    
     for s in pendentes:
         if s.get('Data') != hoje_str: continue
-        fid = int(float(str(s['FID']).strip()))
+        # --- CORREÇÃO: PULA SNIPER AQUI ---
+        if "Sniper" in s['Estrategia']: continue
+        # ----------------------------------
+        fid = int(clean_fid(s.get('FID', 0)))
         strat = s['Estrategia']
         key_green = gerar_chave_universal(fid, strat, "GREEN")
         key_red = gerar_chave_universal(fid, strat, "RED")
@@ -1240,6 +1245,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             s['Resultado'] = '✅ GREEN'; updates_buffer.append(s); continue
         if key_red in st.session_state['alertas_enviados']:
             s['Resultado'] = '❌ RED'; updates_buffer.append(s); continue
+            
         jogo_encontrado = mapa_live.get(fid)
         if not jogo_encontrado:
              try:
@@ -1248,39 +1254,82 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
              except: pass
         if jogo_encontrado:
             if processar_resultado(s, jogo_encontrado, token, chats): updates_buffer.append(s)
+            
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
+# --- NOVA FUNÇÃO SNIPER INTELIGENTE ---
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
     snipers = [s for s in hist if "Sniper" in s['Estrategia'] and s['Resultado'] == "Pendente"]
     if not snipers: return
+    
     updates = []
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
+    
     for s in snipers:
-        fid = str(s['FID']); jogo = ids_live.get(fid)
+        fid = str(s['FID'])
+        jogo = ids_live.get(fid)
+        
         if not jogo:
             try:
                 res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
-                if res.get('response'): jogo = res['response'][0]; update_api_usage(res.get('headers', {}))
+                if res.get('response'): jogo = res['response'][0]
             except: pass
+            
         if not jogo: continue
+        
         status = jogo['fixture']['status']['short']
-        if status in ['FT', 'AET', 'PEN', 'INT']:
-            gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0; tg = gh + ga
-            target = s['Placar_Sinal'].upper().strip()
-            res_final = None
-            if "OVER 2.5" in target: res_final = '✅ GREEN' if tg > 2.5 else '❌ RED'
-            elif "UNDER 2.5" in target: res_final = '✅ GREEN' if tg < 2.5 else '❌ RED'
-            elif "AMBAS" in target: res_final = '✅ GREEN' if (gh > 0 and ga > 0) else '❌ RED'
-            elif "CASA" in target: res_final = '✅ GREEN' if gh > ga else '❌ RED'
-            elif "FORA" in target: res_final = '✅ GREEN' if ga > gh else '❌ RED'
-            if res_final:
-                s['Resultado'] = res_final; updates.append(s)
-                enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], f"{res_final} <b>RESULTADO SNIPER</b>\n⚽ {s['Jogo']}\n🎯 {target}\n📉 Placar Final: {gh}x{ga}")
-                st.session_state['precisa_salvar'] = True
-    if updates: atualizar_historico_ram(updates)
+        gh = jogo['goals']['home'] or 0
+        ga = jogo['goals']['away'] or 0
+        tg = gh + ga
+        
+        target = s['Placar_Sinal'].upper().strip()
+        res_final = None
+        
+        # LÓGICA DE VERIFICAÇÃO DE TEXTO
+        if "OVER" in target:
+            linha = 0.5
+            if "1.5" in target: linha = 1.5
+            elif "2.5" in target: linha = 2.5
+            elif "0.5" in target: linha = 0.5
+            
+            if tg > linha: res_final = '✅ GREEN'
+            elif status in ['FT', 'AET', 'PEN', 'INT']: res_final = '❌ RED'
 
-def verificar_var_rollback(jogos_live, token, chats):
+        elif "UNDER" in target:
+            linha = 2.5
+            if "3.5" in target: linha = 3.5
+            elif "1.5" in target: linha = 1.5
+            
+            if tg > linha: res_final = '❌ RED'
+            elif status in ['FT', 'AET', 'PEN', 'INT']: res_final = '✅ GREEN'
+
+        elif "AMBAS" in target:
+            if gh > 0 and ga > 0: res_final = '✅ GREEN'
+            elif status in ['FT', 'AET', 'PEN', 'INT']: res_final = '❌ RED'
+
+        elif status in ['FT', 'AET', 'PEN', 'INT']:
+            if "CASA" in target and "EMPATE" not in target:
+                res_final = '✅ GREEN' if gh > ga else '❌ RED'
+            elif "FORA" in target and "EMPATE" not in target:
+                res_final = '✅ GREEN' if ga > gh else '❌ RED'
+            elif "CASA" in target and ("OU EMPATE" in target or "DUPLA" in target):
+                res_final = '✅ GREEN' if gh >= ga else '❌ RED'
+            elif "FORA" in target and ("OU EMPATE" in target or "DUPLA" in target):
+                res_final = '✅ GREEN' if ga >= gh else '❌ RED'
+            elif "EMPATE" in target and "ANULA" not in target:
+                res_final = '✅ GREEN' if gh == ga else '❌ RED'
+
+        if res_final:
+            s['Resultado'] = res_final
+            updates.append(s)
+            emoji = "✅" if "GREEN" in res_final else "❌"
+            msg_resultado = f"{emoji} <b>SNIPER FINALIZADO</b>\n⚽ {s['Jogo']}\n🎯 Aposta: {s['Placar_Sinal']}\n📉 Placar Atual: {gh}x{ga}"
+            enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], msg_resultado)
+            st.session_state['precisa_salvar'] = True
+
+    if updates: atualizar_historico_ram(updates)
+        def verificar_var_rollback(jogos_live, token, chats):
     if 'var_avisado_cache' not in st.session_state: st.session_state['var_avisado_cache'] = set()
     hist = st.session_state['historico_sinais']
     greens = [s for s in hist if 'GREEN' in str(s['Resultado'])]
@@ -1382,6 +1431,7 @@ with st.sidebar:
                     for fid, stats in stats_recuperadas.items():
                         j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
                         if j_obj: salvar_bigdata(j_obj, stats) 
+                        count_salvos += 1
                     st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
                 else: st.warning("Nenhum jogo finalizado pendente.")
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
@@ -1815,11 +1865,8 @@ if st.session_state.ROBO_LIGADO:
         with abas[7]: 
             df_vip_show = st.session_state.get('df_vip', pd.DataFrame()).copy()
             if not df_vip_show.empty: 
-                # Converte Strikes para número para ordenar corretamente
                 df_vip_show['Strikes_Num'] = pd.to_numeric(df_vip_show['Strikes'], errors='coerce').fillna(0).astype(int)
-                # Ordena do maior strike para o menor
                 df_vip_show = df_vip_show.sort_values(by='Strikes_Num', ascending=False)
-                # Formata visualmente
                 df_vip_show['Strikes'] = df_vip_show['Strikes'].apply(formatar_inteiro_visual)
                 st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
             else: st.info("Nenhuma observação no momento.")
