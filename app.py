@@ -65,7 +65,6 @@ if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] 
 if 'gemini_usage' not in st.session_state: st.session_state['gemini_usage'] = {'used': 0, 'limit': 10000}
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 
-# GARANTIA DE PERSISTÊNCIA DOS ALERTAS E VAR
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'var_avisado_cache' not in st.session_state: st.session_state['var_avisado_cache'] = set()
 
@@ -232,7 +231,7 @@ def buscar_media_gols_ultimos_jogos(api_key, home_id, away_id):
         return {'home': get_avg_goals(home_id, 'home'), 'away': get_avg_goals(away_id, 'away')}
     except: return {'home': '?', 'away': '?'}
 
-# --- NOVAS FUNÇÕES (OLHEIRO E NOTA) ---
+# --- NOVAS FUNÇÕES (OLHEIRO 50 E RATING HÍBRIDO) ---
 @st.cache_data(ttl=86400)
 def analisar_tendencia_50_jogos(api_key, home_id, away_id):
     try:
@@ -253,16 +252,46 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
         return {"home": get_stats_50(home_id), "away": get_stats_50(away_id)}
     except: return None
 
-@st.cache_data(ttl=3600)
-def buscar_nota_media_ultima_partida(api_key, team_id):
+# --- RATING HÍBRIDO (FIREBASE + API FALLBACK) ---
+def buscar_rating_inteligente(api_key, team_id):
+    """
+    Busca rating médio no Firebase. Se tiver pouco dado, busca o último jogo na API.
+    """
+    media_db = 0.0
+    qtd_db = 0
+    
+    # 1. Tenta buscar do Firebase (Local - Custo Zero)
+    if db_firestore:
+        try:
+            # Busca jogos onde o time foi mandante OU visitante
+            docs_h = db_firestore.collection("BigData_Futebol").where("home_id", "==", str(team_id)).limit(20).stream()
+            docs_a = db_firestore.collection("BigData_Futebol").where("away_id", "==", str(team_id)).limit(20).stream()
+            
+            notas = []
+            for d in docs_h:
+                dados = d.to_dict()
+                if 'rating_home' in dados and float(dados['rating_home']) > 0: notas.append(float(dados['rating_home']))
+            for d in docs_a:
+                dados = d.to_dict()
+                if 'rating_away' in dados and float(dados['rating_away']) > 0: notas.append(float(dados['rating_away']))
+            
+            if len(notas) >= 3:
+                return f"{(sum(notas)/len(notas)):.2f} (Média {len(notas)}j)"
+        except: pass
+
+    # 2. Fallback: Busca API Último Jogo (Custo 1 call)
+    # Só roda se não achou dados suficientes no banco
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"team": team_id, "last": "1", "status": "FT"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         if not res.get('response'): return "N/A"
         last_fid = res['response'][0]['fixture']['id']
+        
+        # Busca Players
         url_stats = "https://v3.football.api-sports.io/fixtures/players"
         p_res = requests.get(url_stats, headers={"x-apisports-key": api_key}, params={"fixture": last_fid}).json()
+        
         if not p_res.get('response'): return "N/A"
         for t in p_res['response']:
             if t['team']['id'] == team_id:
@@ -489,6 +518,7 @@ def atualizar_historico_ram(lista_atualizada_hoje):
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
 
+# --- SALVAMENTO TURBINADO (SALVA RATINGS) ---
 def salvar_bigdata(jogo_api, stats):
     if not db_firestore: return
     try:
@@ -497,12 +527,38 @@ def salvar_bigdata(jogo_api, stats):
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         def sanitize(val): return str(val) if val is not None else "0"
+        
+        # BUSCA NOTAS PARA SALVAR (O investimento do futuro)
+        rate_h = 0; rate_a = 0
+        if 'API_KEY' in st.session_state:
+            try:
+                url_stats = "https://v3.football.api-sports.io/fixtures/players"
+                p_res = requests.get(url_stats, headers={"x-apisports-key": st.session_state['API_KEY']}, params={"fixture": fid}).json()
+                if p_res.get('response'):
+                    for t in p_res['response']:
+                        is_h = (t['team']['id'] == jogo_api['teams']['home']['id'])
+                        notas = []
+                        for p in t['players']:
+                            try:
+                                rating = float(p['statistics'][0]['games']['rating'])
+                                if rating > 0: notas.append(rating)
+                            except: pass
+                        if notas:
+                            media = sum(notas)/len(notas)
+                            if is_h: rate_h = media
+                            else: rate_a = media
+            except: pass
+
         item_bigdata = {
             'fid': fid,
             'data_hora': get_time_br().strftime('%Y-%m-%d %H:%M'),
             'liga': sanitize(jogo_api['league']['name']),
+            'home_id': str(jogo_api['teams']['home']['id']), # Importante para busca
+            'away_id': str(jogo_api['teams']['away']['id']),
             'jogo': f"{sanitize(jogo_api['teams']['home']['name'])} x {sanitize(jogo_api['teams']['away']['name'])}",
             'placar_final': f"{jogo_api['goals']['home']}x{jogo_api['goals']['away']}",
+            'rating_home': str(rate_h), # SALVANDO NO BANCO
+            'rating_away': str(rate_a),
             'estatisticas': {
                 'chutes_total': gv(s1, 'Total Shots') + gv(s2, 'Total Shots'),
                 'chutes_gol': gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal'),
@@ -628,7 +684,8 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
         return valor
     except: return calcular_odd_media_historica(estrategia)
 
-def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra):
+# --- IA COM NOVOS DADOS ---
+def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context=""):
     if not IA_ATIVADA: return ""
     try:
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
@@ -640,37 +697,29 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra):
         if tempo > 20 and chutes_totais == 0 and ataques_totais == 0:
             return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - API parece desatualizada."
     except: return ""
-    chutes_area_casa = gv(s1, 'Shots insidebox')
-    chutes_area_fora = gv(s2, 'Shots insidebox')
+    
+    chutes_area_casa = gv(s1, 'Shots insidebox'); chutes_area_fora = gv(s2, 'Shots insidebox')
     dados_ricos = extrair_dados_completos(stats_raw)
     nome_strat = estrategia.upper()
     aviso_memoria = ""
-    if (rh == 0 and ra == 0) and chutes_totais > 10:
-        aviso_memoria = "ATENÇÃO: Pressão zerada mas jogo movimentado."
-    missao_ia = ""
-    criterio_aprovacao = ""
-    if "MORNO" in nome_strat or "UNDER" in nome_strat:
-        missao_ia = "Seu objetivo é validar se o jogo vai CONTINUAR 0x0 ou com poucos gols."
-        criterio_aprovacao = "APROVAR: Defesas superando ataques. REJEITAR: Jogo aberto."
-    elif "GOLDEN" in nome_strat or "JANELA" in nome_strat:
-        missao_ia = "Seu objetivo é validar se vai sair gol no FINAL (Desespero)."
-        criterio_aprovacao = "APROVAR: Pressão insana ou Blitz. REJEITAR: Jogo morto."
-    elif any(x in nome_strat for x in ["RELÂMPAGO", "MASSACRE", "CHOQUE", "BRIGA"]):
-        missao_ia = "Seu objetivo é validar GOL CEDO."
-        criterio_aprovacao = "APROVAR: Intensidade alta. REJEITAR: Jogo de estudo."
-    else:
-        missao_ia = "Seu objetivo é validar GOL NA PARTIDA (Over Goals). Não importa quem marca."
-        criterio_aprovacao = "APROVAR: Se qualquer um dos times estiver pressionando."
+    if (rh == 0 and ra == 0) and chutes_totais > 10: aviso_memoria = "ATENÇÃO: Pressão zerada mas jogo movimentado."
+    
+    # Prompt com DADOS EXTRAS (Histórico + Rating)
     prompt = f"""
     Atue como TRADER ESPORTIVO PROFISSIONAL.
     CENÁRIO: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
     Estratégia: {estrategia}
+    
     MOMENTUM: Pressão {rh}x{ra} | Chutes Área {chutes_area_casa}x{chutes_area_fora} | {aviso_memoria}
-    DADOS: {dados_ricos}
-    MISSÃO: {missao_ia}
-    CRITÉRIOS: {criterio_aprovacao}
-    REGRA: O lucro vem do GOL, não importa o lado.
-    Responda EXATAMENTE: [Aprovado/Arriscado] - [Motivo curto]
+    
+    {extra_context}
+    
+    DADOS TÉCNICOS: {dados_ricos}
+    
+    MISSÃO: Validar se o jogo cumpre os requisitos para GOL.
+    CRITÉRIOS: APROVAR se houver pressão real. REJEITAR se jogo morto.
+    
+    Responda EXATAMENTE: [Aprovado/Arriscado] - [Motivo curto usando dados de Rating/Histórico se disponíveis]
     """
     try:
         response = model_ia.generate_content(prompt, request_options={"timeout": 10})
@@ -837,7 +886,11 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
                 resultados[fid] = stats
                 update_api_usage(headers)
     return resultados
-    def _worker_telegram(token, chat_id, msg):
+    # ==============================================================================
+# BLOCO 2: TELEGRAM, LÓGICA DE JOGO E INTERFACE
+# ==============================================================================
+
+def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
     except: pass
 
@@ -956,13 +1009,13 @@ def gerar_insights_matinais_ia(api_key):
             
             # --- COLETA DE DADOS AVANÇADOS (SNIPER) ---
             stats_50 = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-            rate_h = buscar_nota_media_ultima_partida(api_key, j['teams']['home']['id'])
-            rate_a = buscar_nota_media_ultima_partida(api_key, j['teams']['away']['id'])
+            rate_h = buscar_rating_inteligente(api_key, j['teams']['home']['id'])
+            rate_a = buscar_rating_inteligente(api_key, j['teams']['away']['id'])
             
             txt_stats = ""
             if stats_50:
                 txt_stats = f"HISTÓRICO (50j): Casa Over1.5 {stats_50['home']['over15_ft']}% | Fora Over1.5 {stats_50['away']['over15_ft']}%"
-            txt_rating = f"RATING ÚLTIMO JOGO: Casa {rate_h} | Fora {rate_a}"
+            txt_rating = f"RATING (MÉDIA/ÚLTIMO): Casa {rate_h} | Fora {rate_a}"
             # ------------------------------------------
 
             url_odds = "https://v3.football.api-sports.io/odds"
@@ -1410,39 +1463,37 @@ if st.session_state.ROBO_LIGADO:
                     
                     # --- COLETA DE DADOS AVANÇADOS ---
                     dados_50 = analisar_tendencia_50_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
-                    nota_home = buscar_nota_media_ultima_partida(safe_api, j['teams']['home']['id'])
-                    nota_away = buscar_nota_media_ultima_partida(safe_api, j['teams']['away']['id'])
+                    nota_home = buscar_rating_inteligente(safe_api, j['teams']['home']['id'])
+                    nota_away = buscar_rating_inteligente(safe_api, j['teams']['away']['id'])
+                    
+                    # Prepara contexto para a IA
+                    txt_history = ""
+                    if dados_50:
+                        txt_history = (f"HISTÓRICO 50 JOGOS: Casa(Over1.5: {dados_50['home']['over15_ft']}%, HT: {dados_50['home']['over05_ht']}%) "
+                                       f"| Fora(Over1.5: {dados_50['away']['over15_ft']}%, HT: {dados_50['away']['over05_ht']}%)")
+                    txt_rating_ia = f"RATING (MÉDIA/ÚLTIMO): Casa {nota_home} | Fora {nota_away}"
+                    extra_ctx = f"{txt_history}\n{txt_rating_ia}"
                     # ---------------------------------
 
                     for s in lista_sinais:
-                        # --- CLASSIFICAÇÃO NO NOME DO TIME ---
                         nome_home_display = f"{home} ({rank_h}º)" if rank_h else home
                         nome_away_display = f"{away} ({rank_a}º)" if rank_a else away
-                        # -------------------------------------
-
+                        
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         txt_pressao = gerar_barra_pressao(rh, ra) 
-                        
                         uid_normal = gerar_chave_universal(fid, s['tag'], "SINAL")
                         uid_super = f"SUPER_{uid_normal}"
                         
                         ja_enviado_total = False
-                        
-                        if uid_normal in st.session_state['alertas_enviados']: 
-                            ja_enviado_total = True
-                        
+                        if uid_normal in st.session_state['alertas_enviados']: ja_enviado_total = True
                         if not ja_enviado_total:
                             for item_hist in st.session_state['historico_sinais']:
                                 key_hist = gerar_chave_universal(item_hist['FID'], item_hist['Estrategia'], "SINAL")
                                 if key_hist == uid_normal:
-                                    ja_enviado_total = True
-                                    st.session_state['alertas_enviados'].add(uid_normal)
-                                    break
-                        
+                                    ja_enviado_total = True; st.session_state['alertas_enviados'].add(uid_normal); break
                         if ja_enviado_total: continue 
                         
                         st.session_state['alertas_enviados'].add(uid_normal)
-
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga)
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
@@ -1456,7 +1507,8 @@ if st.session_state.ROBO_LIGADO:
                             try:
                                 time.sleep(0.3)
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
-                                opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra)
+                                # AQUI ENTRA O NOVO CONTEXTO PARA A IA DO SINAL
+                                opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context=extra_ctx)
                                 if "Aprovado" in opiniao_txt: opiniao_db = "Aprovado"
                                 elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
                             except: pass
