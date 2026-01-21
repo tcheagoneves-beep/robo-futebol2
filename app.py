@@ -425,7 +425,6 @@ def gerenciar_erros(id_liga, pais, nome_liga, fid_jogo):
             novo = pd.DataFrame([{'id': id_norm, 'País': str(pais), 'Liga': str(nome_liga), 'Data_Erro': get_time_br().strftime('%Y-%m-%d'), 'Strikes': '1', 'Jogos_Erro': fid_str}])
             final = pd.concat([df_vip, novo], ignore_index=True)
             salvar_aba("Obs", final); st.session_state['df_vip'] = final
-
 def carregar_tudo(force=False):
     now = time.time()
     if force or (now - st.session_state['last_static_update']) > STATIC_CACHE_TIME or 'df_black' not in st.session_state:
@@ -493,16 +492,20 @@ def atualizar_historico_ram(lista_atualizada_hoje):
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
 
-# --- SALVAMENTO TURBINADO (SALVA RATINGS) ---
+# --- SALVAMENTO TURBINADO (SALVA RATINGS + DADOS COMPLETOS PARA IA) ---
 def salvar_bigdata(jogo_api, stats):
     if not db_firestore: return
     try:
         fid = str(jogo_api['fixture']['id'])
         if fid in st.session_state['jogos_salvos_bigdata']: return 
+
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
+        
+        # Função auxiliar para pegar valor seguro (evita crash se a API não mandar o dado)
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         def sanitize(val): return str(val) if val is not None else "0"
         
+        # --- Lógica de Rating (Mantida igual para capturar qualidade técnica) ---
         rate_h = 0; rate_a = 0
         if 'API_KEY' in st.session_state:
             try:
@@ -523,6 +526,7 @@ def salvar_bigdata(jogo_api, stats):
                             else: rate_a = media
             except: pass
 
+        # --- COLETA EXPANDIDA: AGORA OLHANDO TUDO ---
         item_bigdata = {
             'fid': fid,
             'data_hora': get_time_br().strftime('%Y-%m-%d %H:%M'),
@@ -534,13 +538,29 @@ def salvar_bigdata(jogo_api, stats):
             'rating_home': str(rate_h),
             'rating_away': str(rate_a),
             'estatisticas': {
+                # --- Ataque ---
                 'chutes_total': gv(s1, 'Total Shots') + gv(s2, 'Total Shots'),
                 'chutes_gol': gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal'),
                 'chutes_area': gv(s1, 'Shots insidebox') + gv(s2, 'Shots insidebox'),
-                'escanteios': gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks'),
-                'posse_casa': str(gv(s1, 'Ball Possession'))
+                
+                # --- Escanteios (Separados por time para estratégias de pressão) ---
+                'escanteios_total': gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks'),
+                'escanteios_casa': gv(s1, 'Corner Kicks'),
+                'escanteios_fora': gv(s2, 'Corner Kicks'),
+
+                # --- Disciplina (Novo: Essencial para estratégias de Cartões) ---
+                'faltas_total': gv(s1, 'Fouls') + gv(s2, 'Fouls'),
+                'cartoes_amarelos': gv(s1, 'Yellow Cards') + gv(s2, 'Yellow Cards'),
+                'cartoes_vermelhos': gv(s1, 'Red Cards') + gv(s2, 'Red Cards'),
+
+                # --- Controle de Jogo ---
+                'posse_casa': str(gv(s1, 'Ball Possession')),
+                'ataques_perigosos': gv(s1, 'Dangerous Attacks') + gv(s2, 'Dangerous Attacks'),
+                'impedimentos': gv(s1, 'Offsides') + gv(s2, 'Offsides')
             }
         }
+        
+        # Salva no Firebase
         db_firestore.collection("BigData_Futebol").document(fid).set(item_bigdata)
         st.session_state['jogos_salvos_bigdata'].add(fid)
     except: pass
