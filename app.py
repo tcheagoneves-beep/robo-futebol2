@@ -894,7 +894,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
         return SINAIS
     except: return []
-        def atualizar_stats_em_paralelo(jogos_alvo, api_key):
+def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
@@ -1756,3 +1756,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
