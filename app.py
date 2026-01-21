@@ -26,52 +26,26 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ==============================================================================
-# 1. CONFIGURAÇÃO INICIAL E CSS (OTIMIZADO PARA MOBILE)
+# 1. CONFIGURAÇÃO INICIAL E CSS
 # ==============================================================================
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 placeholder_root = st.empty()
 
 st.markdown("""
 <style>
-    /* Ajustes Gerais */
     .stApp {background-color: #0E1117; color: white;}
-    /* Aumenta o padding inferior para o footer não cobrir o último item */
     .main .block-container { max-width: 100%; padding: 1rem 1rem 80px 1rem; }
-    
-    /* Cards de Métricas */
     .metric-box { background-color: #1A1C24; border: 1px solid #333; border-radius: 8px; padding: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); margin-bottom: 10px; }
     .metric-title {font-size: 10px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 2px;}
     .metric-value {font-size: 20px; font-weight: bold; color: #00FF00;}
     .metric-sub {font-size: 10px; color: #cccccc;}
-    
-    /* Status Box */
     .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
     .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
     .status-warning { background-color: #3B3B10; color: #FFFF00; border: 1px solid #FFFF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
-    
-    /* Botões Otimizados para Toque (Mobile) */
     .stButton button { width: 100%; height: 55px !important; font-size: 18px !important; font-weight: bold !important; background-color: #262730; border: 1px solid #4e4e4e; color: white; border-radius: 8px; }
     .stButton button:hover { border-color: #00FF00; color: #00FF00; }
-    
-    /* Footer Timer Mobile-Friendly */
-    .footer-timer { 
-        position: fixed; 
-        left: 0; 
-        bottom: 0; 
-        width: 100%; 
-        background-color: #0E1117; 
-        color: #FFD700; 
-        text-align: center; 
-        padding: 10px; 
-        font-size: 12px; 
-        border-top: 1px solid #333; 
-        z-index: 99999; 
-        box-shadow: 0 -2px 10px rgba(0,0,0,0.5);
-    }
-    
+    .footer-timer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #0E1117; color: #FFD700; text-align: center; padding: 10px; font-size: 12px; border-top: 1px solid #333; z-index: 99999; box-shadow: 0 -2px 10px rgba(0,0,0,0.5); }
     .stDataFrame { font-size: 12px; }
-    
-    /* Ocultar menu padrão */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
 </style>
@@ -92,10 +66,8 @@ if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used':
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
 if 'gemini_usage' not in st.session_state: st.session_state['gemini_usage'] = {'used': 0, 'limit': 10000}
 if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
-
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'var_avisado_cache' not in st.session_state: st.session_state['var_avisado_cache'] = set()
-
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
 if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
 if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
@@ -111,7 +83,6 @@ if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 if 'BLOQUEAR_SALVAMENTO' not in st.session_state: st.session_state['BLOQUEAR_SALVAMENTO'] = False
 
-# 2.1 Conexão Firebase
 db_firestore = None
 if "FIREBASE_CONFIG" in st.secrets:
     try:
@@ -122,7 +93,6 @@ if "FIREBASE_CONFIG" in st.secrets:
         db_firestore = firestore.client()
     except Exception as e: st.error(f"Erro Firebase: {e}")
 
-# 3. Conexão IA e Google Sheets
 IA_ATIVADA = False
 try:
     if "GEMINI_KEY" in st.secrets:
@@ -133,18 +103,14 @@ except: IA_ATIVADA = False
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- COLUNAS ---
 COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada', 'Opiniao_IA']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
-COLS_BIGDATA = ['FID', 'Data', 'Liga', 'Jogo', 'Placar_Final', 'Chutes_Total', 'Chutes_Gol', 'Escanteios', 'Posse_Casa', 'Cartoes']
-
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# --- MAPEAMENTO DE LÓGICA PARA IA ---
 MAPA_LOGICA_ESTRATEGIAS = {
     "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
     "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
@@ -161,7 +127,6 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "🚩 Pressão Escanteios": "Muitos escanteios (>5) e chutes na área, indicando gol maduro."
 }
 
-# --- MAPA DE ODDS TEÓRICAS ---
 MAPA_ODDS_TEORICAS = {
     "🟣 Porteira Aberta": {"min": 1.50, "max": 1.80},
     "⚡ Gol Relâmpago": {"min": 1.30, "max": 1.45},
@@ -177,10 +142,6 @@ MAPA_ODDS_TEORICAS = {
     "⚡ Contra-Ataque Letal": {"min": 1.60, "max": 2.20},
     "🚩 Pressão Escanteios": {"min": 1.50, "max": 1.80}
 }
-
-# ==============================================================================
-# 4. FUNÇÕES UTILITÁRIAS E DE DADOS
-# ==============================================================================
 
 def get_time_br(): return datetime.now(pytz.timezone('America/Sao_Paulo'))
 def clean_fid(x): 
@@ -199,10 +160,8 @@ def formatar_inteiro_visual(val):
     except: return str(val)
 
 def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
-    try:
-        fid_clean = str(int(float(str(fid).strip())))
-    except:
-        fid_clean = str(fid).strip()
+    try: fid_clean = str(int(float(str(fid).strip())))
+    except: fid_clean = str(fid).strip()
     strat_clean = str(estrategia).strip().upper().replace(" ", "_")
     chave = f"{fid_clean}_{strat_clean}"
     if tipo_sinal == "SINAL": return chave
@@ -244,18 +203,7 @@ def extrair_dados_completos(stats_api):
     try:
         s1 = stats_api[0]['statistics']; s2 = stats_api[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
-        texto = f"""
-        📊 ESTATÍSTICAS COMPLETAS (Casa x Visitante):
-        - Posse: {gv(s1, 'Ball Possession')} x {gv(s2, 'Ball Possession')}
-        - Chutes Totais: {gv(s1, 'Total Shots')} x {gv(s2, 'Total Shots')}
-        - Chutes no Gol: {gv(s1, 'Shots on Goal')} x {gv(s2, 'Shots on Goal')}
-        - Chutes na Área: {gv(s1, 'Shots insidebox')} x {gv(s2, 'Shots insidebox')}
-        - Escanteios: {gv(s1, 'Corner Kicks')} x {gv(s2, 'Corner Kicks')}
-        - Ataques: {gv(s1, 'Attacks')} x {gv(s2, 'Attacks')}
-        - Ataques Perigosos: {gv(s1, 'Dangerous Attacks')} x {gv(s2, 'Dangerous Attacks')}
-        - Cartões: {gv(s1, 'Yellow Cards')} x {gv(s2, 'Yellow Cards')}
-        """
-        return texto
+        return f"📊 STATS: Posse {gv(s1,'Ball Possession')}x{gv(s2,'Ball Possession')} | Chutes {gv(s1,'Total Shots')}x{gv(s2,'Total Shots')} | Cantos {gv(s1,'Corner Kicks')}x{gv(s2,'Corner Kicks')}"
     except: return "Erro stats."
 
 @st.cache_data(ttl=3600)
@@ -279,7 +227,6 @@ def buscar_media_gols_ultimos_jogos(api_key, home_id, away_id):
         return {'home': get_avg_goals(home_id, 'home'), 'away': get_avg_goals(away_id, 'away')}
     except: return {'home': '?', 'away': '?'}
 
-# --- NOVAS FUNÇÕES (OLHEIRO 50 E RATING HÍBRIDO) ---
 @st.cache_data(ttl=86400)
 def analisar_tendencia_50_jogos(api_key, home_id, away_id):
     try:
@@ -300,9 +247,7 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
         return {"home": get_stats_50(home_id), "away": get_stats_50(away_id)}
     except: return None
 
-# --- RATING HÍBRIDO (FIREBASE + API FALLBACK) ---
 def buscar_rating_inteligente(api_key, team_id):
-    media_db = 0.0; qtd_db = 0
     if db_firestore:
         try:
             docs_h = db_firestore.collection("BigData_Futebol").where("home_id", "==", str(team_id)).limit(20).stream()
@@ -317,7 +262,6 @@ def buscar_rating_inteligente(api_key, team_id):
             if len(notas) >= 3:
                 return f"{(sum(notas)/len(notas)):.2f} (Média {len(notas)}j)"
         except: pass
-
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"team": team_id, "last": "1", "status": "FT"}
@@ -339,7 +283,6 @@ def buscar_rating_inteligente(api_key, team_id):
         return "N/A"
     except: return "N/A"
 
-# --- FUNÇÕES DE BD ---
 def carregar_aba(nome_aba, colunas_esperadas):
     chave_memoria = ""
     if nome_aba == "Historico": chave_memoria = 'historico_full'
@@ -351,8 +294,7 @@ def carregar_aba(nome_aba, colunas_esperadas):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    if col == 'Odd': df[col] = "1.20"
-                    else: df[col] = ""
+                    df[col] = "1.20" if col == 'Odd' else ""
             return df.fillna("").astype(str)
         return pd.DataFrame(columns=colunas_esperadas)
     except Exception as e:
@@ -375,7 +317,6 @@ def salvar_aba(nome_aba, df_para_salvar):
         st.session_state['precisa_salvar'] = True
         return False
 
-# --- FUNÇÕES LISTAS E ERROS ---
 def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
     id_norm = normalizar_id(id_liga)
@@ -807,28 +748,22 @@ def analisar_financeiro_com_ia(stake, banca):
         return response.text
     except Exception as e: return f"Erro Fin: {e}"
 
+# --- FUNÇÃO TUNADA COM ENGENHERIA DE DADOS E CORREÇÃO DE ERRO ---
 def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     if not db_firestore: return "Firebase Offline."
     
     try:
-        # 1. Busca dados
         docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(200).stream()
         data_raw = [d.to_dict() for d in docs]
         
         if len(data_raw) < 10: return "Coletando dados... (Mínimo 10 jogos no BigData)"
         
-        # 2. ENGENHERIA DE DADOS
         df = pd.DataFrame(data_raw)
         
-        # --- CORREÇÃO DO ERRO (VACINA) ---
-        # Se os dados antigos não tiverem rating, cria a coluna preenchida com 0
         if 'rating_home' not in df.columns: df['rating_home'] = 0
         if 'rating_away' not in df.columns: df['rating_away'] = 0
-        # ---------------------------------
         
-        # Extrair dados aninhados do JSON (estatisticas)
-        # Proteção extra caso estatisticas venha vazio
         def get_stat(row, key):
             return row.get(key, 0) if isinstance(row, dict) else 0
 
@@ -836,7 +771,6 @@ def criar_estrategia_nova_ia():
         df['chutes_gol'] = df['estatisticas'].apply(lambda x: get_stat(x, 'chutes_gol'))
         df['escanteios'] = df['estatisticas'].apply(lambda x: get_stat(x, 'escanteios'))
         
-        # Tratamento do Placar
         def analisar_placar(placar):
             try:
                 h, a = map(int, str(placar).split('x'))
@@ -846,11 +780,9 @@ def criar_estrategia_nova_ia():
         dados_placar = df['placar_final'].apply(analisar_placar).apply(pd.Series)
         df = pd.concat([df, dados_placar], axis=1)
         
-        # 3. CRIAÇÃO DE MÉTRICAS AVANÇADAS
         df['eficiencia'] = (df['gols_total'] / df['chutes_gol']).fillna(0)
         df['indice_pressao'] = df['escanteios'] + df['chutes_gol']
         
-        # 4. FILTRAR CENÁRIOS
         jogos_over = df[df['gols_total'] > 2.5]
         media_chutes_over = jogos_over['chutes_totais'].mean() if not jogos_over.empty else 0
         media_pressao_over = jogos_over['indice_pressao'].mean() if not jogos_over.empty else 0
@@ -861,40 +793,21 @@ def criar_estrategia_nova_ia():
             try: media_rating_zebra = pd.to_numeric(zebras['rating_away'], errors='coerce').mean()
             except: pass
 
-        # 5. RESUMO PARA A IA
-        # Agora o .sample não vai dar erro pois garantimos as colunas lá em cima
         amostra_cols = ['jogo', 'placar_final', 'chutes_totais', 'indice_pressao', 'rating_home', 'rating_away']
-        # Filtra apenas colunas que realmente existem para evitar erro no sample
         cols_existentes = [c for c in amostra_cols if c in df.columns]
         
         resumo_stat = f"""
         DATASET ANALISADO: {len(df)} Jogos Reais.
-        
-        PADRÕES DOS JOGOS OVER 2.5 GOLS (Goleadas):
-        - Média de Chutes Totais nestes jogos: {media_chutes_over:.1f}
-        - Índice de Pressão (Cantos + Chutes Gol) nestes jogos: {media_pressao_over:.1f}
-        
-        PADRÕES DAS ZEBRAS (Visitante Venceu):
-        - Rating médio do Visitante quando venceu: {media_rating_zebra:.2f}
-        - Total de jogos onde visitante venceu: {len(zebras)}
-        
-        AMOSTRA DETALHADA (JSON):
-        {df[cols_existentes].sample(min(5, len(df))).to_json(orient='records')}
+        PADRÕES OVER 2.5 GOLS: Média Chutes {media_chutes_over:.1f}, Pressão {media_pressao_over:.1f}
+        PADRÕES ZEBRAS: Rating Visitante {media_rating_zebra:.2f}
+        AMOSTRA: {df[cols_existentes].sample(min(5, len(df))).to_json(orient='records')}
         """
 
-        # 6. PROMPT
         prompt_criacao = f"""
-        Atue como um CIENTISTA DE DADOS SÊNIOR (Betting).
-        Dados processados do meu banco:
-        {resumo_stat}
-        
-        SUA MISSÃO: Identifique um "Padrão de Ouro" estatístico nos dados acima.
-        Crie uma estratégia para meu robô.
-        
-        REQUISITOS:
-        1. Nome Criativo.
-        2. Regra Matemática (Ex: Chutes > X, Pressão > Y).
-        3. Justificativa baseada nos números apresentados.
+        Atue como CIENTISTA DE DADOS (Betting).
+        Dados: {resumo_stat}
+        MISSÃO: Identifique um "Padrão de Ouro" e crie uma estratégia.
+        SAÍDA: Nome, Regra Matemática (Ex: Chutes > X), Justificativa.
         """
         
         response = model_ia.generate_content(prompt_criacao)
@@ -941,7 +854,10 @@ def otimizar_estrategias_existentes_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro IA: {e}"
-        def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
+
+
+
+def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
@@ -964,14 +880,11 @@ def otimizar_estrategias_existentes_ia():
             if j['goals']['away'] <= j['goals']['home'] and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
         
         # --- NOVAS ESTRATÉGIAS BASEADAS NA ANÁLISE DO BIG DATA ---
-        
-        # 1. REGRA: Alto Volume em Ligas Específicas (Tiroteio Elite)
         if 15 <= tempo <= 25:
             total_chutes = sh_h + sh_a
             if total_chutes >= 6 and (sog_h + sog_a) >= 3:
                 SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": "Over Gols HT/FT (Jogo Acelerado)", "stats": f"{total_chutes} Chutes em {tempo}min", "rh": rh, "ra": ra})
 
-        # 2. REGRA: Posse de Bola vs Eficiência (Contra-Ataque Letal)
         try:
             posse_h_val = next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")
             posse_h = int(str(posse_h_val).replace('%', ''))
@@ -982,7 +895,6 @@ def otimizar_estrategias_existentes_ia():
         elif posse_h >= 65 and sog_a >= 2 and j['goals']['away'] >= j['goals']['home']:
              SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Visitante ou Over (Time reativo perigoso)", "stats": f"Posse {100-posse_h}% vs {sog_a} SoG", "rh": rh, "ra": ra})
 
-        # 3. REGRA: Escanteios como Indicador (Pressão Escanteios)
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
         chutes_area_h = get_v(stats_h, 'Shots insidebox'); chutes_area_a = get_v(stats_a, 'Shots insidebox')
         
@@ -991,8 +903,6 @@ def otimizar_estrategias_existentes_ia():
                 SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": "Over Gols ou Canto Limite (Pressão Total)", "stats": f"{ck_h} Cantos / {chutes_area_h} Ch. Área", "rh": rh, "ra": ra})
             if ck_a >= 5 and chutes_area_a >= 4 and j['goals']['away'] <= j['goals']['home']:
                 SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": "Over Gols ou Canto Limite (Pressão Total)", "stats": f"{ck_a} Cantos / {chutes_area_a} Ch. Área", "rh": rh, "ra": ra})
-
-        # --- FIM NOVAS ESTRATÉGIAS ---
 
         if rank_home and rank_away:
             is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
@@ -1024,10 +934,6 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
                 resultados[fid] = stats
                 update_api_usage(headers)
     return resultados
-
-# ==============================================================================
-# BLOCO 2: TELEGRAM, LÓGICA DE JOGO E INTERFACE
-# ==============================================================================
 
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
@@ -1114,7 +1020,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             for cid in ids: enviar_telegram(token, cid, msg_final)
             st.session_state['matinal_enviado'] = True
 
-# --- SNIPER ATUALIZADO ---
 def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
@@ -1359,9 +1264,7 @@ def fetch_stats_single(fid, api_key):
         r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
-        # ==============================================================================
-# SIDEBAR E LOOP PRINCIPAL (EXECUÇÃO)
-# ==============================================================================
+
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     with st.expander("⚙️ Configurações", expanded=True):
