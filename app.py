@@ -144,7 +144,7 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# --- MAPEAMENTO DE LÓGICA PARA IA (ATUALIZADO) ---
+# --- MAPEAMENTO DE LÓGICA PARA IA ---
 MAPA_LOGICA_ESTRATEGIAS = {
     "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
     "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
@@ -941,7 +941,7 @@ def otimizar_estrategias_existentes_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro IA: {e}"
-    def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
+        def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
@@ -1359,7 +1359,7 @@ def fetch_stats_single(fid, api_key):
         r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
-# ==============================================================================
+        # ==============================================================================
 # SIDEBAR E LOOP PRINCIPAL (EXECUÇÃO)
 # ==============================================================================
 with st.sidebar:
