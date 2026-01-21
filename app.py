@@ -892,28 +892,37 @@ def otimizar_estrategias_existentes_ia():
             }
         }
 
-    if not analise_pacote: return "Dados insuficientes para análise robusta."
+if not analise_pacote: return "Dados insuficientes para análise robusta."
 
-    # 5. Prompt Melhorado (Dando Contexto para a IA)
+    # 5. Prompt AGRESSIVO (Obriga a IA a dar solução, não opinião)
     prompt_otimizacao = f"""
-    Atue como um Especialista em Data Science de Apostas Esportivas (Senior).
+    ATUE COMO: Engenheiro de Machine Learning focado em Otimização de Algoritmos de Apostas.
     
-    OBJETIVO: Analisar o desempenho das minhas estratégias atuais e sugerir refinos finos ("Fine Tuning") para reduzir os REDs.
+    TAREFA CRÍTICA: Realizar "Fine-Tuning" (Ajuste Fino) nas estratégias abaixo para eliminar os REDs.
     
-    CONTEXTO:
-    - Abaixo apresento um JSON com minhas estratégias.
-    - "Descricao_Logica": A regra que o robô usa hoje para entrar.
-    - "Raio_X_Comparativo": A diferença estatística média entre os jogos que deram GREEN e os que deram RED.
+    DADOS FORNECIDOS (JSON):
+    - Cada estratégia tem "Raio_X_Comparativo".
+    - Compare a média dos jogos que deram GREEN vs jogos que deram RED.
     
     DADOS:
     {json.dumps(analise_pacote, indent=2, ensure_ascii=False)}
     
-    SUA TAREFA:
-    Para cada estratégia com Winrate abaixo de 70% ou com padrao claro nos Reds:
-    1. Aponte o padrão do erro (ex: "Nos Reds, a média de chutes é muito baixa").
-    2. Sugira UM ajuste na regra lógica (ex: "Aumentar filtro de chutes de 8 para 12").
+    REGRAS DA RESPOSTA (OBRIGATÓRIO):
+    1. NÃO faça perguntas. NÃO reclame de falta de dados. Use o que tem.
+    2. NÃO explique conceitos básicos. Vá direto ao ponto.
+    3. Para cada estratégia com Winrate < 80% ou muitos Reds, sugira uma MUDANÇA NUMÉRICA na regra.
     
-    Seja direto e técnico. Não use emojis em excesso. Foco em matemática.
+    MODELO DE RESPOSTA DESEJADO:
+    
+    ### 🛡️ Estratégia: [Nome]
+    - **Diagnóstico:** Os jogos RED tiveram média de chutes (8.0) muito inferior aos GREEN (15.0).
+    - **Ação Recomendada:** Subir a régua de Chutes Totais de 8 para 12.
+    
+    ### 🛡️ Estratégia: [Nome]
+    - **Diagnóstico:** Os REDs ocorreram em jogos com muitos escanteios (Pressão ineficiente).
+    - **Ação Recomendada:** Adicionar filtro: "Se Escanteios > 10, Não entrar".
+    
+    Seja frio, calculista e direto.
     """
     
     try:
