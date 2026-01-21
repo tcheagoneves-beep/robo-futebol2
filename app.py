@@ -887,14 +887,14 @@ def otimizar_estrategias_existentes_ia():
             "Raio_X_Comparativo": {
                 "Media_Chutes_Nos_Greens": f"{media_campo(list_s_greens, 'chutes_total'):.1f}",
                 "Media_Chutes_Nos_Reds": f"{media_campo(list_s_reds, 'chutes_total'):.1f}",
-                "Media_SoG_Nos_Reds": f"{media_campo(list_s_reds, 'chutes_gol'):.1f}", # SoG = Chutes no Gol
+                "Media_SoG_Nos_Reds": f"{media_campo(list_s_reds, 'chutes_gol'):.1f}",
                 "Media_Escanteios_Nos_Reds": f"{media_campo(list_s_reds, 'escanteios_total'):.1f}"
             }
         }
 
-if not analise_pacote: return "Dados insuficientes para análise robusta."
+    if not analise_pacote: return "Dados insuficientes para análise robusta."
 
-    # 5. Prompt AGRESSIVO (Obriga a IA a dar solução, não opinião)
+    # 5. Prompt AGRESSIVO (Alinhado Corretamente)
     prompt_otimizacao = f"""
     ATUE COMO: Engenheiro de Machine Learning focado em Otimização de Algoritmos de Apostas.
     
