@@ -1347,7 +1347,7 @@ with st.sidebar:
             salvar_aba("Historico", st.session_state['historico_full'])
             st.session_state['confirmar_reset'] = False; st.rerun()
         if c2.button("❌ NÃO"): st.session_state['confirmar_reset'] = False; st.rerun()
-            if st.session_state.ROBO_LIGADO:
+   if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
         carregar_tudo()
         s_padrao = st.session_state.get('stake_padrao', 10.0)
@@ -1735,3 +1735,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
