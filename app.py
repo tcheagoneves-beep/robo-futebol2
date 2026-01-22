@@ -1014,37 +1014,76 @@ def otimizar_estrategias_existentes_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro IA: {e}"
+
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
+        # --- EXTRAÇÃO DE DADOS BÁSICOS ---
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
         def get_v(l, t): v = next((x['value'] for x in l if x['type']==t), 0); return v if v is not None else 0
+        
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
-        SINAIS = []
         
-        gh = j['goals']['home']
-        ga = j['goals']['away']
+        gh = j['goals']['home']; ga = j['goals']['away']
         total_gols = gh + ga
         total_chutes = sh_h + sh_a
         total_sog = sog_h + sog_a
 
-        # --- ESTRATÉGIAS PADRÃO (OTIMIZADAS PELA IA) ---
+        # Extração de Posse de Bola (Necessária para Nettuno)
+        try:
+            posse_h_val = next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")
+            posse_h = int(str(posse_h_val).replace('%', ''))
+            posse_a = 100 - posse_h
+        except: posse_h = 50; posse_a = 50
 
-        # 1. PORTEIRA ABERTA (Ajuste leve)
+        SINAIS = []
+
+        # ==============================================================================
+        # 🦁 ESTRATÉGIA NETTUNO: BACK FAVORITO (DOMÍNIO TOTAL HT)
+        # ==============================================================================
+        # FONTE: Método Nettuno - Back ao Favorito dominando no 1º Tempo.
+        # REGRA: Posse Ofensiva (>55%) + Pressão + Adversário Inofensivo (0 ou 1 chute).
+        # ==============================================================================
+        
+        if 10 <= tempo <= 40 and gh == ga: # 1º Tempo e Empatado
+            
+            # --- CENÁRIO A: FAVORITO É O CASA (Back Home) ---
+            # Critérios: Posse alta, perigo real (SOG) e visitante morto (max 1 chute)
+            if (posse_h >= 55) and (sog_h >= 2) and (sh_h >= 5) and (sh_a <= 1):
+                 # Confirmação do Robô (Pressão > 0)
+                 if rh >= 1: 
+                     SINAIS.append({
+                        "tag": "🦁 Back Favorito (Nettuno)",
+                        "ordem": "⚠️ ENTRAR: Back Casa (Vencer) | 🛑 SAÍDA: Feche se o time parar de chutar ou tomar susto.",
+                        "stats": f"Dominância Total: Posse {posse_h}% | Chutes {sh_h} x {sh_a} (Adv. Morto)",
+                        "rh": rh, "ra": ra
+                     })
+
+            # --- CENÁRIO B: FAVORITO É O VISITANTE (Back Away) ---
+            elif (posse_a >= 55) and (sog_a >= 2) and (sh_a >= 5) and (sh_h <= 1):
+                 if ra >= 1:
+                     SINAIS.append({
+                        "tag": "🦁 Back Favorito (Nettuno)",
+                        "ordem": "⚠️ ENTRAR: Back Visitante (Vencer) | 🛑 SAÍDA: Feche se o time parar de chutar ou tomar susto.",
+                        "stats": f"Dominância Total: Posse {posse_a}% | Chutes {sh_a} x {sh_h} (Adv. Morto)",
+                        "rh": rh, "ra": ra
+                     })
+                     # ==============================================================================
+        # FIM DA ESTRATÉGIA NETTUNO - CONTINUAÇÃO DO CÓDIGO ORIGINAL
+        # ==============================================================================
+
+        # 1. PORTEIRA ABERTA
         if tempo <= 30 and total_gols >= 2: 
             SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
 
-        # 2. GOL RELÂMPAGO (IA pediu aumento de chutes)
-        # Antes: chutes >= 2. Agora: chutes >= 3 (Filtra jogos muito parados)
+        # 2. GOL RELÂMPAGO
         if total_gols == 0:
             if (tempo <= 10 and total_chutes >= 3): 
                 SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": f"{total_chutes} Chutes (Intenso)", "rh": rh, "ra": ra})
 
-        # 3. JANELA DE OURO (CORREÇÃO CRÍTICA)
-        # Diagnóstico IA: Média de chutes nos Reds era 26. Tem que subir a régua.
-        # Novo Filtro: Chutes >= 22 (Era 18). Isso elimina jogos mornos.
+        # 3. JANELA DE OURO
         if 70 <= tempo <= 75 and abs(gh - ga) <= 1:
             if total_chutes >= 22: 
                 SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final - Limite)", "stats": f"🔥 {total_chutes} Chutes", "rh": rh, "ra": ra})
@@ -1054,25 +1093,18 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
             if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
         
-        # --- NOVAS ESTRATÉGIAS BASEADAS NA ANÁLISE DO BIG DATA ---
-        
         # TIROTEIO ELITE
         if 15 <= tempo <= 25:
             if total_chutes >= 6 and total_sog >= 3:
                 SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": "Over Gols HT/FT (Jogo Acelerado)", "stats": f"{total_chutes} Chutes em {tempo}min", "rh": rh, "ra": ra})
 
         # CONTRA-ATAQUE LETAL
-        try:
-            posse_h_val = next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")
-            posse_h = int(str(posse_h_val).replace('%', ''))
-        except: posse_h = 50
-        
         if posse_h <= 35 and sog_h >= 2 and gh >= ga:
              SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Casa ou Over (Time reativo perigoso)", "stats": f"Posse {posse_h}% vs {sog_h} SoG", "rh": rh, "ra": ra})
         elif posse_h >= 65 and sog_a >= 2 and ga >= gh:
              SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Visitante ou Over (Time reativo perigoso)", "stats": f"Posse {100-posse_h}% vs {sog_a} SoG", "rh": rh, "ra": ra})
 
-        # PRESSÃO ESCANTEIOS (Ignorando o filtro negativo por enquanto, focando na pressão positiva)
+        # PRESSÃO ESCANTEIOS
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
         chutes_area_h = get_v(stats_h, 'Shots insidebox'); chutes_area_a = get_v(stats_a, 'Shots insidebox')
         
@@ -1099,9 +1131,9 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if is_top_home and is_top_away and tempo <= 7:
                 if total_chutes >= 2 and total_sog >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
             
-            # BRIGA DE RUA (Ajuste IA: Chutes > 10 não entrar? Vamos manter simples por enquanto)
+            # BRIGA DE RUA
             if is_mid_home and is_mid_away:
-                if tempo <= 7 and 2 <= total_chutes <= 4: # Limitando teto para evitar jogos "loucos demais" cedo
+                if tempo <= 7 and 2 <= total_chutes <= 4:
                     SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
                 
                 # JOGO MORNO
@@ -1109,14 +1141,12 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
                 if is_bot_home_morno and is_bot_away_morno:
                     if 15 <= tempo <= 16 and total_chutes == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
         
-        # 5. GOLDEN BET (CORREÇÃO CRÍTICA)
-        # Diagnóstico IA: Greens tinham 31 chutes, Reds tinham 25.
-        # Ação: Subir régua para 28 Chutes e 10 SoG.
+        # 5. GOLDEN BET
         if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
             if total_chutes >= 28 and total_sog >= 10: 
                 SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Pressão Absurda)", "stats": f"🔥 {total_chutes} Chutes / {total_sog} no Gol", "rh": rh, "ra": ra})
         
-        # --- CAMADA EXTRA: SNIPER FINAL (ODDS ALTAS) ---
+        # --- CAMADA EXTRA: SNIPER FINAL ---
         if tempo >= 80 and gh == ga: 
             if (rh >= 4 and sh_h >= 12) or (ra >= 4 and sh_a >= 12):
                 SINAIS.append({
@@ -2031,5 +2061,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
-
