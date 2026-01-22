@@ -683,49 +683,125 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
 
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context=""):
     if not IA_ATIVADA: return ""
+    
+    # --- TRAVA TÉCNICA (Ignora jogos sem dados) ---
     try:
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
+        
         chutes_totais = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
         ataques_totais = gv(s1, 'Dangerous Attacks') + gv(s2, 'Dangerous Attacks')
+        
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 0
+        
+        # Se o jogo já rola há 20min e não tem nada, ignora direto sem gastar IA
         if tempo > 20 and chutes_totais == 0 and ataques_totais == 0:
-            return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - API parece desatualizada."
+            return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - Dados zerados (API Delay)."
     except: return ""
+
+    # Extração de dados
+    chutes_area_casa = gv(s1, 'Shots insidebox')
+    chutes_area_fora = gv(s2, 'Shots insidebox')
+    posse_casa = gv(s1, 'Ball Possession')
+    escanteios = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
     
-    chutes_area_casa = gv(s1, 'Shots insidebox'); chutes_area_fora = gv(s2, 'Shots insidebox')
     dados_ricos = extrair_dados_completos(stats_raw)
-    aviso_memoria = ""
-    if (rh == 0 and ra == 0) and chutes_totais > 10: aviso_memoria = "ATENÇÃO: Pressão zerada mas jogo movimentado."
     
+    # --- DEFINIÇÃO DE PERFIL DE ANÁLISE ---
+    # Isso ajuda a IA a saber o que procurar
+    perfil_analise = ""
+    criterio_rejeicao = ""
+    
+    nome_strat = estrategia.upper()
+    
+    if "MORNO" in nome_strat or "UNDER" in nome_strat:
+        perfil_analise = "PERFIL UNDER: Você quer um jogo TRAVADO. Se houver muitos chutes ou pressão, REJEITE."
+        criterio_rejeicao = "REJEITAR SE: Houver chance clara de gol ou pressão alta."
+    elif "ZEBRA" in nome_strat or "FAVORITO" in nome_strat:
+        perfil_analise = "PERFIL MATCH ODDS: Você quer confirmar quem vai ganhar. Analise a força relativa."
+        criterio_rejeicao = "REJEITAR SE: O time favorito estiver tomando sufoco ou se for um jogo de 'ataque contra defesa' sem finalização."
+    else:
+        # Padrão para Over/Gols (Porteira, Blitz, etc)
+        perfil_analise = "PERFIL OVER GOLS: Você quer um jogo FRENÉTICO. O gol deve estar MADURO."
+        criterio_rejeicao = """
+        REJEITAR SE:
+        1. A posse de bola for inútil (toque de lado sem chutes).
+        2. Os chutes forem todos de fora da área (chutes no desespero).
+        3. A pressão (RH/RA) estiver baixa apesar do número de chutes.
+        """
+
     prompt = f"""
-    Atue como TRADER ESPORTIVO PROFISSIONAL.
-    CENÁRIO: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
-    Estratégia: {estrategia}
+    Atue como um GESTOR DE RISCO CÉTICO E MUITO RIGOROSO.
+    Sua função é proteger a banca e APROVAR APENAS OPORTUNIDADES CLARAS DE GOL.
+    Se tiver qualquer dúvida, marque como "Arriscado".
+
+    DADOS DO JOGO:
+    - Jogo: {dados_jogo['jogo']}
+    - Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
+    - Estratégia Sinalizada: {estrategia}
+
+    MOMENTUM (O MAIS IMPORTANTE):
+    - Pressão (Barras): Casa {rh} x {ra} Visitante
+    - Chutes na Área: Casa {chutes_area_casa} x {chutes_area_fora} Visitante
+    - Escanteios Totais: {escanteios}
     
-    MOMENTUM: Pressão {rh}x{ra} | Chutes Área {chutes_area_casa}x{chutes_area_fora} | {aviso_memoria}
+    CONTEXTO HISTÓRICO (SECUNDÁRIO - USE APENAS PARA DESEMPATE):
     {extra_context}
-    DADOS TÉCNICOS: {dados_ricos}
-    
-    MISSÃO: Validar se o jogo cumpre os requisitos para GOL.
-    Responda EXATAMENTE: [Aprovado/Arriscado] - [Motivo curto usando dados de Rating/Histórico se disponíveis]
+
+    STATS COMPLETAS:
+    {dados_ricos}
+
+    SUAS INSTRUÇÕES:
+    1. {perfil_analise}
+    2. {criterio_rejeicao}
+    3. NÃO olhe apenas o número de chutes. Olhe a QUALIDADE (Chutes na área e Pressão).
+    4. Se o Histórico diz que o time marca muito, mas no LIVE eles não estão chutando: REJEITE. O Live manda.
+
+    FORMATO DE RESPOSTA (Obrigatório):
+    [Aprovado/Arriscado] - [Motivo curto e direto em 1 frase]
+
+    Exemplos:
+    Aprovado - Pressão absurda do casa e 8 chutes na área, gol iminente.
+    Arriscado - Muitos chutes mas todos de longe, posse estéril e sem pressão real.
     """
+
     try:
-        response = model_ia.generate_content(prompt, request_options={"timeout": 10})
+        # Request com temperatura baixa para ser mais determinístico
+        response = model_ia.generate_content(
+            prompt, 
+            generation_config=genai.types.GenerationConfig(temperature=0.2),
+            request_options={"timeout": 10}
+        )
         st.session_state['gemini_usage']['used'] += 1
+        
         texto_limpo = response.text.strip().replace("**", "").replace("*", "")
-        veredicto = "Arriscado"
-        if "Aprovado" in texto_limpo or "aprovado" in texto_limpo: veredicto = "Aprovado"
+        
+        # Lógica de Parsing mais segura
+        veredicto = "Arriscado" # Padrão seguro
+        if list(filter(texto_limpo.lower().startswith, ["aprovado", "[aprovado"])):
+             veredicto = "Aprovado"
+        elif "Aprovado" in texto_limpo[:15]: # Procura no começo da frase
+             veredicto = "Aprovado"
+             
+        # Separa o motivo
         motivo = texto_limpo
         for div in ["-", ":", "\n"]:
             if div in texto_limpo:
                 try: motivo = texto_limpo.split(div, 1)[1].strip(); break
                 except: pass
+        
         motivo = motivo.replace("Aprovado", "").replace("Arriscado", "").strip()
+        
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
-        return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto}</b> - {motivo[:120]}"
-    except: return ""
+        
+        # Destaque visual se for aprovado
+        cor_html = "color: #00FF00;" if veredicto == "Aprovado" else "color: #FFDD00;"
+        
+        return f"\n🤖 <b>IA:</b> <span style='{cor_html}'>{emoji} <b>{veredicto}</b></span> - {motivo[:100]}"
+
+    except Exception as e:
+        return "" # Falha silenciosa para não travar o bot
 
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
@@ -1955,4 +2031,5 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
 
