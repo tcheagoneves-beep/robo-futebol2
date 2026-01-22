@@ -124,7 +124,8 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "💎 GOLDEN BET": "75-85 min, Diferença <= 1, Chutes >= 16, SoG >= 8. Pressão extrema.",
     "🏹 Tiroteio Elite": "Ligas Top, Tempo 15-25, Chutes > 6. Jogo muito aberto.",
     "⚡ Contra-Ataque Letal": "Posse < 35% mas vencendo ou empatando com SoG > 2.",
-    "🚩 Pressão Escanteios": "Muitos escanteios (>5) e chutes na área, indicando gol maduro."
+    "🚩 Pressão Escanteios": "Muitos escanteios (>5) e chutes na área, indicando gol maduro.",
+    "💎 Sniper Final": "Jogo empatado aos 80' com pressão absurda. Busca valor."
 }
 
 MAPA_ODDS_TEORICAS = {
@@ -140,7 +141,8 @@ MAPA_ODDS_TEORICAS = {
     "💎 GOLDEN BET": {"min": 1.80, "max": 2.40},
     "🏹 Tiroteio Elite": {"min": 1.40, "max": 1.60},
     "⚡ Contra-Ataque Letal": {"min": 1.60, "max": 2.20},
-    "🚩 Pressão Escanteios": {"min": 1.50, "max": 1.80}
+    "🚩 Pressão Escanteios": {"min": 1.50, "max": 1.80},
+    "💎 Sniper Final": {"min": 1.80, "max": 2.50}
 }
 
 def get_time_br(): return datetime.now(pytz.timezone('America/Sao_Paulo'))
@@ -790,30 +792,36 @@ def criar_estrategia_nova_ia():
             historico_para_ia += f"Jogo: {row['jogo']} | Placar: {row['placar_final']} | Stats: {json.dumps(row.get('estatisticas', {}))} | Ratings: H:{row.get('rating_home')} A:{row.get('rating_away')}\n"
 
         prompt_analista_total = f"""
-        Atue como o MAIOR CIENTISTA DE DADOS de apostas esportivas do mundo.
-        Abaixo, entrego para você o histórico real de {len(df)} partidas monitoradas pelo meu robô, contendo Gols, Cantos, Posse, Ratings e tudo o que aconteceu no momento do sinal.
+        Atue como o MAIOR CIENTISTA DE DADOS de apostas esportivas do mundo (Especialista em Odds Altas @2.00+).
+        Abaixo, entrego o histórico real de {len(df)} partidas monitoradas:
 
         HISTÓRICO REAL:
         {historico_para_ia}
 
         SUA MISSÃO:
-        Não seja genérico. Analise correlações ocultas. 
-        Exemplo: "Sempre que o Rating do Mandante é < 6.0 e o Visitante tem > 4 chutes, o jogo termina com X escanteios".
-
-        REQUISITOS DA RESPOSTA:
-        Crie 3 Estratégias DISTINTAS baseadas exclusivamente nos dados acima:
+        Identificar padrões comportamentais que geram LUCRO EM MERCADOS DE VALOR (Não foque apenas em gols simples).
         
-        1. ESTRATÉGIA DE GOLS (Foco em Over ou Under).
-        2. ESTRATÉGIA DE ESCANTEIOS (Foco em volume de cantos).
-        3. ESTRATÉGIA "SNIPER" (Foco em algo fora do comum: Cartões, Viradas, ou Zebras).
+        Crie 3 Estratégias DISTINTAS baseadas nesses dados:
+        
+        1. ESTRATÉGIA DE "VIRADA/REAÇÃO" (Odds @2.00+)
+           - Procure padrões onde o Favorito (Rating Alto) começa perdendo ou empatando, mas massacra nas estatísticas (Chutes/Posse).
+           - Sugestão de Mercado: Vitória Seca ou Handicap Asiático Negativo.
+        
+        2. ESTRATÉGIA DE "ZEBRA PROTEGIDA" (Odds @1.80 a @2.50)
+           - Procure jogos onde o Azarão (Rating Baixo) está jogando melhor que o Favorito (Mais chutes perigosos).
+           - Sugestão de Mercado: Empate Anula Aposta (DNB) ou Dupla Chance na Zebra.
+        
+        3. ESTRATÉGIA DE GOLS ASIÁTICOS (Odds @1.90+)
+           - Jogos extremamente abertos mas que a bola não entra no 1º tempo.
+           - Sugestão: Over Gols Asiáticos (Proteção de reembolso).
 
         Para cada estratégia, forneça:
-        - Nome Técnico.
-        - Regra Matemática Rígida (Ex: Chutes > X + Posse < Y%).
-        - Gatilho de Tempo (Em qual minuto entrar).
-        - Justificativa (Cite exemplos desse histórico onde isso aconteceu).
+        - Nome Técnico (Ex: "Fênix Favorito").
+        - Regra Matemática Rígida (Ex: Rating Casa > 7.0 + Perdendo + Chutes > 10).
+        - Gatilho de Tempo (Quando entrar).
+        - Justificativa baseada nos dados.
 
-        FOQUE EM PADRÕES QUE SE REPETIRAM NO HISTÓRICO ACIMA.
+        Seja técnico e procure valor matemático.
         """
         
         response = model_ia.generate_content(prompt_analista_total)
@@ -993,6 +1001,18 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
                     if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
         if 75 <= tempo <= 85 and abs(j['goals']['home'] - j['goals']['away']) <= 1:
             if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
+        
+        # --- CAMADA EXTRA: SNIPER FINAL (ODDS ALTAS) ---
+        # Só ativa se o jogo estiver empatado no final (80'+) e com MUITA pressão
+        if tempo >= 80 and j['goals']['home'] == j['goals']['away']: 
+            if (rh >= 4 and sh_h >= 12) or (ra >= 4 and sh_a >= 12):
+                SINAIS.append({
+                    "tag": "💎 Sniper Final", 
+                    "ordem": "Empate Anula ou Over Limite (Odd Alta)", 
+                    "stats": f"Pressão Extrema no Final ({rh}x{ra})", 
+                    "rh": rh, "ra": ra
+                })
+
         return SINAIS
     except: return []
 
