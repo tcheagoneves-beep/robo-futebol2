@@ -107,24 +107,24 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# Dicionário APENAS para referência, a lógica real de texto está na função processar()
+# Mapa apenas para categorização, a ordem exata é gerada na função processar()
 MAPA_LOGICA_ESTRATEGIAS = {
     "🟣 Porteira Aberta": "Over Gols",
-    "⚡ Gol Relâmpago": "Over 0.5 HT",
-    "💰 Janela de Ouro": "Over Gols Final",
-    "🟢 Blitz Casa": "Over Gols Casa",
-    "🟢 Blitz Visitante": "Over Gols Visitante",
-    "🔥 Massacre": "Over Gols",
-    "⚔️ Choque Líderes": "Over Gols",
-    "🥊 Briga de Rua": "Over Gols",
-    "❄️ Jogo Morno": "Under Gols",
+    "⚡ Gol Relâmpago": "Over HT",
+    "💰 Janela de Ouro": "Over Limite",
+    "🟢 Blitz Casa": "Over Gols",
+    "🟢 Blitz Visitante": "Over Gols",
+    "🔥 Massacre": "Over HT",
+    "⚔️ Choque Líderes": "Over HT",
+    "🥊 Briga de Rua": "Over HT",
+    "❄️ Jogo Morno": "Under HT",
     "💎 GOLDEN BET": "Over Limite",
     "🏹 Tiroteio Elite": "Over Gols",
-    "⚡ Contra-Ataque Letal": "Gol do Zebra",
+    "⚡ Contra-Ataque Letal": "Back Zebra",
     "🚩 Pressão Escanteios": "Cantos Asiáticos",
     "💎 Sniper Final": "Over Limite",
     "🦁 Back Favorito (Nettuno)": "Back Vencedor",
-    "💀 Lay ao Morto (Nettuno)": "Lay/Dupla Chance"
+    "💀 Lay ao Morto (Nettuno)": "Lay Perdedor"
 }
 
 MAPA_ODDS_TEORICAS = {
@@ -171,7 +171,7 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     return chave
 
 def gerar_barra_pressao(rh, ra):
-    return "" # Removido para limpar o visual
+    return "" # Visual Removido
 
 def update_api_usage(headers):
     if not headers: return
@@ -701,11 +701,11 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     STATS COMPLETAS:
     {dados_ricos}
 
-    SUA MISSÃO: Validar a entrada.
+    SUA MISSÃO: Validar a entrada e dar um veredicto final.
     REGRA DE RESPOSTA (OBRIGATÓRIO):
-    Responda em APENAS UMA FRASE CURTA E DIRETA.
-    Formato: [Aprovado/Arriscado] - [Motivo sintético em 10 palavras]
-    Exemplo: "Aprovado - Pressão absurda do mandante e muitos chutes na área."
+    Seja EXTREMAMENTE SINTÉTICO E DIRETO. Use no máximo 15 palavras.
+    Formato: [Aprovado/Arriscado] - [Motivo curto]
+    Exemplo: "Aprovado - Pressão absurda do mandante, gol é questão de tempo."
     """
 
     try:
@@ -733,7 +733,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         
         # RETORNO LIMPO E ORGANIZADO
-        return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto.upper()}</b> - {motivo}"
+        return f"\n🤖 <b>MENTORIA IA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>"
 
     except Exception as e:
         return "" 
@@ -897,21 +897,22 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         def gerar_ordem_gol(gols_atuais, tipo="Over"):
             linha = gols_atuais + 0.5
             if tipo == "Over":
-                return f"Apostar em <b>Mais de {linha} Gols</b> na partida."
+                return f"👉 <b>ENTRADA:</b> Mercado de Gols\n✅ Apostar em <b>Mais de {linha} Gols</b> na partida"
             elif tipo == "HT":
-                return "Apostar em <b>Mais de 0.5 Gols</b> no 1º Tempo."
+                return f"👉 <b>ENTRADA:</b> Mercado 1º Tempo\n✅ Apostar em <b>Mais de 0.5 Gols HT</b>"
             elif tipo == "Limite":
-                return "Apostar em <b>Mais de 1 Gol Asiático</b> (Se sair 1 devolve)."
+                linha_limite = gols_atuais + 1.0
+                return f"👉 <b>ENTRADA:</b> Gol Limite (Asiático)\n✅ Apostar em <b>Mais de {linha_limite} Gols</b> (Se sair 1 devolve)"
             return "Apostar em Gols."
 
         SINAIS = []
         if 10 <= tempo <= 40 and gh == ga:
             if (posse_h >= 55) and (sog_h >= 2) and (sh_h >= 5) and (sh_a <= 1):
                  if rh >= 1: 
-                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "Entrar na Vitória do <b>CASA</b> (Back Casa).", "stats": f"Dominância Total: Posse {posse_h}% | Chutes {sh_h} x {sh_a}", "rh": rh, "ra": ra})
+                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "👉 <b>ENTRADA:</b> Match Odds (Vencedor)\n✅ Apostar na <b>Vitória do CASA</b>", "stats": f"Dominância Total: Posse {posse_h}% | Chutes {sh_h} x {sh_a}", "rh": rh, "ra": ra})
             elif (posse_a >= 55) and (sog_a >= 2) and (sh_a >= 5) and (sh_h <= 1):
                  if ra >= 1:
-                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "Entrar na Vitória do <b>VISITANTE</b> (Back Visitante).", "stats": f"Dominância Total: Posse {posse_a}% | Chutes {sh_a} x {sh_h}", "rh": rh, "ra": ra})
+                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "👉 <b>ENTRADA:</b> Match Odds (Vencedor)\n✅ Apostar na <b>Vitória do VISITANTE</b>", "stats": f"Dominância Total: Posse {posse_a}% | Chutes {sh_a} x {sh_h}", "rh": rh, "ra": ra})
         
         if tempo <= 30 and total_gols >= 2: 
             SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": f"{total_chutes} Chutes no Jogo Aberto", "rh": rh, "ra": ra})
@@ -939,7 +940,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             total_cantos = ck_h + ck_a
             linha_cantos = total_cantos + 1
             if (ck_h >= 5 and chutes_area_h >= 4 and gh <= ga) or (ck_a >= 5 and chutes_area_a >= 4 and ga <= gh):
-                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": f"Apostar em <b>Mais de {linha_cantos}.0 Escanteios Asiáticos</b> (Se sair exatamente {linha_cantos} devolve).", "stats": f"{ck_h+ck_a} Cantos Totais", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": f"👉 <b>ENTRADA:</b> Escanteios Asiáticos\n✅ Apostar em <b>Mais de {linha_cantos}.0 Cantos</b> (Se sair exatamente {linha_cantos} devolve)", "stats": f"{ck_h+ck_a} Cantos Totais", "rh": rh, "ra": ra})
 
         if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
             if total_chutes >= 28 and total_sog >= 10: 
@@ -947,7 +948,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         
         if tempo >= 80 and gh == ga: 
             if (rh >= 4 and sh_h >= 12) or (ra >= 4 and sh_a >= 12):
-                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "Apostar em <b>Empate Anula</b> ou <b>Gol Limite</b> (Odd Alta).", "stats": f"Pressão Extrema no Final ({rh}x{ra})", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>ENTRADA:</b> Empate Anula Aposta (DNB)\n✅ Se odd baixa: <b>Over Limite (Asiático)</b>", "stats": f"Pressão Extrema no Final ({rh}x{ra})", "rh": rh, "ra": ra})
         
         return SINAIS
     except: return []
@@ -1617,10 +1618,15 @@ if st.session_state.ROBO_LIGADO:
                                 if dados_50:
                                     h_stats = dados_50['home']; a_stats = dados_50['away']
                                     foco = "Geral"; pct_h = 0; pct_a = 0
-                                    if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
-                                        foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
+                                    
+                                    # LÓGICA DINÂMICA DE RAIO-X
+                                    if "HT" in s['tag'] or "Relâmpago" in s['tag'] or "Massacre" in s['tag'] or "Choque" in s['tag']:
+                                        foco = "Gols 1º Tempo (HT)"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
+                                    elif "Morno" in s['tag']:
+                                        foco = "Freq. Over 1.5 (Cuidado se alto)"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
                                     else:
-                                        foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
+                                        foco = "Freq. Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
+                                        
                                     texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
 
                                 msg = (
@@ -1628,7 +1634,7 @@ if st.session_state.ROBO_LIGADO:
                                     f"🏆 <b>{liga_safe}</b>\n"
                                     f"⚽ {home_safe} 🆚 {away_safe}\n"
                                     f"⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n"
-                                    f"⚠️ <b>AÇÃO:</b> {s['ordem']}\n"
+                                    f"{s['ordem']}\n"
                                     f"{destaque_odd}\n"
                                     f"📊 <i>Dados: {s['stats']}</i>\n"
                                     f"⚽ Médias (10j): Casa {medias_gols['home']} | Fora {medias_gols['away']}"
