@@ -1106,8 +1106,20 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     return resultados
 
 def _worker_telegram(token, chat_id, msg):
-    try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
-    except: pass
+    if not token or not chat_id:
+        print("❌ ERRO TELEGRAM: Token ou Chat ID vazios!")
+        return
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
+    
+    try: 
+        response = requests.post(url, data=payload, timeout=10)
+        if response.status_code != 200:
+            # Isso vai aparecer no terminal/logs do Streamlit
+            print(f"❌ ERRO TELEGRAM ({response.status_code}): {response.text}")
+    except Exception as e: 
+        print(f"❌ ERRO CONEXÃO TELEGRAM: {e}")
 
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
@@ -2001,3 +2013,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
