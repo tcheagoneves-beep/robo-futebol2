@@ -36,6 +36,7 @@ if 'banca_inicial' not in st.session_state: st.session_state['banca_inicial'] = 
 if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
 if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
 if 'gemini_usage' not in st.session_state: st.session_state['gemini_usage'] = {'used': 0, 'limit': 10000}
+if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
 if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
 if 'var_avisado_cache' not in st.session_state: st.session_state['var_avisado_cache'] = set()
 if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
@@ -690,7 +691,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         cor_html = "color: #00FF00;" if veredicto == "Aprovado" else "color: #FFDD00;"
         return f"\n🤖 <b>IA:</b> <span style='{cor_html}'>{emoji} <b>{veredicto}</b></span> - {motivo[:100]}"
     except Exception as e: return ""
-        def analisar_bi_com_ia():
+def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados."
@@ -744,14 +745,7 @@ def criar_estrategia_nova_ia():
         historico_para_ia = ""
         for _, row in df.head(150).iterrows():
             historico_para_ia += f"Jogo: {row['jogo']} | Placar: {row['placar_final']} | Stats: {json.dumps(row.get('estatisticas', {}))} | Ratings: H:{row.get('rating_home')} A:{row.get('rating_away')}\n"
-        prompt_analista_total = f"""
-        Atue como o MAIOR CIENTISTA DE DADOS de apostas esportivas do mundo (Especialista em Odds Altas @2.00+).
-        Abaixo, entrego o histórico real de {len(df)} partidas monitoradas:
-        HISTÓRICO REAL:
-        {historico_para_ia}
-        SUA MISSÃO: Identificar padrões comportamentais que geram LUCRO EM MERCADOS DE VALOR.
-        Crie 3 Estratégias DISTINTAS baseadas nesses dados.
-        """
+        prompt_analista_total = f"""Atue como CIENTISTA DE DADOS de apostas. Histórico: {historico_para_ia}. MISSÃO: Identificar padrões LUCRO EM MERCADOS DE VALOR. Crie 3 Estratégias DISTINTAS."""
         response = model_ia.generate_content(prompt_analista_total)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
@@ -803,12 +797,7 @@ def otimizar_estrategias_existentes_ia():
             }
         }
     if not analise_pacote: return "Dados insuficientes para análise robusta."
-    prompt_otimizacao = f"""
-    ATUE COMO: Engenheiro de Machine Learning.
-    TAREFA CRÍTICA: Realizar "Fine-Tuning" nas estratégias abaixo para eliminar os REDs.
-    DADOS: {json.dumps(analise_pacote, indent=2, ensure_ascii=False)}
-    REGRAS DA RESPOSTA (OBRIGATÓRIO): Sugira uma MUDANÇA NUMÉRICA na regra para cada estratégia com problemas.
-    """
+    prompt_otimizacao = f"""ATUE COMO: Engenheiro de ML. TAREFA: Fine-Tuning para eliminar REDs. DADOS: {json.dumps(analise_pacote, indent=2, ensure_ascii=False)}"""
     try:
         response = model_ia.generate_content(prompt_otimizacao)
         st.session_state['gemini_usage']['used'] += 1
@@ -820,22 +809,18 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
         def get_v(l, t): v = next((x['value'] for x in l if x['type']==t), 0); return v if v is not None else 0
-        
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
-        
         gh = j['goals']['home']; ga = j['goals']['away']
         total_gols = gh + ga
         total_chutes = sh_h + sh_a
         total_sog = sog_h + sog_a
-
         try:
             posse_h_val = next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")
             posse_h = int(str(posse_h_val).replace('%', ''))
             posse_a = 100 - posse_h
         except: posse_h = 50; posse_a = 50
-
         SINAIS = []
 
         # --- ESTRATÉGIAS NETTUNO ---
@@ -853,10 +838,14 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         except: pass_h = 80; pass_a = 80 
 
         if 15 <= tempo <= 70 and gh == ga:
+            # --- LAY AO MANDANTE ---
+            # Gatilho de Saída: Se a Casa começar a chutar no gol (SOG >= 1) ou melhorar a posse (>40%), avisa para sair.
             if (pass_h < 75) and (sog_h == 0) and (ra >= 1):
-                if (sh_a >= 4) and (sog_a >= 1): SINAIS.append({"tag": "💀 Lay ao Mandante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Visitante (X2) ou Empate Anula (DNB Visitante)", "stats": f"Casa Perdida: Passes {pass_h}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
+                if (sh_a >= 4) and (sog_a >= 1): SINAIS.append({"tag": "💀 Lay ao Mandante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Visitante (X2) | 🛑 SAIR SE: Casa chutar no gol.", "stats": f"Casa Perdida: Passes {pass_h}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
+            
+            # --- LAY AO VISITANTE ---
             elif (pass_a < 75) and (sog_a == 0) and (rh >= 1):
-                if (sh_h >= 4) and (sog_h >= 1): SINAIS.append({"tag": "💀 Lay ao Visitante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Casa (1X) ou Empate Anula (DNB Casa)", "stats": f"Visitante Perdido: Passes {pass_a}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
+                if (sh_h >= 4) and (sog_h >= 1): SINAIS.append({"tag": "💀 Lay ao Visitante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Casa (1X) | 🛑 SAIR SE: Visitante chutar no gol.", "stats": f"Visitante Perdido: Passes {pass_a}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
 
         # --- ESTRATÉGIAS ORIGINAIS ---
         if tempo <= 30 and total_gols >= 2: SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
@@ -1787,4 +1776,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")
+        st.info("💡 Robô em espera. Configure na lateral.")        
