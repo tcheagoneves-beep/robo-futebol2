@@ -736,7 +736,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         veredicto = "Arriscado" 
         if list(filter(texto_limpo.lower().startswith, ["aprovado", "[aprovado"])): veredicto = "Aprovado"
         elif "Aprovado" in texto_limpo[:15]: veredicto = "Aprovado"
-             
+              
         motivo = texto_limpo
         for div in ["-", ":", "\n"]:
             if div in texto_limpo:
@@ -1339,7 +1339,6 @@ def gerar_insights_matinais_ia(api_key):
                     time.sleep(1.5)
         return relatorio_final if relatorio_final else "Sem oportunidades de alto valor encontradas hoje."
     except Exception as e: return f"Erro Matinal: {e}"
-
 # ==============================================================================
 # 3. INTERFACE E LOOP PRINCIPAL
 # ==============================================================================
@@ -1610,10 +1609,11 @@ if st.session_state.ROBO_LIGADO:
                                 key_hist = gerar_chave_universal(item_hist['FID'], item_hist['Estrategia'], "SINAL")
                                 if key_hist == uid_normal:
                                     ja_enviado_total = True; st.session_state['alertas_enviados'].add(uid_normal); break
+                        
                         if ja_enviado_total: continue 
                         
-                        # --- REMOVIDO: st.session_state['alertas_enviados'].add(uid_normal)
-                        # Só adicionamos ao set DEPOIS de enviar, para garantir que não perde o sinal.
+                        # --- CORREÇÃO DE ENVIO AQUI: MARCA IMEDIATAMENTE ---
+                        st.session_state['alertas_enviados'].add(uid_normal)
                         
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga, tempo)
 
@@ -1661,7 +1661,7 @@ if st.session_state.ROBO_LIGADO:
                                 msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
                                 
                                 enviar_telegram(safe_token, safe_chat, msg)
-                                st.session_state['alertas_enviados'].add(uid_normal) # SÓ MARCA COMO ENVIADO AQUI
+                                # REMOVIDO DAQUI para evitar duplicidade
                                 st.toast(f"Sinal Enviado: {s['tag']}")
                             except Exception as e:
                                 print(f"Erro ao enviar sinal: {e}")
@@ -1775,7 +1775,10 @@ if st.session_state.ROBO_LIGADO:
                     df_bi['Data_DT'] = pd.to_datetime(df_bi['Data_Str'], errors='coerce')
                     df_bi = df_bi.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
                     hoje = pd.to_datetime(get_time_br().date())
-                    d_hoje = df_bi[df_bi['Data_DT'] == hoje]; d_7d = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]; d_30d = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]; d_total = df_bi
+                    d_hoje = df_bi[df_bi['Data_DT'] == hoje]
+                    d_7d = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=7))]
+                    d_30d = df_bi[df_bi['Data_DT'] >= (hoje - timedelta(days=30))]
+                    d_total = df_bi
                     
                     if 'bi_filter' not in st.session_state: st.session_state['bi_filter'] = "Tudo"
                     filtro = st.selectbox("📅 Período", ["Tudo", "Hoje", "7 Dias", "30 Dias"], key="bi_select")
@@ -1891,5 +1894,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")            
-
+        st.info("💡 Robô em espera. Configure na lateral.")        
