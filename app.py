@@ -744,7 +744,14 @@ def criar_estrategia_nova_ia():
         historico_para_ia = ""
         for _, row in df.head(150).iterrows():
             historico_para_ia += f"Jogo: {row['jogo']} | Placar: {row['placar_final']} | Stats: {json.dumps(row.get('estatisticas', {}))} | Ratings: H:{row.get('rating_home')} A:{row.get('rating_away')}\n"
-        prompt_analista_total = f"""Atue como CIENTISTA DE DADOS de apostas. Histórico: {historico_para_ia}. MISSÃO: Identificar padrões LUCRO EM MERCADOS DE VALOR. Crie 3 Estratégias DISTINTAS."""
+        prompt_analista_total = f"""
+        Atue como o MAIOR CIENTISTA DE DADOS de apostas esportivas do mundo (Especialista em Odds Altas @2.00+).
+        Abaixo, entrego o histórico real de {len(df)} partidas monitoradas:
+        HISTÓRICO REAL:
+        {historico_para_ia}
+        SUA MISSÃO: Identificar padrões comportamentais que geram LUCRO EM MERCADOS DE VALOR.
+        Crie 3 Estratégias DISTINTAS baseadas nesses dados.
+        """
         response = model_ia.generate_content(prompt_analista_total)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
@@ -796,7 +803,12 @@ def otimizar_estrategias_existentes_ia():
             }
         }
     if not analise_pacote: return "Dados insuficientes para análise robusta."
-    prompt_otimizacao = f"""ATUE COMO: Engenheiro de ML. TAREFA: Fine-Tuning para eliminar REDs. DADOS: {json.dumps(analise_pacote, indent=2, ensure_ascii=False)}"""
+    prompt_otimizacao = f"""
+    ATUE COMO: Engenheiro de Machine Learning.
+    TAREFA CRÍTICA: Realizar "Fine-Tuning" nas estratégias abaixo para eliminar os REDs.
+    DADOS: {json.dumps(analise_pacote, indent=2, ensure_ascii=False)}
+    REGRAS DA RESPOSTA (OBRIGATÓRIO): Sugira uma MUDANÇA NUMÉRICA na regra para cada estratégia com problemas.
+    """
     try:
         response = model_ia.generate_content(prompt_otimizacao)
         st.session_state['gemini_usage']['used'] += 1
@@ -808,18 +820,22 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
         def get_v(l, t): v = next((x['value'] for x in l if x['type']==t), 0); return v if v is not None else 0
+        
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
+        
         gh = j['goals']['home']; ga = j['goals']['away']
         total_gols = gh + ga
         total_chutes = sh_h + sh_a
         total_sog = sog_h + sog_a
+
         try:
             posse_h_val = next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")
             posse_h = int(str(posse_h_val).replace('%', ''))
             posse_a = 100 - posse_h
         except: posse_h = 50; posse_a = 50
+
         SINAIS = []
 
         # --- ESTRATÉGIAS NETTUNO ---
