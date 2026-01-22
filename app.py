@@ -1736,7 +1736,7 @@ if st.session_state.ROBO_LIGADO:
                     lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]; qtd_greens = 0; qtd_reds = 0
                     for idx, row in df_fin.iterrows():
                         res = row['Resultado']; odd = row['Odd_Calc']
-                        if 'GREEN' in res: lucro = (stake_padrao * odd) - stake; qtd_greens += 1
+                        if 'GREEN' in res: lucro = (stake_padrao * odd) - stake_padrao; qtd_greens += 1
                         else: lucro = -stake_padrao; qtd_reds += 1
                         saldo_atual += lucro; lucros.append(lucro); historico_saldo.append(saldo_atual)
                     df_fin['Lucro'] = lucros; total_lucro = sum(lucros)
@@ -1892,3 +1892,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")            
+
