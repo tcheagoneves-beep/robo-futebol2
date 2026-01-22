@@ -107,23 +107,24 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
+# Dicionário APENAS para referência, a lógica real de texto está na função processar()
 MAPA_LOGICA_ESTRATEGIAS = {
-    "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
-    "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
-    "💰 Janela de Ouro": "70-75 min, Chutes >= 18, Diferença gols <= 1. Jogo pegado.",
-    "🟢 Blitz Casa": "Tempo <= 60, Casa perdendo ou empatando, Pressão(rh) >= 2 ou Chutes >= 8.",
-    "🟢 Blitz Visitante": "Tempo <= 60, Visitante perdendo ou empatando, Pressão(ra) >= 2 ou Chutes >= 8.",
-    "🔥 Massacre": "Favorito Top vs Zebra, Tempo <= 5, Chutes >= 1.",
-    "⚔️ Choque Líderes": "Dois Tops, Tempo <= 7, Chutes >= 2.",
-    "🥊 Briga de Rua": "Times Mid, Tempo <= 7, Chutes 2 a 3.",
-    "❄️ Jogo Morno": "Times Z4, Tempo 15-16, 0 Chutes. Under HT.",
-    "💎 GOLDEN BET": "75-85 min, Diferença <= 1, Chutes >= 16, SoG >= 8. Pressão extrema.",
-    "🏹 Tiroteio Elite": "Ligas Top, Tempo 15-25, Chutes > 6. Jogo muito aberto.",
-    "⚡ Contra-Ataque Letal": "Posse < 35% mas vencendo ou empatando com SoG > 2.",
-    "🚩 Pressão Escanteios": "Muitos escanteios (>5) e chutes na área, indicando gol maduro.",
-    "💎 Sniper Final": "Jogo empatado aos 80' com pressão absurda. Busca valor.",
-    "🦁 Back Favorito (Nettuno)": "Posse ofensiva > 55% e adversário inofensivo no HT.",
-    "💀 Lay ao Morto (Nettuno)": "Time errando passes (<75%), sem chutar e sofrendo pressão."
+    "🟣 Porteira Aberta": "Over Gols",
+    "⚡ Gol Relâmpago": "Over 0.5 HT",
+    "💰 Janela de Ouro": "Over Gols Final",
+    "🟢 Blitz Casa": "Over Gols Casa",
+    "🟢 Blitz Visitante": "Over Gols Visitante",
+    "🔥 Massacre": "Over Gols",
+    "⚔️ Choque Líderes": "Over Gols",
+    "🥊 Briga de Rua": "Over Gols",
+    "❄️ Jogo Morno": "Under Gols",
+    "💎 GOLDEN BET": "Over Limite",
+    "🏹 Tiroteio Elite": "Over Gols",
+    "⚡ Contra-Ataque Letal": "Gol do Zebra",
+    "🚩 Pressão Escanteios": "Cantos Asiáticos",
+    "💎 Sniper Final": "Over Limite",
+    "🦁 Back Favorito (Nettuno)": "Back Vencedor",
+    "💀 Lay ao Morto (Nettuno)": "Lay/Dupla Chance"
 }
 
 MAPA_ODDS_TEORICAS = {
@@ -170,14 +171,7 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     return chave
 
 def gerar_barra_pressao(rh, ra):
-    try:
-        max_blocos = 5
-        nivel_h = min(int(rh), max_blocos); nivel_a = min(int(ra), max_blocos)
-        if nivel_h > nivel_a: return "🟩" * nivel_h + "⬜" * (max_blocos - nivel_h) + " (Casa)"
-        elif nivel_a > nivel_h: return "🟥" * nivel_a + "⬜" * (max_blocos - nivel_a) + " (Visitante)"
-        elif nivel_h > 0 and nivel_a > 0: return "🟨🟨 Jogo Aberto"
-        else: return ""
-    except: return ""
+    return "" # Removido para limpar o visual
 
 def update_api_usage(headers):
     if not headers: return
@@ -692,40 +686,33 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     dados_ricos = extrair_dados_completos(stats_raw)
     
     prompt = f"""
-    Atue como um ANALISTA PROFISSIONAL DE FUTEBOL (Perfil: Sniper de Valor).
-    Seu objetivo é identificar se o cenário atual favorece a ocorrência de GOLS ou CANTOS nos próximos minutos.
+    Atue como um ANALISTA DE APOSTAS SÊNIOR.
     
     DADOS DO JOGO:
-    - Jogo: {dados_jogo['jogo']}
-    - Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
-    - Estratégia Detectada pelo Robô: {estrategia}
-
-    ESTATÍSTICAS EM TEMPO REAL:
-    - Pressão (Barras de Força): Casa {rh} x {ra} Visitante
-    - Chutes na Área: Casa {chutes_area_casa} x {chutes_area_fora} Visitante
-    - Escanteios Totais: {escanteios}
+    {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
+    Estratégia: {estrategia}
     
-    CONTEXTO EXTRA:
+    ESTATÍSTICAS:
+    Pressão {rh}x{ra} | Chutes Área {chutes_area_casa}x{chutes_area_fora} | Escanteios {escanteios}
+    
+    CONTEXTO (Ratings/Histórico):
     {extra_context}
 
     STATS COMPLETAS:
     {dados_ricos}
 
-    SUAS DIRETRIZES DE DECISÃO:
-    1. APROVE se houver volume de jogo (chutes ou pressão), mesmo que a pontaria não esteja perfeita.
-    2. APROVE se o favorito estiver perdendo ou empatando e pressionando (cenário de Blitz).
-    3. REJEITE APENAS SE: O jogo estiver "morto" (sem chutes há muito tempo) ou se a posse for inofensiva (toque de lado na defesa).
-    4. NÃO SEJA PERFECCIONISTA. O mercado de Over precisa de volume, não de perfeição.
-
-    FORMATO DE RESPOSTA OBRIGATÓRIO:
-    [Aprovado/Arriscado] - [Explicação completa, sem cortes]
+    SUA MISSÃO: Validar a entrada.
+    REGRA DE RESPOSTA (OBRIGATÓRIO):
+    Responda em APENAS UMA FRASE CURTA E DIRETA.
+    Formato: [Aprovado/Arriscado] - [Motivo sintético em 10 palavras]
+    Exemplo: "Aprovado - Pressão absurda do mandante e muitos chutes na área."
     """
 
     try:
         # Request com temperatura baixa para ser mais determinístico
         response = model_ia.generate_content(
             prompt, 
-            generation_config=genai.types.GenerationConfig(temperature=0.2),
+            generation_config=genai.types.GenerationConfig(temperature=0.1),
             request_options={"timeout": 10}
         )
         st.session_state['gemini_usage']['used'] += 1
@@ -746,7 +733,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         
         # RETORNO LIMPO E ORGANIZADO
-        return f"\n\n🤖 <b>MENTORIA IA (GEMINI):</b>\n{emoji} <b>VEREDICTO: {veredicto.upper()}</b>\n💡 <i>{motivo}</i>"
+        return f"\n🤖 <b>IA:</b> {emoji} <b>{veredicto.upper()}</b> - {motivo}"
 
     except Exception as e:
         return "" 
@@ -905,81 +892,63 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             posse_h = int(str(posse_h_val).replace('%', ''))
             posse_a = 100 - posse_h
         except: posse_h = 50; posse_a = 50
+        
+        # --- FUNÇÃO HELPER PARA GERAR ORDEM MASTIGADA ---
+        def gerar_ordem_gol(gols_atuais, tipo="Over"):
+            linha = gols_atuais + 0.5
+            if tipo == "Over":
+                return f"Apostar em <b>Mais de {linha} Gols</b> na partida."
+            elif tipo == "HT":
+                return "Apostar em <b>Mais de 0.5 Gols</b> no 1º Tempo."
+            elif tipo == "Limite":
+                return "Apostar em <b>Mais de 1 Gol Asiático</b> (Se sair 1 devolve)."
+            return "Apostar em Gols."
+
         SINAIS = []
         if 10 <= tempo <= 40 and gh == ga:
             if (posse_h >= 55) and (sog_h >= 2) and (sh_h >= 5) and (sh_a <= 1):
                  if rh >= 1: 
-                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "⚠️ ENTRAR: Back Casa (Vencer) | 🛑 SAÍDA: Feche se o time parar de chutar ou tomar susto.", "stats": f"Dominância Total: Posse {posse_h}% | Chutes {sh_h} x {sh_a} (Adv. Morto)", "rh": rh, "ra": ra})
+                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "Entrar na Vitória do <b>CASA</b> (Back Casa).", "stats": f"Dominância Total: Posse {posse_h}% | Chutes {sh_h} x {sh_a}", "rh": rh, "ra": ra})
             elif (posse_a >= 55) and (sog_a >= 2) and (sh_a >= 5) and (sh_h <= 1):
                  if ra >= 1:
-                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "⚠️ ENTRAR: Back Visitante (Vencer) | 🛑 SAÍDA: Feche se o time parar de chutar ou tomar susto.", "stats": f"Dominância Total: Posse {posse_a}% | Chutes {sh_a} x {sh_h} (Adv. Morto)", "rh": rh, "ra": ra})
-        try:
-            pass_h_val = next((x['value'] for x in stats_h if x['type']=='Passes %'), "0%")
-            pass_a_val = next((x['value'] for x in stats_a if x['type']=='Passes %'), "0%")
-            pass_h = int(str(pass_h_val).replace('%', '')) if str(pass_h_val).replace('%', '') != '0' else 80
-            pass_a = int(str(pass_a_val).replace('%', '')) if str(pass_a_val).replace('%', '') != '0' else 80
-        except: pass_h = 80; pass_a = 80 
-        if 15 <= tempo <= 70 and gh == ga:
-            if (pass_h < 75) and (sog_h == 0) and (ra >= 1):
-                if (sh_a >= 4) and (sog_a >= 1):
-                    SINAIS.append({"tag": "💀 Lay ao Mandante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Visitante (X2) ou Empate Anula (DNB Visitante)", "stats": f"Casa Perdida: Passes {pass_h}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
-            elif (pass_a < 75) and (sog_a == 0) and (rh >= 1):
-                if (sh_h >= 4) and (sog_h >= 1):
-                    SINAIS.append({"tag": "💀 Lay ao Visitante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Casa (1X) ou Empate Anula (DNB Casa)", "stats": f"Visitante Perdido: Passes {pass_a}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
+                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "Entrar na Vitória do <b>VISITANTE</b> (Back Visitante).", "stats": f"Dominância Total: Posse {posse_a}% | Chutes {sh_a} x {sh_h}", "rh": rh, "ra": ra})
+        
         if tempo <= 30 and total_gols >= 2: 
-            SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
+            SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": f"{total_chutes} Chutes no Jogo Aberto", "rh": rh, "ra": ra})
+        
         if total_gols == 0:
             if (tempo <= 10 and total_chutes >= 3): 
-                SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": f"{total_chutes} Chutes (Intenso)", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": gerar_ordem_gol(0, "HT"), "stats": f"{total_chutes} Chutes (Início Intenso)", "rh": rh, "ra": ra})
+        
         if 70 <= tempo <= 75 and abs(gh - ga) <= 1:
             if total_chutes >= 22: 
-                SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final - Limite)", "stats": f"🔥 {total_chutes} Chutes", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🔥 {total_chutes} Chutes Totais", "rh": rh, "ra": ra})
+        
         if tempo <= 60:
-            if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
-            if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
+            if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": gerar_ordem_gol(total_gols), "stats": f"Pressão Casa: {rh}", "rh": rh, "ra": ra})
+            if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": gerar_ordem_gol(total_gols), "stats": f"Pressão Visitante: {ra}", "rh": rh, "ra": ra})
+        
         if 15 <= tempo <= 25:
             if total_chutes >= 6 and total_sog >= 3:
-                SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": "Over Gols HT/FT (Jogo Acelerado)", "stats": f"{total_chutes} Chutes em {tempo}min", "rh": rh, "ra": ra})
-        if posse_h <= 35 and sog_h >= 2 and gh >= ga:
-             SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Casa ou Over (Time reativo perigoso)", "stats": f"Posse {posse_h}% vs {sog_h} SoG", "rh": rh, "ra": ra})
-        elif posse_h >= 65 and sog_a >= 2 and ga >= gh:
-             SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Visitante ou Over (Time reativo perigoso)", "stats": f"Posse {100-posse_h}% vs {sog_a} SoG", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": f"{total_chutes} Chutes em {tempo}min", "rh": rh, "ra": ra})
+        
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
         chutes_area_h = get_v(stats_h, 'Shots insidebox'); chutes_area_a = get_v(stats_a, 'Shots insidebox')
+        
         if tempo >= 30:
-            if ck_h >= 5 and chutes_area_h >= 4 and gh <= ga:
-                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": "Over Gols ou Canto Limite (Pressão Total)", "stats": f"{ck_h} Cantos / {chutes_area_h} Ch. Área", "rh": rh, "ra": ra})
-            if ck_a >= 5 and chutes_area_a >= 4 and ga <= gh:
-                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": "Over Gols ou Canto Limite (Pressão Total)", "stats": f"{ck_a} Cantos / {chutes_area_a} Ch. Área", "rh": rh, "ra": ra})
-        if rank_home and rank_away:
-            is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
-            if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
-                if tempo <= 5 and total_chutes >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve abrir placar)", "stats": f"Rank: {rank_home}x{rank_away}", "rh": rh, "ra": ra})
-            if 5 <= tempo <= 15:
-                if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
-                if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
-            if is_top_home and is_top_away and tempo <= 7:
-                if total_chutes >= 2 and total_sog >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
-            if is_mid_home and is_mid_away:
-                if tempo <= 7 and 2 <= total_chutes <= 4:
-                    SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
-                is_bot_home_morno = rank_home >= 10; is_bot_away_morno = rank_away >= 10
-                if is_bot_home_morno and is_bot_away_morno:
-                    if 15 <= tempo <= 16 and total_chutes == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
+            total_cantos = ck_h + ck_a
+            linha_cantos = total_cantos + 1
+            if (ck_h >= 5 and chutes_area_h >= 4 and gh <= ga) or (ck_a >= 5 and chutes_area_a >= 4 and ga <= gh):
+                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": f"Apostar em <b>Mais de {linha_cantos}.0 Escanteios Asiáticos</b> (Se sair exatamente {linha_cantos} devolve).", "stats": f"{ck_h+ck_a} Cantos Totais", "rh": rh, "ra": ra})
+
         if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
             if total_chutes >= 28 and total_sog >= 10: 
-                SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Pressão Absurda)", "stats": f"🔥 {total_chutes} Chutes / {total_sog} no Gol", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
+        
         if tempo >= 80 and gh == ga: 
             if (rh >= 4 and sh_h >= 12) or (ra >= 4 and sh_a >= 12):
-                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "Empate Anula ou Over Limite (Odd Alta)", "stats": f"Pressão Extrema no Final ({rh}x{ra})", "rh": rh, "ra": ra})
-        total_cantos = ck_h + ck_a
-        pressao_casa_alta = (rh >= 3 and sh_h >= 12); pressao_fora_alta = (ra >= 3 and sh_a >= 12)
-        if 80 <= tempo <= 88:
-            diff_gols = abs(gh - ga)
-            if diff_gols <= 1:
-                if pressao_casa_alta or pressao_fora_alta:
-                    if total_cantos >= 7: 
-                        SINAIS.append({"tag": "🌪️ Furacão de Cantos", "ordem": "Over Cantos Asiáticos (Canto Limite)", "stats": f"P.Extrema | {total_cantos} Cantos | {total_chutes} Chutes", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "Apostar em <b>Empate Anula</b> ou <b>Gol Limite</b> (Odd Alta).", "stats": f"Pressão Extrema no Final ({rh}x{ra})", "rh": rh, "ra": ra})
+        
         return SINAIS
     except: return []
 
