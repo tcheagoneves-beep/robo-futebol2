@@ -35,9 +35,9 @@ st.markdown("""
     .metric-title {font-size: 10px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 2px;}
     .metric-value {font-size: 20px; font-weight: bold; color: #00FF00;}
     .metric-sub {font-size: 10px; color: #cccccc;}
-    .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
-    .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
-    .status-warning { background-color: #3B3B10; color: #FFFF00; border: 1px solid #FFFF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
+    .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 5px; font-weight: bold; font-size: 14px;}
+    .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 5px; font-weight: bold; font-size: 14px;}
+    .status-warning { background-color: #3B3B10; color: #FFFF00; border: 1px solid #FFFF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 5px; font-weight: bold; font-size: 14px;}
     .stButton button { width: 100%; height: 55px !important; font-size: 18px !important; font-weight: bold !important; background-color: #262730; border: 1px solid #4e4e4e; color: white; border-radius: 8px; }
     .stButton button:hover { border-color: #00FF00; color: #00FF00; }
     .footer-timer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #0E1117; color: #FFD700; text-align: center; padding: 10px; font-size: 12px; border-top: 1px solid #333; z-index: 99999; box-shadow: 0 -2px 10px rgba(0,0,0,0.5); }
@@ -188,6 +188,7 @@ def update_api_usage(headers):
         st.session_state['api_usage'] = {'used': used, 'limit': limit}
     except: pass
 
+# --- FUNÇÃO CORRIGIDA: INCLUÍDA NA PARTE 1 PARA EVITAR ERRO ---
 def verificar_reset_diario():
     hoje_utc = datetime.now(pytz.utc).date()
     if st.session_state['data_api_usage'] != hoje_utc:
@@ -198,6 +199,15 @@ def verificar_reset_diario():
         return True
     return False
 
+def testar_conexao_telegram(token):
+    if not token: return False, "Token Vazio"
+    try:
+        res = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=5)
+        if res.status_code == 200:
+            return True, res.json()['result']['first_name']
+        return False, f"Erro {res.status_code}"
+    except:
+        return False, "Sem Conexão"
 def extrair_dados_completos(stats_api):
     if not stats_api: return "Dados indisponíveis."
     try:
@@ -709,62 +719,35 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     
     dados_ricos = extrair_dados_completos(stats_raw)
     
-    # --- DEFINIÇÃO DE PERFIL DE ANÁLISE ---
-    # Isso ajuda a IA a saber o que procurar
-    perfil_analise = ""
-    criterio_rejeicao = ""
-    
-    nome_strat = estrategia.upper()
-    
-    if "MORNO" in nome_strat or "UNDER" in nome_strat:
-        perfil_analise = "PERFIL UNDER: Você quer um jogo TRAVADO. Se houver muitos chutes ou pressão, REJEITE."
-        criterio_rejeicao = "REJEITAR SE: Houver chance clara de gol ou pressão alta."
-    elif "ZEBRA" in nome_strat or "FAVORITO" in nome_strat:
-        perfil_analise = "PERFIL MATCH ODDS: Você quer confirmar quem vai ganhar. Analise a força relativa."
-        criterio_rejeicao = "REJEITAR SE: O time favorito estiver tomando sufoco ou se for um jogo de 'ataque contra defesa' sem finalização."
-    else:
-        # Padrão para Over/Gols (Porteira, Blitz, etc)
-        perfil_analise = "PERFIL OVER GOLS: Você quer um jogo FRENÉTICO. O gol deve estar MADURO."
-        criterio_rejeicao = """
-        REJEITAR SE:
-        1. A posse de bola for inútil (toque de lado sem chutes).
-        2. Os chutes forem todos de fora da área (chutes no desespero).
-        3. A pressão (RH/RA) estiver baixa apesar do número de chutes.
-        """
-
+    # --- PROMPT RECALIBRADO PARA "SNIPER DE VALOR" ---
     prompt = f"""
-    Atue como um GESTOR DE RISCO CÉTICO E MUITO RIGOROSO.
-    Sua função é proteger a banca e APROVAR APENAS OPORTUNIDADES CLARAS DE GOL.
-    Se tiver qualquer dúvida, marque como "Arriscado".
-
+    Atue como um ANALISTA PROFISSIONAL DE FUTEBOL (Perfil: Sniper de Valor).
+    Seu objetivo é identificar se o cenário atual favorece a ocorrência de GOLS ou CANTOS nos próximos minutos.
+    
     DADOS DO JOGO:
     - Jogo: {dados_jogo['jogo']}
     - Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
-    - Estratégia Sinalizada: {estrategia}
+    - Estratégia Detectada pelo Robô: {estrategia}
 
-    MOMENTUM (O MAIS IMPORTANTE):
-    - Pressão (Barras): Casa {rh} x {ra} Visitante
+    ESTATÍSTICAS EM TEMPO REAL:
+    - Pressão (Barras de Força): Casa {rh} x {ra} Visitante
     - Chutes na Área: Casa {chutes_area_casa} x {chutes_area_fora} Visitante
     - Escanteios Totais: {escanteios}
     
-    CONTEXTO HISTÓRICO (SECUNDÁRIO - USE APENAS PARA DESEMPATE):
+    CONTEXTO EXTRA:
     {extra_context}
 
     STATS COMPLETAS:
     {dados_ricos}
 
-    SUAS INSTRUÇÕES:
-    1. {perfil_analise}
-    2. {criterio_rejeicao}
-    3. NÃO olhe apenas o número de chutes. Olhe a QUALIDADE (Chutes na área e Pressão).
-    4. Se o Histórico diz que o time marca muito, mas no LIVE eles não estão chutando: REJEITE. O Live manda.
+    SUAS DIRETRIZES DE DECISÃO:
+    1. APROVE se houver volume de jogo (chutes ou pressão), mesmo que a pontaria não esteja perfeita.
+    2. APROVE se o favorito estiver perdendo ou empatando e pressionando (cenário de Blitz).
+    3. REJEITE APENAS SE: O jogo estiver "morto" (sem chutes há muito tempo) ou se a posse for inofensiva (toque de lado na defesa).
+    4. NÃO SEJA PERFECCIONISTA. O mercado de Over precisa de volume, não de perfeição.
 
-    FORMATO DE RESPOSTA (Obrigatório):
-    [Aprovado/Arriscado] - [Motivo curto e direto em 1 frase]
-
-    Exemplos:
-    Aprovado - Pressão absurda do casa e 8 chutes na área, gol iminente.
-    Arriscado - Muitos chutes mas todos de longe, posse estéril e sem pressão real.
+    FORMATO DE RESPOSTA OBRIGATÓRIO:
+    [Aprovado/Arriscado] - [Explicação curta e direta]
     """
 
     try:
@@ -803,6 +786,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
     except Exception as e:
         return "" # Falha silenciosa para não travar o bot
+
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -1106,20 +1090,8 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     return resultados
 
 def _worker_telegram(token, chat_id, msg):
-    if not token or not chat_id:
-        print("❌ ERRO TELEGRAM: Token ou Chat ID vazios!")
-        return
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
-    
-    try: 
-        response = requests.post(url, data=payload, timeout=10)
-        if response.status_code != 200:
-            # Isso vai aparecer no terminal/logs do Streamlit
-            print(f"❌ ERRO TELEGRAM ({response.status_code}): {response.text}")
-    except Exception as e: 
-        print(f"❌ ERRO CONEXÃO TELEGRAM: {e}")
+    try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
+    except: pass
 
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
@@ -1482,6 +1454,10 @@ def fetch_stats_single(fid, api_key):
         r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
+
+# ==============================================================================
+# 3. INTERFACE E LOOP PRINCIPAL
+# ==============================================================================
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     with st.expander("⚙️ Configurações", expanded=True):
@@ -1489,53 +1465,60 @@ with st.sidebar:
         st.session_state['TG_TOKEN'] = st.text_input("Token Telegram:", value=st.session_state['TG_TOKEN'], type="password")
         st.session_state['TG_CHAT'] = st.text_input("Chat IDs:", value=st.session_state['TG_CHAT'])
         INTERVALO = st.slider("Ciclo (s):", 60, 300, 60)
+        
         if st.button("🧹 Limpar Cache"): 
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
-        st.write("---")
-        if st.button("🧠 Pedir Análise do BI"):
-            if IA_ATIVADA:
-                with st.spinner("🤖 O Consultor Neves está analisando seus dados..."):
-                    analise = analisar_bi_com_ia()
-                    st.markdown("### 📝 Relatório do Consultor")
-                    st.info(analise)
-            else: st.error("IA Desconectada.")
-        if st.button("🧪 Criar Nova Estratégia (Big Data)"):
-            if IA_ATIVADA:
-                with st.spinner("🤖 Analisando padrões globais no Big Data..."):
-                    sugestao = criar_estrategia_nova_ia()
-                    st.markdown("### 💡 Sugestão da IA")
-                    st.success(sugestao)
-            else: st.error("IA Desconectada.")
-        if st.button("🔧 Otimizar Estratégias (IA)"):
-            if IA_ATIVADA and db_firestore:
-                with st.spinner("🕵️ Cruzando Greens/Reds com Big Data..."):
-                    relatorio = otimizar_estrategias_existentes_ia()
-                    st.markdown("### 🛠️ Plano de Melhoria")
-                    if "Erro" in relatorio or "Atenção" in relatorio: st.warning(relatorio)
-                    else: st.success("Análise Concluída!"); st.write(relatorio)
-            else: st.error("Requer IA Ativa e Conexão Firebase.")
-        if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
-            with st.spinner("Buscando na API todos os jogos finalizados hoje..."):
-                hoje_real = get_time_br().strftime('%Y-%m-%d')
-                todos_jogos_hoje = buscar_agenda_cached(st.session_state['API_KEY'], hoje_real)
-                ft_pendentes = [j for j in todos_jogos_hoje if j['fixture']['status']['short'] in ['FT', 'AET', 'PEN'] and str(j['fixture']['id']) not in st.session_state['jogos_salvos_bigdata']]
-                if ft_pendentes:
-                    st.info(f"Processando {len(ft_pendentes)} jogos...")
-                    stats_recuperadas = atualizar_stats_em_paralelo(ft_pendentes, st.session_state['API_KEY'])
-                    count_salvos = 0
-                    for fid, stats in stats_recuperadas.items():
-                        j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
-                        if j_obj: salvar_bigdata(j_obj, stats) 
-                        count_salvos += 1
-                    st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
-                else: st.warning("Nenhum jogo finalizado pendente.")
-        if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
-        if st.button("💰 Enviar Relatório Financeiro"):
-            if 'last_fin_stats' in st.session_state:
-                s = st.session_state['last_fin_stats']
-                enviar_relatorio_financeiro(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], s['cenario'], s['lucro'], s['roi'], s['entradas'])
-                st.toast("Relatório Financeiro Enviado!")
-            else: st.error("Abra a aba Financeiro primeiro.")
+    
+    # --- BOTÕES DE AÇÃO ---
+    if st.button("🧠 Pedir Análise do BI"):
+        if IA_ATIVADA:
+            with st.spinner("🤖 O Consultor Neves está analisando seus dados..."):
+                analise = analisar_bi_com_ia()
+                st.markdown("### 📝 Relatório do Consultor")
+                st.info(analise)
+        else: st.error("IA Desconectada.")
+        
+    if st.button("🧪 Criar Nova Estratégia (Big Data)"):
+        if IA_ATIVADA:
+            with st.spinner("🤖 Analisando padrões globais no Big Data..."):
+                sugestao = criar_estrategia_nova_ia()
+                st.markdown("### 💡 Sugestão da IA")
+                st.success(sugestao)
+        else: st.error("IA Desconectada.")
+        
+    if st.button("🔧 Otimizar Estratégias (IA)"):
+        if IA_ATIVADA and db_firestore:
+            with st.spinner("🕵️ Cruzando Greens/Reds com Big Data..."):
+                relatorio = otimizar_estrategias_existentes_ia()
+                st.markdown("### 🛠️ Plano de Melhoria")
+                if "Erro" in relatorio or "Atenção" in relatorio: st.warning(relatorio)
+                else: st.success("Análise Concluída!"); st.write(relatorio)
+        else: st.error("Requer IA Ativa e Conexão Firebase.")
+        
+    if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
+        with st.spinner("Buscando na API todos os jogos finalizados hoje..."):
+            hoje_real = get_time_br().strftime('%Y-%m-%d')
+            todos_jogos_hoje = buscar_agenda_cached(st.session_state['API_KEY'], hoje_real)
+            ft_pendentes = [j for j in todos_jogos_hoje if j['fixture']['status']['short'] in ['FT', 'AET', 'PEN'] and str(j['fixture']['id']) not in st.session_state['jogos_salvos_bigdata']]
+            if ft_pendentes:
+                st.info(f"Processando {len(ft_pendentes)} jogos...")
+                stats_recuperadas = atualizar_stats_em_paralelo(ft_pendentes, st.session_state['API_KEY'])
+                count_salvos = 0
+                for fid, stats in stats_recuperadas.items():
+                    j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
+                    if j_obj: salvar_bigdata(j_obj, stats) 
+                    count_salvos += 1
+                st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
+            else: st.warning("Nenhum jogo finalizado pendente.")
+            
+    if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
+    
+    if st.button("💰 Enviar Relatório Financeiro"):
+        if 'last_fin_stats' in st.session_state:
+            s = st.session_state['last_fin_stats']
+            enviar_relatorio_financeiro(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], s['cenario'], s['lucro'], s['roi'], s['entradas'])
+            st.toast("Relatório Financeiro Enviado!")
+        else: st.error("Abra a aba Financeiro primeiro.")
 
     with st.expander("💰 Gestão de Banca", expanded=False):
         stake_padrao = st.number_input("Valor da Aposta (R$)", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
@@ -1555,21 +1538,29 @@ with st.sidebar:
             st.session_state['ia_bloqueada_ate'] = None; st.toast("✅ IA Destravada!")
 
     st.write("---")
-    st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
     
+    # --- ÁREA DE STATUS (SOLICITADO) ---
+    tg_ok, tg_nome = testar_conexao_telegram(st.session_state['TG_TOKEN'])
+    if tg_ok: 
+        st.markdown(f'<div class="status-active">✈️ TELEGRAM: CONECTADO ({tg_nome})</div>', unsafe_allow_html=True)
+    else: 
+        st.markdown(f'<div class="status-error">❌ TELEGRAM: ERRO ({tg_nome})</div>', unsafe_allow_html=True)
+
     if IA_ATIVADA:
         if st.session_state['ia_bloqueada_ate']:
-            ag = datetime.now()
-            if ag < st.session_state['ia_bloqueada_ate']:
-                m_rest = int((st.session_state['ia_bloqueada_ate'] - ag).total_seconds()/60)
-                st.markdown(f'<div class="status-warning">⚠️ IA PAUSADA (Proteção) - Volta em {m_rest} min</div>', unsafe_allow_html=True)
-            else: st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
-        else: st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
-    else: st.markdown('<div class="status-error">❌ IA DESCONECTADA</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="status-warning">⚠️ IA PAUSADA (Proteção)</div>', unsafe_allow_html=True)
+        else: 
+            st.markdown('<div class="status-active">🤖 IA GEMINI ATIVA</div>', unsafe_allow_html=True)
+    else: 
+        st.markdown('<div class="status-error">❌ IA DESCONECTADA</div>', unsafe_allow_html=True)
 
     if db_firestore: st.markdown('<div class="status-active">🔥 FIREBASE CONECTADO</div>', unsafe_allow_html=True)
     else: st.markdown('<div class="status-warning">⚠️ FIREBASE OFFLINE</div>', unsafe_allow_html=True)
-
+    
+    st.write("---")
+    
+    st.session_state.ROBO_LIGADO = st.checkbox("🚀 LIGAR ROBÔ", value=st.session_state.ROBO_LIGADO)
+    
     st.markdown("---")
     st.markdown("### ⚠️ Zona de Perigo")
     if st.button("☢️ ZERAR ROBÔ", type="primary", use_container_width=True): st.session_state['confirmar_reset'] = True
@@ -1656,26 +1647,16 @@ if st.session_state.ROBO_LIGADO:
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 if st_short == 'FT': continue 
                 
-                # --- SISTEMA DE CACHE INTELIGENTE E ATUALIZAÇÃO ---
+                # --- CACHE INTELIGENTE ---
                 stats = []
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                # Regra de Economia de API (Cache Variável)
-                # Se o jogo estiver "Morno" (meio de campo), olha a cada 3 minutos (180s)
-                # Se estiver em momento crítico, olha a cada 60s
-                t_esp = 180 
-                
-                # Momentos Críticos (Turbo Mode - 60s)
-                eh_inicio = (tempo <= 20) # Para Gol Relâmpago
-                eh_final = (tempo >= 70 and abs(gh - ga) <= 1) # Para Janela de Ouro/Sniper
-                eh_ht = (st_short == 'HT') # Para Nettuno e análises de intervalo
-                
-                # Verifica Pressão Recente na Memória (Se o jogo esquentou, ativa Turbo)
+                t_esp = 180 # Padrão Econômico
+                eh_inicio = (tempo <= 20); eh_final = (tempo >= 70 and abs(gh - ga) <= 1); eh_ht = (st_short == 'HT')
                 memoria = st.session_state['memoria_pressao'].get(fid, {})
                 pressao_recente = (len(memoria.get('h_t', [])) + len(memoria.get('a_t', []))) >= 4
                 
-                if eh_inicio or eh_final or eh_ht or pressao_recente:
-                    t_esp = 60 # Acelera a atualização
+                if eh_inicio or eh_final or eh_ht or pressao_recente: t_esp = 60 # Modo Turbo
 
                 if deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp:
@@ -1763,31 +1744,33 @@ if st.session_state.ROBO_LIGADO:
                                 elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
                             except: pass
                         
+                        texto_validacao = ""
+                        if dados_50:
+                            h_stats = dados_50['home']; a_stats = dados_50['away']
+                            foco = "Geral"; pct_h = 0; pct_a = 0
+                            if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
+                                foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
+                            else:
+                                foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
+                            media_confianca = (pct_h + pct_a) / 2
+                            icone_confianca = "🔥" if media_confianca > 75 else "⚠️"
+                            texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{icone_confianca} {foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
+
+                        texto_sofa = ""
+                        if nota_home != "N/A" and nota_away != "N/A":
+                            texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
+
+                        msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
+                        
+                        # --- CORREÇÃO CRÍTICA: ENVIA PRIMEIRO, SALVA DEPOIS ---
+                        enviar_telegram(safe_token, safe_chat, msg)
+                        st.toast(f"Sinal Enviado: {s['tag']}")
+                        
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
-                        if adicionar_historico(item):
-                            prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                            
-                            texto_validacao = ""
-                            if dados_50:
-                                h_stats = dados_50['home']; a_stats = dados_50['away']
-                                foco = "Geral"; pct_h = 0; pct_a = 0
-                                if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
-                                    foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
-                                else:
-                                    foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
-                                media_confianca = (pct_h + pct_a) / 2
-                                icone_confianca = "🔥" if media_confianca > 75 else "⚠️"
-                                texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{icone_confianca} {foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
+                        adicionar_historico(item)
+                        # ------------------------------------------------------
 
-                            texto_sofa = ""
-                            if nota_home != "N/A" and nota_away != "N/A":
-                                texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
-
-                            msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
-                            
-                            enviar_telegram(safe_token, safe_chat, msg)
-                            st.toast(f"Sinal Enviado: {s['tag']}")
-                        elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
+                        if uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
                              msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
                              enviar_telegram(safe_token, safe_chat, msg_super)
@@ -2012,5 +1995,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")        
-
+        st.info("💡 Robô em espera. Configure na lateral.")
