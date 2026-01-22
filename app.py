@@ -107,23 +107,24 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
+# Mapa para referência, a lógica real de texto está na função processar()
 MAPA_LOGICA_ESTRATEGIAS = {
-    "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
-    "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
-    "💰 Janela de Ouro": "70-75 min, Chutes >= 18, Diferença gols <= 1. Jogo pegado.",
-    "🟢 Blitz Casa": "Tempo <= 60, Casa perdendo ou empatando, Pressão(rh) >= 2 ou Chutes >= 8.",
-    "🟢 Blitz Visitante": "Tempo <= 60, Visitante perdendo ou empatando, Pressão(ra) >= 2 ou Chutes >= 8.",
-    "🔥 Massacre": "Favorito Top vs Zebra, Tempo <= 5, Chutes >= 1.",
-    "⚔️ Choque Líderes": "Dois Tops, Tempo <= 7, Chutes >= 2.",
-    "🥊 Briga de Rua": "Times Mid, Tempo <= 7, Chutes 2 a 3.",
-    "❄️ Jogo Morno": "Times Z4, Tempo 15-16, 0 Chutes. Under HT.",
-    "💎 GOLDEN BET": "75-85 min, Diferença <= 1, Chutes >= 16, SoG >= 8. Pressão extrema.",
-    "🏹 Tiroteio Elite": "Ligas Top, Tempo 15-25, Chutes > 6. Jogo muito aberto.",
-    "⚡ Contra-Ataque Letal": "Posse < 35% mas vencendo ou empatando com SoG > 2.",
-    "🚩 Pressão Escanteios": "Muitos escanteios (>5) e chutes na área, indicando gol maduro.",
-    "💎 Sniper Final": "Jogo empatado aos 80' com pressão absurda. Busca valor.",
-    "🦁 Back Favorito (Nettuno)": "Posse ofensiva > 55% e adversário inofensivo no HT.",
-    "💀 Lay ao Morto (Nettuno)": "Time errando passes (<75%), sem chutar e sofrendo pressão."
+    "🟣 Porteira Aberta": "Over Gols",
+    "⚡ Gol Relâmpago": "Over HT",
+    "💰 Janela de Ouro": "Over Limite",
+    "🟢 Blitz Casa": "Over Gols",
+    "🟢 Blitz Visitante": "Over Gols",
+    "🔥 Massacre": "Over HT",
+    "⚔️ Choque Líderes": "Over HT",
+    "🥊 Briga de Rua": "Over HT",
+    "❄️ Jogo Morno": "Under HT",
+    "💎 GOLDEN BET": "Over Limite",
+    "🏹 Tiroteio Elite": "Over Gols",
+    "⚡ Contra-Ataque Letal": "Back Zebra",
+    "🚩 Pressão Escanteios": "Cantos Asiáticos",
+    "💎 Sniper Final": "Over Limite",
+    "🦁 Back Favorito (Nettuno)": "Back Vencedor",
+    "💀 Lay ao Morto (Nettuno)": "Lay Perdedor"
 }
 
 MAPA_ODDS_TEORICAS = {
@@ -170,7 +171,7 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     return chave
 
 def gerar_barra_pressao(rh, ra):
-    return "" # Removido para limpeza
+    return "" # Visual Removido
 
 def update_api_usage(headers):
     if not headers: return
@@ -1042,6 +1043,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             if processar_resultado(s, jogo_encontrado, token, chats): updates_buffer.append(s)
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
+# --- NOVA LÓGICA DE SNIPER INTELIGENTE ---
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
     snipers = [s for s in hist if "Sniper" in s['Estrategia'] and s['Resultado'] == "Pendente"]
@@ -1057,46 +1059,60 @@ def conferir_resultados_sniper(jogos_live, api_key):
                 if res.get('response'): jogo = res['response'][0]
             except: pass
         if not jogo: continue
+        
         status = jogo['fixture']['status']['short']
+        if status not in ['FT', 'AET', 'PEN', 'INT']: continue # Só confere se acabou
+
         gh = jogo['goals']['home'] or 0
         ga = jogo['goals']['away'] or 0
         tg = gh + ga
-        target = s['Placar_Sinal'].upper().strip()
-        res_final = None
-        if "OVER" in target:
-            linha = 0.5
-            if "1.5" in target: linha = 1.5
-            elif "2.5" in target: linha = 2.5
-            elif "0.5" in target: linha = 0.5
-            if tg > linha: res_final = '✅ GREEN'
-            elif status in ['FT', 'AET', 'PEN', 'INT']: res_final = '❌ RED'
-        elif "UNDER" in target:
-            linha = 2.5
-            if "3.5" in target: linha = 3.5
-            elif "1.5" in target: linha = 1.5
-            if tg > linha: res_final = '❌ RED'
-            elif status in ['FT', 'AET', 'PEN', 'INT']: res_final = '✅ GREEN'
-        elif "AMBAS" in target:
-            if gh > 0 and ga > 0: res_final = '✅ GREEN'
-            elif status in ['FT', 'AET', 'PEN', 'INT']: res_final = '❌ RED'
-        elif status in ['FT', 'AET', 'PEN', 'INT']:
-            if "CASA" in target and "EMPATE" not in target:
-                res_final = '✅ GREEN' if gh > ga else '❌ RED'
-            elif "FORA" in target and "EMPATE" not in target:
-                res_final = '✅ GREEN' if ga > gh else '❌ RED'
-            elif "CASA" in target and ("OU EMPATE" in target or "DUPLA" in target):
-                res_final = '✅ GREEN' if gh >= ga else '❌ RED'
-            elif "FORA" in target and ("OU EMPATE" in target or "DUPLA" in target):
-                res_final = '✅ GREEN' if ga >= gh else '❌ RED'
-            elif "EMPATE" in target and "ANULA" not in target:
-                res_final = '✅ GREEN' if gh == ga else '❌ RED'
-        if res_final:
-            s['Resultado'] = res_final
-            updates.append(s)
-            emoji = "✅" if "GREEN" in res_final else "❌"
-            msg_resultado = f"{emoji} <b>SNIPER FINALIZADO</b>\n⚽ {s['Jogo']}\n🎯 Aposta: {s['Placar_Sinal']}\n📉 Placar Atual: {gh}x{ga}"
-            enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], msg_resultado)
-            st.session_state['precisa_salvar'] = True
+        
+        target = s['Placar_Sinal'].lower().strip()
+        home_name = jogo['teams']['home']['name'].lower()
+        away_name = jogo['teams']['away']['name'].lower()
+        
+        # 1. PARSER DE GOLS
+        green_gols = True
+        match_menos = re.search(r'(menos|under)\s*(?:de)?\s*(\d+\.?\d*)', target)
+        if match_menos:
+            linha = float(match_menos.group(2))
+            if tg >= linha: green_gols = False
+        
+        match_mais = re.search(r'(mais|over)\s*(?:de)?\s*(\d+\.?\d*)', target)
+        if match_mais:
+            linha = float(match_mais.group(2))
+            if tg <= linha: green_gols = False
+        
+        # 2. PARSER DE RESULTADO (1x2)
+        green_resultado = True
+        is_home_bet = (home_name in target) or ("casa" in target)
+        is_away_bet = (away_name in target) or ("visitante" in target) or ("fora" in target)
+        is_draw_bet = ("empate" in target) or ("draw" in target) or ("x" in target)
+        is_double = ("dupla" in target) or ("ou" in target) or ("dc" in target)
+        
+        if is_home_bet:
+            if is_double: # Casa ou Empate
+                if not (gh >= ga): green_resultado = False
+            else: # Casa Seco
+                if not (gh > ga): green_resultado = False
+        elif is_away_bet:
+            if is_double: # Fora ou Empate
+                if not (ga >= gh): green_resultado = False
+            else: # Fora Seco
+                if not (ga > gh): green_resultado = False
+        elif is_draw_bet: # Empate Seco (se não for dupla)
+            if not is_double and not is_home_bet and not is_away_bet:
+                if not (gh == ga): green_resultado = False
+
+        # CONCLUSÃO FINAL
+        res_final = '✅ GREEN' if (green_gols and green_resultado) else '❌ RED'
+        
+        s['Resultado'] = res_final
+        updates.append(s)
+        msg_resultado = f"{res_final} <b>SNIPER FINALIZADO</b>\n⚽ {s['Jogo']}\n🎯 Aposta: {s['Placar_Sinal']}\n📉 Placar Final: {gh}x{ga}"
+        enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], msg_resultado)
+        st.session_state['precisa_salvar'] = True
+
     if updates: atualizar_historico_ram(updates)
 
 def verificar_var_rollback(jogos_live, token, chats):
