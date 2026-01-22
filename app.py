@@ -632,25 +632,31 @@ def buscar_inteligencia(estrategia, liga, jogo):
     if df.empty: return "\n🔮 <b>Prob: Sem Histórico</b>"
     try:
         times = jogo.split(' x ')
+        if len(times) < 2: return "\n🔮 <b>Prob: Nomes Irregulares</b>"
         time_casa = times[0].split('(')[0].strip()
         time_visitante = times[1].split('(')[0].strip()
     except: return "\n🔮 <b>Prob: Erro Nome</b>"
+    
     numerador = 0; denominador = 0; fontes = []
-    f_casa = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
-    f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
-    if len(f_casa) >= 3 or len(f_vis) >= 3:
-        wr_c = (f_casa['Resultado'].str.contains('GREEN').sum()/len(f_casa)*100) if len(f_casa)>=3 else 0
-        wr_v = (f_vis['Resultado'].str.contains('GREEN').sum()/len(f_vis)*100) if len(f_vis)>=3 else 0
-        div = 2 if (len(f_casa)>=3 and len(f_vis)>=3) else 1
-        numerador += ((wr_c + wr_v)/div) * 5; denominador += 5; fontes.append("Time")
-    f_liga = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
-    if len(f_liga) >= 3:
-        wr_l = (f_liga['Resultado'].str.contains('GREEN').sum()/len(f_liga)*100)
-        numerador += wr_l * 3; denominador += 3; fontes.append("Liga")
-    f_geral = df[df['Estrategia'] == estrategia]
-    if len(f_geral) >= 1:
-        wr_g = (f_geral['Resultado'].str.contains('GREEN').sum()/len(f_geral)*100)
-        numerador += wr_g * 1; denominador += 1
+    
+    try:
+        f_casa = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_casa, na=False))]
+        f_vis = df[(df['Estrategia'] == estrategia) & (df['Jogo'].str.contains(time_visitante, na=False))]
+        
+        if len(f_casa) >= 3 or len(f_vis) >= 3:
+            wr_c = (f_casa['Resultado'].str.contains('GREEN').sum()/len(f_casa)*100) if len(f_casa)>=3 else 0
+            wr_v = (f_vis['Resultado'].str.contains('GREEN').sum()/len(f_vis)*100) if len(f_vis)>=3 else 0
+            div = 2 if (len(f_casa)>=3 and len(f_vis)>=3) else 1
+            numerador += ((wr_c + wr_v)/div) * 5; denominador += 5; fontes.append("Time")
+    except: pass
+
+    try:
+        f_liga = df[(df['Estrategia'] == estrategia) & (df['Liga'] == liga)]
+        if len(f_liga) >= 3:
+            wr_l = (f_liga['Resultado'].str.contains('GREEN').sum()/len(f_liga)*100)
+            numerador += wr_l * 3; denominador += 3; fontes.append("Liga")
+    except: pass
+
     if denominador == 0: return "\n🔮 <b>Prob: Calculando...</b>"
     prob_final = numerador / denominador
     str_fontes = "+".join(fontes) if fontes else "Geral"
@@ -1588,6 +1594,7 @@ if st.session_state.ROBO_LIGADO:
                     extra_ctx = f"{txt_history}\n{txt_rating_ia}"
 
                     for s in lista_sinais:
+                        prob = "..." # Valor padrão para evitar NameError
                         nome_home_display = f"{home} ({rank_h}º)" if rank_h else home
                         nome_away_display = f"{away} ({rank_a}º)" if rank_a else away
                         
@@ -1605,11 +1612,11 @@ if st.session_state.ROBO_LIGADO:
                                     ja_enviado_total = True; st.session_state['alertas_enviados'].add(uid_normal); break
                         if ja_enviado_total: continue 
                         
-                        st.session_state['alertas_enviados'].add(uid_normal)
+                        # --- REMOVIDO: st.session_state['alertas_enviados'].add(uid_normal)
+                        # Só adicionamos ao set DEPOIS de enviar, para garantir que não perde o sinal.
                         
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga, tempo)
 
-                        # --- CORREÇÃO DO LOOP ---
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
                         
@@ -1631,32 +1638,34 @@ if st.session_state.ROBO_LIGADO:
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
                         
                         if adicionar_historico(item):
-                            # --- CORREÇÃO: PROB CALCULADA AQUI ---
-                            prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                            
-                            texto_validacao = ""
-                            if dados_50:
-                                h_stats = dados_50['home']; a_stats = dados_50['away']
-                                foco = "Geral"; pct_h = 0; pct_a = 0
-                                if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
-                                    foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
-                                else:
-                                    foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
-                                media_confianca = (pct_h + pct_a) / 2
-                                icone_confianca = "🔥" if media_confianca > 75 else "⚠️"
-                                texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{icone_confianca} {foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
+                            # --- CÁLCULO E ENVIO DO TELEGRAM ---
+                            try:
+                                prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
+                                
+                                texto_validacao = ""
+                                if dados_50:
+                                    h_stats = dados_50['home']; a_stats = dados_50['away']
+                                    foco = "Geral"; pct_h = 0; pct_a = 0
+                                    if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
+                                        foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
+                                    else:
+                                        foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
+                                    media_confianca = (pct_h + pct_a) / 2
+                                    icone_confianca = "🔥" if media_confianca > 75 else "⚠️"
+                                    texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{icone_confianca} {foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
 
-                            texto_sofa = ""
-                            if nota_home != "N/A" and nota_away != "N/A":
-                                texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
+                                texto_sofa = ""
+                                if nota_home != "N/A" and nota_away != "N/A":
+                                    texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
 
-                            msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
-                            
-                            enviar_telegram(safe_token, safe_chat, msg)
-                            st.toast(f"Sinal Enviado: {s['tag']}")
+                                msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
+                                
+                                enviar_telegram(safe_token, safe_chat, msg)
+                                st.session_state['alertas_enviados'].add(uid_normal) # SÓ MARCA COMO ENVIADO AQUI
+                                st.toast(f"Sinal Enviado: {s['tag']}")
+                            except Exception as e:
+                                print(f"Erro ao enviar sinal: {e}")
                         
-                        # --- FIM CORREÇÃO ---
-
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
                              msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
@@ -1727,7 +1736,7 @@ if st.session_state.ROBO_LIGADO:
                     lucros = []; saldo_atual = banca_inicial; historico_saldo = [banca_inicial]; qtd_greens = 0; qtd_reds = 0
                     for idx, row in df_fin.iterrows():
                         res = row['Resultado']; odd = row['Odd_Calc']
-                        if 'GREEN' in res: lucro = (stake_padrao * odd) - stake_padrao; qtd_greens += 1
+                        if 'GREEN' in res: lucro = (stake_padrao * odd) - stake; qtd_greens += 1
                         else: lucro = -stake_padrao; qtd_reds += 1
                         saldo_atual += lucro; lucros.append(lucro); historico_saldo.append(saldo_atual)
                     df_fin['Lucro'] = lucros; total_lucro = sum(lucros)
