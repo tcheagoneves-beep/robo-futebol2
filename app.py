@@ -1640,9 +1640,19 @@ if st.session_state.ROBO_LIGADO:
                             icone_confianca = "🔥" if media_confianca > 75 else "⚠️"
                             texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{icone_confianca} {foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
 
-                        texto_sofa = ""
+texto_sofa = ""
                         if nota_home != "N/A" and nota_away != "N/A":
                             texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
+
+                        # --- LINHA QUE ESTAVA FALTANDO (ADICIONEI AQUI) ---
+                        prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
+                        # --------------------------------------------------
+
+                        msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
+                        
+                        # --- CÓDIGO DE ENVIO ---
+                        enviar_telegram(safe_token, safe_chat, msg)
+                        st.toast(f"Sinal Enviado: {s['tag']}")
 
                         msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
                         
@@ -1881,3 +1891,4 @@ else:
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
         
+
