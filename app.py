@@ -948,63 +948,100 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
         SINAIS = []
         
-        # --- ESTRATÉGIAS PADRÃO ---
-        if tempo <= 30 and (j['goals']['home'] + j['goals']['away']) >= 2: 
-            SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"{sh_h+sh_a} Chutes", "rh": rh, "ra": ra})
-        if (j['goals']['home'] + j['goals']['away']) == 0:
-            if (tempo <= 2 and (sog_h + sog_a) >= 1) or (tempo <= 10 and (sh_h + sh_a) >= 2):
-                SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": f"{sh_h+sh_a} Chutes", "rh": rh, "ra": ra})
-        if 70 <= tempo <= 75 and (sh_h+sh_a) >= 18 and abs(j['goals']['home']-j['goals']['away']) <= 1: 
-            SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final - Limite)", "stats": f"{sh_h+sh_a} Chutes", "rh": rh, "ra": ra})
+        gh = j['goals']['home']
+        ga = j['goals']['away']
+        total_gols = gh + ga
+        total_chutes = sh_h + sh_a
+        total_sog = sog_h + sog_a
+
+        # --- ESTRATÉGIAS PADRÃO (OTIMIZADAS PELA IA) ---
+
+        # 1. PORTEIRA ABERTA (Ajuste leve)
+        if tempo <= 30 and total_gols >= 2: 
+            SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
+
+        # 2. GOL RELÂMPAGO (IA pediu aumento de chutes)
+        # Antes: chutes >= 2. Agora: chutes >= 3 (Filtra jogos muito parados)
+        if total_gols == 0:
+            if (tempo <= 10 and total_chutes >= 3): 
+                SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": f"{total_chutes} Chutes (Intenso)", "rh": rh, "ra": ra})
+
+        # 3. JANELA DE OURO (CORREÇÃO CRÍTICA)
+        # Diagnóstico IA: Média de chutes nos Reds era 26. Tem que subir a régua.
+        # Novo Filtro: Chutes >= 22 (Era 18). Isso elimina jogos mornos.
+        if 70 <= tempo <= 75 and abs(gh - ga) <= 1:
+            if total_chutes >= 22: 
+                SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": "Over Gols (Gol no final - Limite)", "stats": f"🔥 {total_chutes} Chutes", "rh": rh, "ra": ra})
+
+        # 4. BLITZ
         if tempo <= 60:
-            if j['goals']['home'] <= j['goals']['away'] and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
-            if j['goals']['away'] <= j['goals']['home'] and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
+            if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
+            if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": "Over Gols (Gol maduro na partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
         
         # --- NOVAS ESTRATÉGIAS BASEADAS NA ANÁLISE DO BIG DATA ---
+        
+        # TIROTEIO ELITE
         if 15 <= tempo <= 25:
-            total_chutes = sh_h + sh_a
-            if total_chutes >= 6 and (sog_h + sog_a) >= 3:
+            if total_chutes >= 6 and total_sog >= 3:
                 SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": "Over Gols HT/FT (Jogo Acelerado)", "stats": f"{total_chutes} Chutes em {tempo}min", "rh": rh, "ra": ra})
 
+        # CONTRA-ATAQUE LETAL
         try:
             posse_h_val = next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")
             posse_h = int(str(posse_h_val).replace('%', ''))
         except: posse_h = 50
         
-        if posse_h <= 35 and sog_h >= 2 and j['goals']['home'] >= j['goals']['away']:
+        if posse_h <= 35 and sog_h >= 2 and gh >= ga:
              SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Casa ou Over (Time reativo perigoso)", "stats": f"Posse {posse_h}% vs {sog_h} SoG", "rh": rh, "ra": ra})
-        elif posse_h >= 65 and sog_a >= 2 and j['goals']['away'] >= j['goals']['home']:
+        elif posse_h >= 65 and sog_a >= 2 and ga >= gh:
              SINAIS.append({"tag": "⚡ Contra-Ataque Letal", "ordem": "Visitante ou Over (Time reativo perigoso)", "stats": f"Posse {100-posse_h}% vs {sog_a} SoG", "rh": rh, "ra": ra})
 
+        # PRESSÃO ESCANTEIOS (Ignorando o filtro negativo por enquanto, focando na pressão positiva)
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
         chutes_area_h = get_v(stats_h, 'Shots insidebox'); chutes_area_a = get_v(stats_a, 'Shots insidebox')
         
         if tempo >= 30:
-            if ck_h >= 5 and chutes_area_h >= 4 and j['goals']['home'] <= j['goals']['away']:
+            if ck_h >= 5 and chutes_area_h >= 4 and gh <= ga:
                 SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": "Over Gols ou Canto Limite (Pressão Total)", "stats": f"{ck_h} Cantos / {chutes_area_h} Ch. Área", "rh": rh, "ra": ra})
-            if ck_a >= 5 and chutes_area_a >= 4 and j['goals']['away'] <= j['goals']['home']:
+            if ck_a >= 5 and chutes_area_a >= 4 and ga <= gh:
                 SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": "Over Gols ou Canto Limite (Pressão Total)", "stats": f"{ck_a} Cantos / {chutes_area_a} Ch. Área", "rh": rh, "ra": ra})
 
+        # STRATS DE RANKING
         if rank_home and rank_away:
             is_top_home = rank_home <= 4; is_top_away = rank_away <= 4; is_bot_home = rank_home >= 11; is_bot_away = rank_away >= 11; is_mid_home = rank_home >= 5; is_mid_away = rank_away >= 5
+            
+            # MASSACRE
             if (is_top_home and is_bot_away) or (is_top_away and is_bot_home):
-                if tempo <= 5 and (sh_h + sh_a) >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve abrir placar)", "stats": f"Rank: {rank_home}x{rank_away}", "rh": rh, "ra": ra})
+                if tempo <= 5 and total_chutes >= 1: SINAIS.append({"tag": "🔥 Massacre", "ordem": "Over 0.5 HT (Favorito deve abrir placar)", "stats": f"Rank: {rank_home}x{rank_away}", "rh": rh, "ra": ra})
+            
+            # FAVORITO
             if 5 <= tempo <= 15:
                 if is_top_home and (rh >= 2 or sh_h >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {rh}", "rh": rh, "ra": ra})
                 if is_top_away and (ra >= 2 or sh_a >= 3): SINAIS.append({"tag": "🦁 Favorito", "ordem": "Over Gols (Partida)", "stats": f"Pressão: {ra}", "rh": rh, "ra": ra})
+            
+            # CHOQUE LIDERES
             if is_top_home and is_top_away and tempo <= 7:
-                if (sh_h + sh_a) >= 2 and (sog_h + sog_a) >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": f"{sh_h+sh_a} Chutes", "rh": rh, "ra": ra})
+                if total_chutes >= 2 and total_sog >= 1: SINAIS.append({"tag": "⚔️ Choque Líderes", "ordem": "Over 0.5 HT (Jogo intenso)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
+            
+            # BRIGA DE RUA (Ajuste IA: Chutes > 10 não entrar? Vamos manter simples por enquanto)
             if is_mid_home and is_mid_away:
-                if tempo <= 7 and 2 <= (sh_h + sh_a) <= 3: SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": f"{sh_h+sh_a} Chutes", "rh": rh, "ra": ra})
+                if tempo <= 7 and 2 <= total_chutes <= 4: # Limitando teto para evitar jogos "loucos demais" cedo
+                    SINAIS.append({"tag": "🥊 Briga de Rua", "ordem": "Over 0.5 HT (Trocação franca)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
+                
+                # JOGO MORNO
                 is_bot_home_morno = rank_home >= 10; is_bot_away_morno = rank_away >= 10
                 if is_bot_home_morno and is_bot_away_morno:
-                    if 15 <= tempo <= 16 and (sh_h + sh_a) == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
-        if 75 <= tempo <= 85 and abs(j['goals']['home'] - j['goals']['away']) <= 1:
-            if (sh_h + sh_a) >= 16 and (sog_h + sog_a) >= 8: SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Aposta seca que sai mais um gol)", "stats": "🔥 Pressão Máxima", "rh": rh, "ra": ra})
+                    if 15 <= tempo <= 16 and total_chutes == 0: SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": "Under 1.5 HT (Apostar que NÃO saem 2 gols no 1º tempo)", "stats": "0 Chutes (Times Z-4)", "rh": rh, "ra": ra})
+        
+        # 5. GOLDEN BET (CORREÇÃO CRÍTICA)
+        # Diagnóstico IA: Greens tinham 31 chutes, Reds tinham 25.
+        # Ação: Subir régua para 28 Chutes e 10 SoG.
+        if 75 <= tempo <= 85 and abs(gh - ga) <= 1:
+            if total_chutes >= 28 and total_sog >= 10: 
+                SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": "Gol no Final (Over Limit) (Pressão Absurda)", "stats": f"🔥 {total_chutes} Chutes / {total_sog} no Gol", "rh": rh, "ra": ra})
         
         # --- CAMADA EXTRA: SNIPER FINAL (ODDS ALTAS) ---
-        # Só ativa se o jogo estiver empatado no final (80'+) e com MUITA pressão
-        if tempo >= 80 and j['goals']['home'] == j['goals']['away']: 
+        if tempo >= 80 and gh == ga: 
             if (rh >= 4 and sh_h >= 12) or (ra >= 4 and sh_a >= 12):
                 SINAIS.append({
                     "tag": "💎 Sniper Final", 
