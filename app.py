@@ -803,7 +803,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
     except Exception as e:
         return "" # Falha silenciosa para não travar o bot
-
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -964,7 +963,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
                         "ordem": "⚠️ ENTRAR: Back Casa (Vencer) | 🛑 SAÍDA: Feche se o time parar de chutar ou tomar susto.",
                         "stats": f"Dominância Total: Posse {posse_h}% | Chutes {sh_h} x {sh_a} (Adv. Morto)",
                         "rh": rh, "ra": ra
-                     })
+                      })
             elif (posse_a >= 55) and (sog_a >= 2) and (sh_a >= 5) and (sh_h <= 1):
                  if ra >= 1:
                      SINAIS.append({
@@ -972,7 +971,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
                         "ordem": "⚠️ ENTRAR: Back Visitante (Vencer) | 🛑 SAÍDA: Feche se o time parar de chutar ou tomar susto.",
                         "stats": f"Dominância Total: Posse {posse_a}% | Chutes {sh_a} x {sh_h} (Adv. Morto)",
                         "rh": rh, "ra": ra
-                     })
+                      })
 
         # ==============================================================================
         # 💀 ESTRATÉGIA NETTUNO: LAY AO "TIME MORTO" (ANTI-JOGO/BALÃO)
@@ -1451,10 +1450,18 @@ def momentum(fid, sog_h, sog_a):
     st.session_state['memoria_pressao'][fid] = mem
     return len(mem['h_t']), len(mem['a_t'])
 
+# --- CORREÇÃO DE LOGICA: COBRE O JOGO TODO ---
 def deve_buscar_stats(tempo, gh, ga, status):
-    if 5 <= tempo <= 15: return True
-    if 70 <= tempo <= 85 and abs(gh - ga) <= 1: return True
+    # 1. Prioridade Máxima: Intervalo (HT)
+    # Motivo: Estratégias de Back Favorito e Lay ao Morto (Nettuno) precisam analisar o HT
     if status == 'HT': return True
+    
+    # 2. Janela Geral de Estratégias (0 aos 95 minutos)
+    # Cobre: Relâmpago (0-10), Tiroteio (15-25), Porteira (0-30), Blitz (0-60), Janelas Finais (70+)
+    # ANTES VOCÊ TINHA UM BURACO AQUI QUE CEGAVA O ROBÔ
+    if 0 <= tempo <= 95:
+        return True
+
     return False
 
 def fetch_stats_single(fid, api_key):
@@ -1463,7 +1470,6 @@ def fetch_stats_single(fid, api_key):
         r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
-
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     with st.expander("⚙️ Configurações", expanded=True):
@@ -1638,9 +1644,27 @@ if st.session_state.ROBO_LIGADO:
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 if st_short == 'FT': continue 
                 
+                # --- SISTEMA DE CACHE INTELIGENTE E ATUALIZAÇÃO ---
                 stats = []
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
-                t_esp = 60 if (69<=tempo<=76) else (90 if tempo<=15 else 180)
+                
+                # Regra de Economia de API (Cache Variável)
+                # Se o jogo estiver "Morno" (meio de campo), olha a cada 3 minutos (180s)
+                # Se estiver em momento crítico, olha a cada 60s
+                t_esp = 180 
+                
+                # Momentos Críticos (Turbo Mode - 60s)
+                eh_inicio = (tempo <= 20) # Para Gol Relâmpago
+                eh_final = (tempo >= 70 and abs(gh - ga) <= 1) # Para Janela de Ouro/Sniper
+                eh_ht = (st_short == 'HT') # Para Nettuno e análises de intervalo
+                
+                # Verifica Pressão Recente na Memória (Se o jogo esquentou, ativa Turbo)
+                memoria = st.session_state['memoria_pressao'].get(fid, {})
+                pressao_recente = (len(memoria.get('h_t', [])) + len(memoria.get('a_t', []))) >= 4
+                
+                if eh_inicio or eh_final or eh_ht or pressao_recente:
+                    t_esp = 60 # Acelera a atualização
+
                 if deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp:
                           fid_res, s_res, h_res = fetch_stats_single(fid, safe_api)
@@ -1648,6 +1672,7 @@ if st.session_state.ROBO_LIGADO:
                               st.session_state['controle_stats'][fid] = datetime.now()
                               st.session_state[f"st_{fid}"] = s_res
                               update_api_usage(h_res)
+                
                 stats = st.session_state.get(f"st_{fid}", [])
                 status_vis = "👁️" if stats else "💤"
                 
@@ -1655,6 +1680,7 @@ if st.session_state.ROBO_LIGADO:
                 if j['league']['id'] in LIGAS_TABELA:
                     rk = buscar_ranking(safe_api, j['league']['id'], j['league']['season'])
                     rank_h = rk.get(home); rank_a = rk.get(away)
+                
                 lista_sinais = []
                 if stats:
                     lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
@@ -1974,4 +2000,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")
+        st.info("💡 Robô em espera. Configure na lateral.")        
