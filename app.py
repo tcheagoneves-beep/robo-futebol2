@@ -1599,6 +1599,17 @@ with st.sidebar:
                 else: st.warning("Nenhum jogo finalizado pendente.")
         if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
         if st.button("💰 Enviar Relatório Financeiro"):
+if st.button("🌅 Forçar Sniper Matinal"):
+            with st.spinner("Gerando análise matinal com IA..."):
+                # Chama a função de geração
+                insights = gerar_insights_matinais_ia(st.session_state['API_KEY'])
+                
+                # Envia para o Telegram
+                ids = [x.strip() for x in str(st.session_state['TG_CHAT']).replace(';', ',').split(',') if x.strip()]
+                msg_final = f"🌅 <b>SNIPER MATINAL (MANUAL)</b>\n\n{insights}"
+                for cid in ids: enviar_telegram(st.session_state['TG_TOKEN'], cid, msg_final)
+                
+                st.success("Sniper Matinal enviado com sucesso!")
             if 'last_fin_stats' in st.session_state:
                 s = st.session_state['last_fin_stats']
                 enviar_relatorio_financeiro(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], s['cenario'], s['lucro'], s['roi'], s['entradas'])
