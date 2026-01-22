@@ -744,7 +744,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
     except Exception as e:
         return "" # Falha silenciosa para não travar o bot
-
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -1329,7 +1328,7 @@ def gerar_insights_matinais_ia(api_key):
                     odd_reg = "1.70" 
                     if "CASA" in aposta_raw.upper() and odd_home != "N/A": odd_reg = odd_home
                     elif "FORA" in aposta_raw.upper() and odd_away != "N/A": odd_reg = odd_away
-                    item_bi = {"FID": str(fid), "Data": hoje, "Hora": "08:00", "Liga": j['league']['name'], "Jogo": f"{time_casa} x {time_fora}", "Placar_Sinal": aposta_raw, "Estrategia": "Sniper Matinal", "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']), "AwayID": str(j['teams']['away']['id']), "Odd": str(odd_reg), "Odd_Atualizada": "", "Opiniao_IA": "Sniper"}
+                    item_bi = {"FID": str(fid), "Data": hoje, "Hora": "08:00", "Liga": j['league']['name'], "Jogo": f"{time_casa} x {time_fora}", "Placar_Sinal": aposta_raw, "Estrategia": "🎯 Sniper Matinal", "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']), "AwayID": str(j['teams']['away']['id']), "Odd": str(odd_reg), "Odd_Atualizada": "", "Opiniao_IA": "Sniper"}
                     adicionar_historico(item_bi)
                     time.sleep(1.5)
         return relatorio_final if relatorio_final else "Sem oportunidades de alto valor encontradas hoje."
@@ -1457,7 +1456,6 @@ with st.sidebar:
             salvar_aba("Historico", st.session_state['historico_full'])
             st.session_state['confirmar_reset'] = False; st.rerun()
         if c2.button("❌ NÃO"): st.session_state['confirmar_reset'] = False; st.rerun()
-
 if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
         carregar_tudo()
@@ -1611,8 +1609,10 @@ if st.session_state.ROBO_LIGADO:
                         
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga, tempo)
 
+                        # --- CORREÇÃO DO LOOP ---
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
+                        
                         destaque_odd = ""
                         if odd_val >= 1.80:
                             destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
@@ -1628,43 +1628,36 @@ if st.session_state.ROBO_LIGADO:
                                 elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
                             except: pass
                         
-                        texto_validacao = ""
-                        if dados_50:
-                            h_stats = dados_50['home']; a_stats = dados_50['away']
-                            foco = "Geral"; pct_h = 0; pct_a = 0
-                            if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
-                                foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
-                            else:
-                                foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
-                            media_confianca = (pct_h + pct_a) / 2
-                            icone_confianca = "🔥" if media_confianca > 75 else "⚠️"
-                            texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{icone_confianca} {foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
-
-texto_sofa = ""
-                        if nota_home != "N/A" and nota_away != "N/A":
-                            texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
-
-                        # --- LINHA QUE ESTAVA FALTANDO (ADICIONEI AQUI) ---
-                        prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                        # --------------------------------------------------
-
-                        msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
-                        
-                        # --- CÓDIGO DE ENVIO ---
-                        enviar_telegram(safe_token, safe_chat, msg)
-                        st.toast(f"Sinal Enviado: {s['tag']}")
-
-                        msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
-                        
-                        # --- CORREÇÃO CRÍTICA: ENVIA PRIMEIRO, SALVA DEPOIS ---
-                        enviar_telegram(safe_token, safe_chat, msg)
-                        st.toast(f"Sinal Enviado: {s['tag']}")
-                        
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
-                        adicionar_historico(item)
-                        # ------------------------------------------------------
+                        
+                        if adicionar_historico(item):
+                            # --- CORREÇÃO: PROB CALCULADA AQUI ---
+                            prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
+                            
+                            texto_validacao = ""
+                            if dados_50:
+                                h_stats = dados_50['home']; a_stats = dados_50['away']
+                                foco = "Geral"; pct_h = 0; pct_a = 0
+                                if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
+                                    foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
+                                else:
+                                    foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
+                                media_confianca = (pct_h + pct_a) / 2
+                                icone_confianca = "🔥" if media_confianca > 75 else "⚠️"
+                                texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{icone_confianca} {foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
 
-                        if uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
+                            texto_sofa = ""
+                            if nota_home != "N/A" and nota_away != "N/A":
+                                texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
+
+                            msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
+                            
+                            enviar_telegram(safe_token, safe_chat, msg)
+                            st.toast(f"Sinal Enviado: {s['tag']}")
+                        
+                        # --- FIM CORREÇÃO ---
+
+                        elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
                              msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
                              enviar_telegram(safe_token, safe_chat, msg_super)
@@ -1889,6 +1882,4 @@ texto_sofa = ""
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")        
-        
-
+        st.info("💡 Robô em espera. Configure na lateral.")            
