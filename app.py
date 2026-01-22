@@ -21,10 +21,35 @@ import re
 import firebase_admin
 from firebase_admin import credentials, firestore
 
+# ==============================================================================
+# 1. CONFIGURAÇÃO INICIAL E CSS
+# ==============================================================================
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 placeholder_root = st.empty()
-st.markdown("""<style>.stApp {background-color: #0E1117; color: white;} .metric-box { background-color: #1A1C24; border: 1px solid #333; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 10px; } .metric-value {font-size: 20px; font-weight: bold; color: #00FF00;} .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold;} .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold;} .stButton button { width: 100%; height: 55px !important; font-size: 18px !important; font-weight: bold !important; background-color: #262730; border: 1px solid #4e4e4e; color: white; } .footer-timer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #0E1117; color: #FFD700; text-align: center; padding: 10px; font-size: 12px; border-top: 1px solid #333; z-index: 99999; } .stDataFrame { font-size: 12px; } #MainMenu {visibility: hidden;} footer {visibility: hidden;}</style>""", unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+    .stApp {background-color: #0E1117; color: white;}
+    .main .block-container { max-width: 100%; padding: 1rem 1rem 80px 1rem; }
+    .metric-box { background-color: #1A1C24; border: 1px solid #333; border-radius: 8px; padding: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); margin-bottom: 10px; }
+    .metric-title {font-size: 10px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 2px;}
+    .metric-value {font-size: 20px; font-weight: bold; color: #00FF00;}
+    .metric-sub {font-size: 10px; color: #cccccc;}
+    .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
+    .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
+    .status-warning { background-color: #3B3B10; color: #FFFF00; border: 1px solid #FFFF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 10px; font-weight: bold; font-size: 14px;}
+    .stButton button { width: 100%; height: 55px !important; font-size: 18px !important; font-weight: bold !important; background-color: #262730; border: 1px solid #4e4e4e; color: white; border-radius: 8px; }
+    .stButton button:hover { border-color: #00FF00; color: #00FF00; }
+    .footer-timer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #0E1117; color: #FFD700; text-align: center; padding: 10px; font-size: 12px; border-top: 1px solid #333; z-index: 99999; box-shadow: 0 -2px 10px rgba(0,0,0,0.5); }
+    .stDataFrame { font-size: 12px; }
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# ==============================================================================
+# 2. INICIALIZAÇÃO DE VARIÁVEIS
+# ==============================================================================
 if 'TG_TOKEN' not in st.session_state: st.session_state['TG_TOKEN'] = ""
 if 'TG_CHAT' not in st.session_state: st.session_state['TG_CHAT'] = ""
 if 'API_KEY' not in st.session_state: st.session_state['API_KEY'] = ""
@@ -823,7 +848,6 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         except: posse_h = 50; posse_a = 50
         SINAIS = []
 
-        # --- ESTRATÉGIAS NETTUNO ---
         if 10 <= tempo <= 40 and gh == ga:
             if (posse_h >= 55) and (sog_h >= 2) and (sh_h >= 5) and (sh_a <= 1):
                  if rh >= 1: SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "⚠️ ENTRAR: Back Casa (Vencer) | 🛑 SAÍDA: Feche se o time parar de chutar ou tomar susto.", "stats": f"Dominância Total: Posse {posse_h}% | Chutes {sh_h} x {sh_a} (Adv. Morto)", "rh": rh, "ra": ra})
@@ -838,16 +862,11 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         except: pass_h = 80; pass_a = 80 
 
         if 15 <= tempo <= 70 and gh == ga:
-            # --- LAY AO MANDANTE ---
-            # Gatilho de Saída: Se a Casa começar a chutar no gol (SOG >= 1) ou melhorar a posse (>40%), avisa para sair.
             if (pass_h < 75) and (sog_h == 0) and (ra >= 1):
-                if (sh_a >= 4) and (sog_a >= 1): SINAIS.append({"tag": "💀 Lay ao Mandante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Visitante (X2) | 🛑 SAIR SE: Casa chutar no gol.", "stats": f"Casa Perdida: Passes {pass_h}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
-            
-            # --- LAY AO VISITANTE ---
+                if (sh_a >= 4) and (sog_a >= 1): SINAIS.append({"tag": "💀 Lay ao Mandante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Visitante (X2) | 🛑 SAIR SOMENTE SE: Casa fizer 2+ Chutes no Gol.", "stats": f"Casa Perdida: Passes {pass_h}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
             elif (pass_a < 75) and (sog_a == 0) and (rh >= 1):
-                if (sh_h >= 4) and (sog_h >= 1): SINAIS.append({"tag": "💀 Lay ao Visitante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Casa (1X) | 🛑 SAIR SE: Visitante chutar no gol.", "stats": f"Visitante Perdido: Passes {pass_a}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
+                if (sh_h >= 4) and (sog_h >= 1): SINAIS.append({"tag": "💀 Lay ao Visitante (Nettuno)", "ordem": "⚠️ AÇÃO BET365: Dupla Chance Casa (1X) | 🛑 SAIR SOMENTE SE: Visitante fizer 2+ Chutes no Gol.", "stats": f"Visitante Perdido: Passes {pass_a}% | 0 Chutes no Gol", "rh": rh, "ra": ra})
 
-        # --- ESTRATÉGIAS ORIGINAIS ---
         if tempo <= 30 and total_gols >= 2: SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": "🔥 Over Gols (Tendência de Goleada)", "stats": f"{total_chutes} Chutes", "rh": rh, "ra": ra})
         if total_gols == 0:
             if (tempo <= 10 and total_chutes >= 3): SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": "Over 0.5 HT (Entrar para sair gol no 1º tempo)", "stats": f"{total_chutes} Chutes (Intenso)", "rh": rh, "ra": ra})
@@ -891,7 +910,6 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if diff_gols <= 1:
                 if pressao_casa_alta or pressao_fora_alta:
                     if total_cantos >= 7: SINAIS.append({"tag": "🌪️ Furacão de Cantos", "ordem": "Over Cantos Asiáticos (Canto Limite)", "stats": f"P.Extrema | {total_cantos} Cantos | {total_chutes} Chutes", "rh": rh, "ra": ra})
-
         return SINAIS
     except: return []
 
