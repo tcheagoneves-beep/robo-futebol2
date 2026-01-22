@@ -6,11 +6,9 @@ import os
 import threading
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-
 import plotly.express as px
 import plotly.graph_objects as go
 import io
@@ -20,8 +18,6 @@ from streamlit_gsheets import GSheetsConnection
 import google.generativeai as genai
 import json
 import re
-
-# --- IMPORTAÇÕES FIREBASE ---
 import firebase_admin
 from firebase_admin import credentials, firestore
 
@@ -125,25 +121,11 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "🏹 Tiroteio Elite": "Ligas Top, Tempo 15-25, Chutes > 6. Jogo muito aberto.",
     "⚡ Contra-Ataque Letal": "Posse < 35% mas vencendo ou empatando com SoG > 2.",
     "🚩 Pressão Escanteios": "Muitos escanteios (>5) e chutes na área, indicando gol maduro.",
-    "💎 Sniper Final": "Jogo empatado aos 80' com pressão absurda. Busca valor."
+    "💎 Sniper Final": "Jogo empatado aos 80' com pressão absurda. Busca valor.",
+    "🦁 Back Favorito (Nettuno)": "Posse ofensiva > 55% e adversário inofensivo no HT."
 }
 
-MAPA_ODDS_TEORICAS = {
-    "🟣 Porteira Aberta": {"min": 1.50, "max": 1.80},
-    "⚡ Gol Relâmpago": {"min": 1.30, "max": 1.45},
-    "💰 Janela de Ouro": {"min": 1.70, "max": 2.10},
-    "🟢 Blitz Casa": {"min": 1.50, "max": 1.70},
-    "🟢 Blitz Visitante": {"min": 1.50, "max": 1.70},
-    "🔥 Massacre": {"min": 1.25, "max": 1.40},
-    "⚔️ Choque Líderes": {"min": 1.40, "max": 1.60},
-    "🥊 Briga de Rua": {"min": 1.40, "max": 1.60},
-    "❄️ Jogo Morno": {"min": 1.20, "max": 1.35},
-    "💎 GOLDEN BET": {"min": 1.80, "max": 2.40},
-    "🏹 Tiroteio Elite": {"min": 1.40, "max": 1.60},
-    "⚡ Contra-Ataque Letal": {"min": 1.60, "max": 2.20},
-    "🚩 Pressão Escanteios": {"min": 1.50, "max": 1.80},
-    "💎 Sniper Final": {"min": 1.80, "max": 2.50}
-}
+MAPA_ODDS_TEORICAS = {"🟣 Porteira Aberta": {"min": 1.50, "max": 1.80}, "⚡ Gol Relâmpago": {"min": 1.30, "max": 1.45}, "💰 Janela de Ouro": {"min": 1.70, "max": 2.10}, "🟢 Blitz Casa": {"min": 1.50, "max": 1.70}, "🟢 Blitz Visitante": {"min": 1.50, "max": 1.70}, "🔥 Massacre": {"min": 1.25, "max": 1.40}, "⚔️ Choque Líderes": {"min": 1.40, "max": 1.60}, "🥊 Briga de Rua": {"min": 1.40, "max": 1.60}, "❄️ Jogo Morno": {"min": 1.20, "max": 1.35}, "💎 GOLDEN BET": {"min": 1.80, "max": 2.40}, "🏹 Tiroteio Elite": {"min": 1.40, "max": 1.60}, "⚡ Contra-Ataque Letal": {"min": 1.60, "max": 2.20}, "🚩 Pressão Escanteios": {"min": 1.50, "max": 1.80}, "💎 Sniper Final": {"min": 1.80, "max": 2.50}}
 
 def get_time_br(): return datetime.now(pytz.timezone('America/Sao_Paulo'))
 def clean_fid(x): 
@@ -493,8 +475,7 @@ def atualizar_historico_ram(lista_atualizada_hoje):
         return row
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
-
-# --- SALVAMENTO TURBINADO (SALVA RATINGS + DADOS COMPLETOS PARA IA) ---
+    # --- SALVAMENTO TURBINADO (SALVA RATINGS + DADOS COMPLETOS PARA IA) ---
 def salvar_bigdata(jogo_api, stats):
     if not db_firestore: return
     try:
@@ -718,7 +699,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     if "MORNO" in nome_strat or "UNDER" in nome_strat:
         perfil_analise = "PERFIL UNDER: Você quer um jogo TRAVADO. Se houver muitos chutes ou pressão, REJEITE."
         criterio_rejeicao = "REJEITAR SE: Houver chance clara de gol ou pressão alta."
-    elif "ZEBRA" in nome_strat or "FAVORITO" in nome_strat:
+    elif "ZEBRA" in nome_strat or "FAVORITO" in nome_strat or "NETTUNO" in nome_strat:
         perfil_analise = "PERFIL MATCH ODDS: Você quer confirmar quem vai ganhar. Analise a força relativa."
         criterio_rejeicao = "REJEITAR SE: O time favorito estiver tomando sufoco ou se for um jogo de 'ataque contra defesa' sem finalização."
     else:
@@ -1070,7 +1051,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
                         "stats": f"Dominância Total: Posse {posse_a}% | Chutes {sh_a} x {sh_h} (Adv. Morto)",
                         "rh": rh, "ra": ra
                      })
-                     # ==============================================================================
+                     
+        # ==============================================================================
         # FIM DA ESTRATÉGIA NETTUNO - CONTINUAÇÃO DO CÓDIGO ORIGINAL
         # ==============================================================================
 
@@ -1170,10 +1152,15 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
                 resultados[fid] = stats
                 update_api_usage(headers)
     return resultados
-
-def _worker_telegram(token, chat_id, msg):
-    try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=5)
-    except: pass
+    def _worker_telegram(token, chat_id, msg):
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
+        response = requests.post(url, data=data, timeout=10)
+        if response.status_code != 200:
+            print(f"❌ ERRO TELEGRAM ({response.status_code}): {response.text}")
+    except Exception as e:
+        print(f"❌ ERRO CONEXÃO TELEGRAM: {e}")
 
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
@@ -1397,9 +1384,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
     
     for s in pendentes:
         if s.get('Data') != hoje_str: continue
-        # --- CORREÇÃO: PULA SNIPER AQUI ---
         if "Sniper" in s['Estrategia']: continue
-        # ----------------------------------
         fid = int(clean_fid(s.get('FID', 0)))
         strat = s['Estrategia']
         key_green = gerar_chave_universal(fid, strat, "GREEN")
@@ -1420,7 +1405,6 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
-# --- NOVA FUNÇÃO SNIPER INTELIGENTE ---
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
     snipers = [s for s in hist if "Sniper" in s['Estrategia'] and s['Resultado'] == "Pendente"]
@@ -1449,7 +1433,6 @@ def conferir_resultados_sniper(jogos_live, api_key):
         target = s['Placar_Sinal'].upper().strip()
         res_final = None
         
-        # LÓGICA DE VERIFICAÇÃO DE TEXTO
         if "OVER" in target:
             linha = 0.5
             if "1.5" in target: linha = 1.5
@@ -1537,10 +1520,10 @@ def momentum(fid, sog_h, sog_a):
     st.session_state['memoria_pressao'][fid] = mem
     return len(mem['h_t']), len(mem['a_t'])
 
+# --- CORREÇÃO DE BUG: LIBERADO PARA MONITORAR O JOGO INTEIRO ---
 def deve_buscar_stats(tempo, gh, ga, status):
-    if 5 <= tempo <= 15: return True
-    if 70 <= tempo <= 85 and abs(gh - ga) <= 1: return True
-    if status == 'HT': return True
+    if status in ['1H', '2H', 'HT', 'ET']:
+        return True
     return False
 
 def fetch_stats_single(fid, api_key):
@@ -1833,8 +1816,10 @@ if st.session_state.ROBO_LIGADO:
 
                             msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
                             
+                            print(f"Tentando enviar: {s['tag']} | {home} vs {away}")
                             enviar_telegram(safe_token, safe_chat, msg)
-                            st.toast(f"Sinal Enviado: {s['tag']}")
+                            st.toast(f"🚀 Enviando Sinal: {s['tag']} - {home}x{away}", icon="📲")
+
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
                              msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
@@ -1927,11 +1912,24 @@ if st.session_state.ROBO_LIGADO:
         with abas[3]: 
             if not hist_hj.empty: 
                 df_show = hist_hj.copy()
-                if 'Jogo' in df_show.columns and 'Placar_Sinal' in df_show.columns: df_show['Jogo'] = df_show['Jogo'] + " (" + df_show['Placar_Sinal'].astype(str) + ")"
-                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada', 'Placar_Sinal']
-                cols_view = [c for c in df_show.columns if c not in colunas_esconder]
-                st.dataframe(df_show[cols_view], use_container_width=True, hide_index=True)
-            else: st.caption("Vazio.")
+                if 'Jogo' in df_show.columns and 'Placar_Sinal' in df_show.columns: 
+                    df_show['Jogo_Display'] = df_show['Jogo'] + " (" + df_show['Placar_Sinal'].astype(str) + ")"
+                else:
+                    df_show['Jogo_Display'] = df_show['Jogo']
+                df_show.insert(0, "Reenviar", False)
+                cols_view = ['Reenviar', 'Hora', 'Liga', 'Jogo_Display', 'Estrategia', 'Odd', 'Resultado']
+                edited_df = st.data_editor(df_show[cols_view], column_config={"Reenviar": st.column_config.CheckboxColumn("Selecionar", default=False), "Jogo_Display": st.column_config.TextColumn("Jogo")}, disabled=['Hora', 'Liga', 'Jogo_Display', 'Estrategia', 'Odd', 'Resultado'], use_container_width=True, hide_index=True, key="editor_historico")
+                if st.button("📨 Reenviar Sinais Marcados", type="primary"):
+                    sinais_para_reenviar = edited_df[edited_df["Reenviar"] == True]
+                    if sinais_para_reenviar.empty: st.warning("⚠️ Selecione pelo menos um sinal.")
+                    else:
+                        contador = 0; bar = st.progress(0)
+                        for idx, row in sinais_para_reenviar.iterrows():
+                            msg_reenvio = (f"🔄 <b>REENVIO MANUAL</b>\n\n🏆 <b>{row['Liga']}</b>\n⚽ {row['Jogo_Display']}\n⏰ <b>{row['Hora']}</b>\n\n🔥 {str(row['Estrategia']).upper()}\n💰 <b>Odd: @{row['Odd']}</b>")
+                            enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], msg_reenvio)
+                            contador += 1; bar.progress(contador / len(sinais_para_reenviar)); time.sleep(0.5)
+                        st.success(f"✅ {contador} Sinais reenviados!"); time.sleep(2); st.rerun()
+            else: st.caption("Histórico vazio.")
 
         with abas[4]: 
             st.markdown("### 📊 Inteligência de Mercado")
@@ -2061,4 +2059,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
