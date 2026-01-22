@@ -1152,7 +1152,7 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
                 resultados[fid] = stats
                 update_api_usage(headers)
     return resultados
-    def _worker_telegram(token, chat_id, msg):
+def _worker_telegram(token, chat_id, msg):
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         data = {"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}
@@ -2059,3 +2059,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
