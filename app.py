@@ -718,7 +718,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     4. NÃO SEJA PERFECCIONISTA. O mercado de Over precisa de volume, não de perfeição.
 
     FORMATO DE RESPOSTA OBRIGATÓRIO:
-    [Aprovado/Arriscado] - [Explicação curta e direta]
+    [Aprovado/Arriscado] - [Explicação completa, sem cortes]
     """
 
     try:
@@ -744,8 +744,9 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         
         motivo = motivo.replace("Aprovado", "").replace("Arriscado", "").strip()
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
-        cor_html = "color: #00FF00;" if veredicto == "Aprovado" else "color: #FFDD00;"
-        return f"\n🤖 <b>IA:</b> <span style='{cor_html}'>{emoji} <b>{veredicto}</b></span> - {motivo[:100]}"
+        
+        # RETORNO LIMPO E ORGANIZADO
+        return f"\n\n🤖 <b>MENTORIA IA (GEMINI):</b>\n{emoji} <b>VEREDICTO: {veredicto.upper()}</b>\n💡 <i>{motivo}</i>"
 
     except Exception as e:
         return "" 
@@ -1394,7 +1395,7 @@ with st.sidebar:
                     count_salvos = 0
                     for fid, stats in stats_recuperadas.items():
                         j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
-                        if j_obj: salvar_bigdata(j_obj, stats) 
+                        if j_obj: salvar_bigdata(j_obj, s) 
                         count_salvos += 1
                     st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
                 else: st.warning("Nenhum jogo finalizado pendente.")
@@ -1579,23 +1580,13 @@ if st.session_state.ROBO_LIGADO:
 
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
-                    medias_gols = buscar_media_gols_ultimos_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
                     
-                    dados_50 = analisar_tendencia_50_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
-                    nota_home = buscar_rating_inteligente(safe_api, j['teams']['home']['id'])
-                    nota_away = buscar_rating_inteligente(safe_api, j['teams']['away']['id'])
-                    
-                    txt_history = ""
-                    if dados_50:
-                        txt_history = (f"HISTÓRICO 50 JOGOS: Casa(Over1.5: {dados_50['home']['over15_ft']}%, HT: {dados_50['home']['over05_ht']}%) "
-                                       f"| Fora(Over1.5: {dados_50['away']['over15_ft']}%, HT: {dados_50['away']['over05_ht']}%)")
-                    txt_rating_ia = f"RATING (MÉDIA/ÚLTIMO): Casa {nota_home} | Fora {nota_away}"
-                    extra_ctx = f"{txt_history}\n{txt_rating_ia}"
-
                     for s in lista_sinais:
                         prob = "..." # Valor padrão para evitar NameError
-                        nome_home_display = f"{home} ({rank_h}º)" if rank_h else home
-                        nome_away_display = f"{away} ({rank_a}º)" if rank_a else away
+                        # Sanitização para evitar erros de HTML
+                        liga_safe = j['league']['name'].replace("<", "").replace(">", "").replace("&", "e")
+                        home_safe = home.replace("<", "").replace(">", "").replace("&", "e")
+                        away_safe = away.replace("<", "").replace(">", "").replace("&", "e")
                         
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         txt_pressao = gerar_barra_pressao(rh, ra) 
@@ -1630,7 +1621,7 @@ if st.session_state.ROBO_LIGADO:
                             try:
                                 time.sleep(0.3)
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
-                                opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context=extra_ctx)
+                                opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context="")
                                 if "Aprovado" in opiniao_txt: opiniao_db = "Aprovado"
                                 elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
                             except: pass
@@ -1640,12 +1631,7 @@ if st.session_state.ROBO_LIGADO:
                         if adicionar_historico(item):
                             # --- CÁLCULO E ENVIO DO TELEGRAM (VERSÃO LEVE & SEGURA) ---
                             try:
-                                # Sanitização básica para evitar erro de HTML em nomes de times
-                                liga_safe = j['league']['name'].replace("<", "").replace(">", "").replace("&", "e")
-                                home_safe = home.replace("<", "").replace(">", "").replace("&", "e")
-                                away_safe = away.replace("<", "").replace(">", "").replace("&", "e")
-                                ia_safe = opiniao_txt.replace("<", "").replace(">", "") # Limpa IA também
-
+                                # AQUI: Removemos Odds e outras coisas que poluem, focando na IA e no Sinal.
                                 msg = (
                                     f"<b>🚨 SINAL {s['tag'].upper()}</b>\n\n"
                                     f"🏆 <b>{liga_safe}</b>\n"
@@ -1653,9 +1639,9 @@ if st.session_state.ROBO_LIGADO:
                                     f"⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n"
                                     f"⚠️ <b>AÇÃO:</b> {s['ordem']}\n"
                                     f"{destaque_odd}\n"
-                                    f"{txt_pressao}\n" # Mantendo a pressão visual pois ajuda muito
-                                    f"📊 <i>Dados: {s['stats']}</i>\n"
-                                    f"{ia_safe}" # Opinião da IA entra aqui limpa
+                                    f"{txt_pressao}\n" 
+                                    f"📊 <i>Dados: {s['stats']}</i>"
+                                    f"{opiniao_txt}" # A IA agora entra limpa e formatada
                                 )
                                 
                                 enviar_telegram(safe_token, safe_chat, msg)
