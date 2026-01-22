@@ -107,24 +107,23 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# Mapa apenas para categorização, a ordem exata é gerada na função processar()
 MAPA_LOGICA_ESTRATEGIAS = {
-    "🟣 Porteira Aberta": "Over Gols",
-    "⚡ Gol Relâmpago": "Over HT",
-    "💰 Janela de Ouro": "Over Limite",
-    "🟢 Blitz Casa": "Over Gols",
-    "🟢 Blitz Visitante": "Over Gols",
-    "🔥 Massacre": "Over HT",
-    "⚔️ Choque Líderes": "Over HT",
-    "🥊 Briga de Rua": "Over HT",
-    "❄️ Jogo Morno": "Under HT",
-    "💎 GOLDEN BET": "Over Limite",
-    "🏹 Tiroteio Elite": "Over Gols",
-    "⚡ Contra-Ataque Letal": "Back Zebra",
-    "🚩 Pressão Escanteios": "Cantos Asiáticos",
-    "💎 Sniper Final": "Over Limite",
-    "🦁 Back Favorito (Nettuno)": "Back Vencedor",
-    "💀 Lay ao Morto (Nettuno)": "Lay Perdedor"
+    "🟣 Porteira Aberta": "Tempo <= 30, Gols >= 2. Foco em jogo aberto.",
+    "⚡ Gol Relâmpago": "Tempo <= 10. Chutes >= 2 ou SoG >= 1. Foco em gol cedo.",
+    "💰 Janela de Ouro": "70-75 min, Chutes >= 18, Diferença gols <= 1. Jogo pegado.",
+    "🟢 Blitz Casa": "Tempo <= 60, Casa perdendo ou empatando, Pressão(rh) >= 2 ou Chutes >= 8.",
+    "🟢 Blitz Visitante": "Tempo <= 60, Visitante perdendo ou empatando, Pressão(ra) >= 2 ou Chutes >= 8.",
+    "🔥 Massacre": "Favorito Top vs Zebra, Tempo <= 5, Chutes >= 1.",
+    "⚔️ Choque Líderes": "Dois Tops, Tempo <= 7, Chutes >= 2.",
+    "🥊 Briga de Rua": "Times Mid, Tempo <= 7, Chutes 2 a 3.",
+    "❄️ Jogo Morno": "Times Z4, Tempo 15-16, 0 Chutes. Under HT.",
+    "💎 GOLDEN BET": "75-85 min, Diferença <= 1, Chutes >= 16, SoG >= 8. Pressão extrema.",
+    "🏹 Tiroteio Elite": "Ligas Top, Tempo 15-25, Chutes > 6. Jogo muito aberto.",
+    "⚡ Contra-Ataque Letal": "Posse < 35% mas vencendo ou empatando com SoG > 2.",
+    "🚩 Pressão Escanteios": "Muitos escanteios (>5) e chutes na área, indicando gol maduro.",
+    "💎 Sniper Final": "Jogo empatado aos 80' com pressão absurda. Busca valor.",
+    "🦁 Back Favorito (Nettuno)": "Posse ofensiva > 55% e adversário inofensivo no HT.",
+    "💀 Lay ao Morto (Nettuno)": "Time errando passes (<75%), sem chutar e sofrendo pressão."
 }
 
 MAPA_ODDS_TEORICAS = {
@@ -171,7 +170,7 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     return chave
 
 def gerar_barra_pressao(rh, ra):
-    return "" # Visual Removido
+    return "" # Removido para limpeza
 
 def update_api_usage(headers):
     if not headers: return
@@ -1603,8 +1602,11 @@ if st.session_state.ROBO_LIGADO:
                                 time.sleep(0.3)
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
                                 opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context="")
-                                if "Aprovado" in opiniao_txt: opiniao_db = "Aprovado"
-                                elif "Arriscado" in opiniao_txt: opiniao_db = "Arriscado"
+                                
+                                # LÓGICA DE DETECÇÃO DO STATUS DA IA PARA O DASHBOARD
+                                if "aprovado" in opiniao_txt.lower(): opiniao_db = "Aprovado"
+                                elif "arriscado" in opiniao_txt.lower(): opiniao_db = "Arriscado"
+                                else: opiniao_db = "Neutro"
                             except: pass
                         
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
