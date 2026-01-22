@@ -1395,7 +1395,7 @@ with st.sidebar:
                     count_salvos = 0
                     for fid, stats in stats_recuperadas.items():
                         j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
-                        if j_obj: salvar_bigdata(j_obj, s) 
+                        if j_obj: salvar_bigdata(j_obj, stats) 
                         count_salvos += 1
                     st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
                 else: st.warning("Nenhum jogo finalizado pendente.")
@@ -1580,16 +1580,27 @@ if st.session_state.ROBO_LIGADO:
 
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
+                    medias_gols = buscar_media_gols_ultimos_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
+                    dados_50 = analisar_tendencia_50_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
+                    nota_home = buscar_rating_inteligente(safe_api, j['teams']['home']['id'])
+                    nota_away = buscar_rating_inteligente(safe_api, j['teams']['away']['id'])
                     
+                    txt_history = ""
+                    if dados_50:
+                        txt_history = (f"HISTÓRICO 50 JOGOS: Casa(Over1.5: {dados_50['home']['over15_ft']}%, HT: {dados_50['home']['over05_ht']}%) "
+                                       f"| Fora(Over1.5: {dados_50['away']['over15_ft']}%, HT: {dados_50['away']['over05_ht']}%)")
+                    txt_rating_ia = f"RATING (MÉDIA/ÚLTIMO): Casa {nota_home} | Fora {nota_away}"
+                    extra_ctx = f"{txt_history}\n{txt_rating_ia}"
+
                     for s in lista_sinais:
-                        prob = "..." # Valor padrão para evitar NameError
+                        prob = "..." 
+                        
                         # Sanitização para evitar erros de HTML
                         liga_safe = j['league']['name'].replace("<", "").replace(">", "").replace("&", "e")
                         home_safe = home.replace("<", "").replace(">", "").replace("&", "e")
                         away_safe = away.replace("<", "").replace(">", "").replace("&", "e")
                         
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
-                        txt_pressao = gerar_barra_pressao(rh, ra) 
                         uid_normal = gerar_chave_universal(fid, s['tag'], "SINAL")
                         uid_super = f"SUPER_{uid_normal}"
                         
@@ -1629,9 +1640,20 @@ if st.session_state.ROBO_LIGADO:
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
                         
                         if adicionar_historico(item):
-                            # --- CÁLCULO E ENVIO DO TELEGRAM (VERSÃO LEVE & SEGURA) ---
+                            # --- CÁLCULO E ENVIO DO TELEGRAM (VERSÃO COMPLETA MAS SEGURA) ---
                             try:
-                                # AQUI: Removemos Odds e outras coisas que poluem, focando na IA e no Sinal.
+                                prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
+                                
+                                texto_validacao = ""
+                                if dados_50:
+                                    h_stats = dados_50['home']; a_stats = dados_50['away']
+                                    foco = "Geral"; pct_h = 0; pct_a = 0
+                                    if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
+                                        foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
+                                    else:
+                                        foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
+                                    texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
+
                                 msg = (
                                     f"<b>🚨 SINAL {s['tag'].upper()}</b>\n\n"
                                     f"🏆 <b>{liga_safe}</b>\n"
@@ -1639,9 +1661,11 @@ if st.session_state.ROBO_LIGADO:
                                     f"⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n"
                                     f"⚠️ <b>AÇÃO:</b> {s['ordem']}\n"
                                     f"{destaque_odd}\n"
-                                    f"{txt_pressao}\n" 
-                                    f"📊 <i>Dados: {s['stats']}</i>"
-                                    f"{opiniao_txt}" # A IA agora entra limpa e formatada
+                                    f"📊 <i>Dados: {s['stats']}</i>\n"
+                                    f"⚽ Médias (10j): Casa {medias_gols['home']} | Fora {medias_gols['away']}"
+                                    f"{texto_validacao}\n"
+                                    f"{prob}"
+                                    f"{opiniao_txt}" # IA entra limpa no final
                                 )
                                 
                                 enviar_telegram(safe_token, safe_chat, msg)
@@ -1652,7 +1676,7 @@ if st.session_state.ROBO_LIGADO:
                         
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
-                             msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>\n<i>O jogo mantém o padrão da estratégia.</i>{txt_pressao}")
+                             msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>")
                              enviar_telegram(safe_token, safe_chat, msg_super)
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
             
