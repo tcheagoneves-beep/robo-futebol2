@@ -485,7 +485,6 @@ def extrair_dados_completos(stats_api):
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         return f"📊 STATS: Posse {gv(s1,'Ball Possession')}x{gv(s2,'Ball Possession')} | Chutes {gv(s1,'Total Shots')}x{gv(s2,'Total Shots')} | Cantos {gv(s1,'Corner Kicks')}x{gv(s2,'Corner Kicks')}"
     except: return "Erro stats."
-
 @st.cache_data(ttl=3600)
 def buscar_media_gols_ultimos_jogos(api_key, home_id, away_id):
     try:
@@ -749,7 +748,8 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         return f"\n🤖 <b>IA:</b> <span style='{cor_html}'>{emoji} <b>{veredicto}</b></span> - {motivo[:100]}"
 
     except Exception as e:
-        return "" # Falha silenciosa para não travar o bot
+        return "" 
+
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -1638,31 +1638,29 @@ if st.session_state.ROBO_LIGADO:
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
                         
                         if adicionar_historico(item):
-                            # --- CÁLCULO E ENVIO DO TELEGRAM ---
+                            # --- CÁLCULO E ENVIO DO TELEGRAM (VERSÃO LEVE & SEGURA) ---
                             try:
-                                prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                                
-                                texto_validacao = ""
-                                if dados_50:
-                                    h_stats = dados_50['home']; a_stats = dados_50['away']
-                                    foco = "Geral"; pct_h = 0; pct_a = 0
-                                    if "HT" in s['ordem'] or "Relâmpago" in s['tag']:
-                                        foco = "Gol HT"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
-                                    else:
-                                        foco = "Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
-                                    media_confianca = (pct_h + pct_a) / 2
-                                    icone_confianca = "🔥" if media_confianca > 75 else "⚠️"
-                                    texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{icone_confianca} {foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
+                                # Sanitização básica para evitar erro de HTML em nomes de times
+                                liga_safe = j['league']['name'].replace("<", "").replace(">", "").replace("&", "e")
+                                home_safe = home.replace("<", "").replace(">", "").replace("&", "e")
+                                away_safe = away.replace("<", "").replace(">", "").replace("&", "e")
+                                ia_safe = opiniao_txt.replace("<", "").replace(">", "") # Limpa IA também
 
-                                texto_sofa = ""
-                                if nota_home != "N/A" and nota_away != "N/A":
-                                    texto_sofa = f"\n\n⭐ <b>Rating:</b> Casa <b>{nota_home}</b> | Fora <b>{nota_away}</b>"
-
-                                msg = (f"<b>🚨 SINAL ENCONTRADO 🚨</b>\n\n🏆 <b>{j['league']['name']}</b>\n⚽ {nome_home_display} 🆚 {nome_away_display}\n⏰ <b>{tempo}' minutos</b> (Placar: {placar})\n\n🔥 {s['tag'].upper()}\n⚠️ <b>AÇÃO:</b> {s['ordem']}{destaque_odd}\n\n💰 <b>Odd: @{odd_atual_str}</b>{txt_pressao}\n📊 <i>Dados: {s['stats']}</i>\n⚽ <b>Médias (10j):</b> Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}{texto_sofa}{prob}{opiniao_txt}")
+                                msg = (
+                                    f"<b>🚨 SINAL {s['tag'].upper()}</b>\n\n"
+                                    f"🏆 <b>{liga_safe}</b>\n"
+                                    f"⚽ {home_safe} 🆚 {away_safe}\n"
+                                    f"⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n"
+                                    f"⚠️ <b>AÇÃO:</b> {s['ordem']}\n"
+                                    f"{destaque_odd}\n"
+                                    f"{txt_pressao}\n" # Mantendo a pressão visual pois ajuda muito
+                                    f"📊 <i>Dados: {s['stats']}</i>\n"
+                                    f"{ia_safe}" # Opinião da IA entra aqui limpa
+                                )
                                 
                                 enviar_telegram(safe_token, safe_chat, msg)
-                                # REMOVIDO DAQUI para evitar duplicidade
                                 st.toast(f"Sinal Enviado: {s['tag']}")
+                                
                             except Exception as e:
                                 print(f"Erro ao enviar sinal: {e}")
                         
@@ -1894,4 +1892,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")        
+        st.info("💡 Robô em espera. Configure na lateral.")
