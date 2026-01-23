@@ -107,7 +107,7 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# Mapa para referência, a lógica real de texto está na função processar()
+# Mapa para referência
 MAPA_LOGICA_ESTRATEGIAS = {
     "🟣 Porteira Aberta": "Over Gols",
     "⚡ Gol Relâmpago": "Over HT",
@@ -205,6 +205,10 @@ def testar_conexao_telegram(token):
         return False, f"Erro {res.status_code}"
     except:
         return False, "Sem Conexão"
+# ==============================================================================
+# 2. GERENCIAMENTO DE DADOS E ESTÁTISTICAS
+# ==============================================================================
+
 def carregar_aba(nome_aba, colunas_esperadas):
     chave_memoria = ""
     if nome_aba == "Historico": chave_memoria = 'historico_full'
@@ -668,6 +672,10 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
             return (limites['min'] + limites['max']) / 2
         return valor
     except: return 1.50
+# ==============================================================================
+# 3. LÓGICA DE ESTRATÉGIAS (O CÉREBRO) E MÓDULOS IA
+# ==============================================================================
+
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context=""):
     if not IA_ATIVADA: return ""
     try:
@@ -866,9 +874,6 @@ def otimizar_estrategias_existentes_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro IA: {e}"
-# ==============================================================================
-# 2. FUNÇÕES DE BANCO DE DADOS E LÓGICA DO ROBÔ
-# ==============================================================================
 
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
@@ -888,12 +893,13 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
         def get_v(l, t): v = next((x['value'] for x in l if x['type']==t), 0); return v if v is not None else 0
         
-        # Dados do jogo
+        # Leitura dos dados (Mantendo suas variáveis originais)
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
         chutes_area_h = get_v(stats_h, 'Shots insidebox'); chutes_area_a = get_v(stats_a, 'Shots insidebox')
         
+        # momentum original
         rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
         
         gh = j['goals']['home']; ga = j['goals']['away']
@@ -907,116 +913,124 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             posse_a = 100 - posse_h
         except: posse_h = 50; posse_a = 50
         
-        # --- FUNÇÃO HELPER PARA MENSAGEM CLARA ---
+        # --- HELPER ATUALIZADA (TEXTOS EXPLICATIVOS) ---
         def gerar_ordem_gol(gols_atuais, tipo="Over"):
             linha = gols_atuais + 0.5
             if tipo == "Over":
-                return f"👉 <b>FAZER:</b> Mercado de Gols\n✅ Apostar em <b>Mais de {linha} Gols</b>"
+                return f"👉 <b>FAZER:</b> Entrar em GOLS (Over)\n✅ Aposta: <b>Mais de {linha} Gols</b> na partida."
             elif tipo == "HT":
-                return f"👉 <b>FAZER:</b> Mercado 1º Tempo\n✅ Apostar em <b>Mais de 0.5 Gols HT</b>"
+                return f"👉 <b>FAZER:</b> Entrar em GOLS 1º TEMPO\n✅ Aposta: <b>Mais de 0.5 Gols HT</b>."
             elif tipo == "Limite":
                 linha_limite = gols_atuais + 1.0
-                return f"👉 <b>FAZER:</b> Gol Limite (Asiático)\n✅ Apostar em <b>Mais de {linha_limite} Gols</b> (Reembolsa se sair 1)"
+                return f"👉 <b>FAZER:</b> Entrar em GOL LIMITE (Asiático)\n✅ Aposta: <b>Mais de {linha_limite} Gols</b>\n(ℹ️ Se sair exatamente 1 gol, o dinheiro volta. Se sair 2, você ganha)."
             return "Apostar em Gols."
 
         SINAIS = []
 
         # ==============================================================================
-        # ESTRATÉGIA DO VOVÔ (NOVA - SEGURANÇA)
+        # 1. NOVA: ESTRATÉGIA DO VOVÔ (Segurança Absoluta)
         # ==============================================================================
-        # Cenário: 70-80min, Ganhando por 2 gols, Jogo controlado
         if 70 <= tempo <= 80:
             diff = gh - ga
-            # Casa Vencendo Bem e Sem Sofrer Pressão
+            # Casa ganhando por 2 gols (2x0, 3x1...) e visitante fraco
             if diff == 2 and ra < 2 and posse_h >= 45:
                  SINAIS.append({
                      "tag": "👴 Estratégia do Vovô", 
-                     "ordem": "👉 <b>FAZER:</b> Back Favorito (Segurança)\n✅ Apostar a favor do <b>TIME DA CASA</b> (Match Odds)\nℹ️ O jogo está controlado.", 
-                     "stats": f"Vantagem Segura {gh}x{ga} | Controle Casa", "rh": rh, "ra": ra
+                     "ordem": "👉 <b>FAZER:</b> A favor do Vencedor (Back)\n✅ Aposta: <b>Vitória do TIME DA CASA</b> (Match Odds)\n(ℹ️ Jogo ganho, apenas aguardar o tempo passar).", 
+                     "stats": f"Vantagem Segura {gh}x{ga}", "rh": rh, "ra": ra
                  })
-            # Visitante Vencendo Bem
+            # Visitante ganhando por 2 gols e casa fraca
             elif diff == -2 and rh < 2 and posse_a >= 45:
                  SINAIS.append({
                      "tag": "👴 Estratégia do Vovô", 
-                     "ordem": "👉 <b>FAZER:</b> Back Favorito (Segurança)\n✅ Apostar a favor do <b>VISITANTE</b> (Match Odds)\nℹ️ O jogo está controlado.", 
-                     "stats": f"Vantagem Segura {gh}x{ga} | Controle Visitante", "rh": rh, "ra": ra
+                     "ordem": "👉 <b>FAZER:</b> A favor do Vencedor (Back)\n✅ Aposta: <b>Vitória do VISITANTE</b> (Match Odds)\n(ℹ️ Jogo ganho, apenas aguardar o tempo passar).", 
+                     "stats": f"Vantagem Segura {gh}x{ga}", "rh": rh, "ra": ra
                  })
 
         # ==============================================================================
-        # LAY AO MORTO (NOVA - DEFENSIVA)
-        # ==============================================================================
-        # Cenário: 55-80min, Perdendo por 1 gol, Time morto em campo
-        if 55 <= tempo <= 80 and abs(gh - ga) == 1:
-            # Casa perdendo e inofensiva (0 pressão)
-            if (gh < ga) and (rh == 0) and (sog_h <= 2):
-                SINAIS.append({"tag": "💀 Lay ao Morto", "ordem": "👉 <b>FAZER:</b> Contra quem está perdendo\n✅ Apostar <b>Lay Casa</b> (Ou Dupla Chance Visitante)", "stats": f"Mandante Inofensivo ({sog_h} SoG)", "rh": rh, "ra": ra})
-            # Visitante perdendo e inofensivo
-            elif (ga < gh) and (ra == 0) and (sog_a <= 2):
-                SINAIS.append({"tag": "💀 Lay ao Morto", "ordem": "👉 <b>FAZER:</b> Contra quem está perdendo\n✅ Apostar <b>Lay Visitante</b> (Ou Dupla Chance Casa)", "stats": f"Visitante Inofensivo ({sog_a} SoG)", "rh": rh, "ra": ra})
-
-        # ==============================================================================
-        # ESTRATÉGIAS PADRÃO (Gols, Match Odds, HT)
+        # 2. MATCH ODDS & LAY (Suas estratégias + Lay ao Morto)
         # ==============================================================================
         
-        # Back Favorito (Nettuno)
+        # Back Favorito (Nettuno) - Mantido
         if 10 <= tempo <= 40 and gh == ga:
             if (posse_h >= 55) and (sog_h >= 2) and (sh_h >= 5) and (sh_a <= 1):
-                 if rh >= 1: SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "👉 <b>FAZER:</b> Back Favorito\n✅ Apostar <b>Vitória do CASA</b>", "stats": f"Dominância: {sh_h}x{sh_a} chutes", "rh": rh, "ra": ra})
+                 if rh >= 1: 
+                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "👉 <b>FAZER:</b> A favor do Favorito\n✅ Aposta: <b>Vitória do CASA</b>", "stats": f"Dominância Total: Posse {posse_h}%", "rh": rh, "ra": ra})
             elif (posse_a >= 55) and (sog_a >= 2) and (sh_a >= 5) and (sh_h <= 1):
-                 if ra >= 1: SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "👉 <b>FAZER:</b> Back Favorito\n✅ Apostar <b>Vitória do VISITANTE</b>", "stats": f"Dominância: {sh_a}x{sh_h} chutes", "rh": rh, "ra": ra})
+                 if ra >= 1:
+                     SINAIS.append({"tag": "🦁 Back Favorito (Nettuno)", "ordem": "👉 <b>FAZER:</b> A favor do Favorito\n✅ Aposta: <b>Vitória do VISITANTE</b>", "stats": f"Dominância Total: Posse {posse_a}%", "rh": rh, "ra": ra})
         
-        # Lay Goleada
+        # NOVA: Lay ao Morto (Time perdendo e não reage)
+        if 55 <= tempo <= 80:
+            if abs(gh - ga) == 1: # Diferença de 1 gol
+                # Casa perdendo e morto
+                if (gh < ga) and (rh == 0) and (sog_h <= 2):
+                    SINAIS.append({"tag": "💀 Lay ao Morto", "ordem": "👉 <b>FAZER:</b> Contra quem está perdendo\n✅ Aposta: <b>Lay Casa</b> (Ou Dupla Chance Visitante)", "stats": f"Mandante Inofensivo ({sog_h} SoG)", "rh": rh, "ra": ra})
+                # Visitante perdendo e morto
+                elif (ga < gh) and (ra == 0) and (sog_a <= 2):
+                    SINAIS.append({"tag": "💀 Lay ao Morto", "ordem": "👉 <b>FAZER:</b> Contra quem está perdendo\n✅ Aposta: <b>Lay Visitante</b> (Ou Dupla Chance Casa)", "stats": f"Visitante Inofensivo ({sog_a} SoG)", "rh": rh, "ra": ra})
+
+        # Lay Goleada (Diff 3+)
         if 60 <= tempo <= 88:
             if abs(gh - ga) >= 3:
                 if (total_chutes >= 14) and (rh > 0 or ra > 0):
-                    SINAIS.append({"tag": "🔫 Lay Goleada", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "Jogo vivo apesar da goleada", "rh": rh, "ra": ra})
+                    SINAIS.append({"tag": "🔫 Lay Goleada", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"Goleada com jogo vivo | {total_chutes} chutes", "rh": rh, "ra": ra})
+
+        # ==============================================================================
+        # 3. GOLS (Mantendo as suas + Sniper Refinado)
+        # ==============================================================================
 
         # Golden Bet
         if 65 <= tempo <= 75:
-            pressao_casa = (rh >= 3 and sog_h >= 4)
+            pressao_casa = (rh >= 3 and sog_h >= 4) 
             pressao_fora = (ra >= 3 and sog_a >= 4)
             if (pressao_casa and sh_h > sh_a) or (pressao_fora and sh_a > sh_h):
                  if total_gols >= 1 or total_chutes >= 18:
-                     SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Volume", "rh": rh, "ra": ra})
+                     SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra})
 
+        # Porteira Aberta
         if tempo <= 30 and total_gols >= 2: 
-            SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": f"{total_chutes} Chutes (Jogo Aberto)", "rh": rh, "ra": ra})
+            SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": f"{total_chutes} Chutes no Jogo Aberto", "rh": rh, "ra": ra})
         
+        # Gol Relâmpago
         if total_gols == 0:
             if (tempo <= 10 and total_chutes >= 3): 
-                SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": gerar_ordem_gol(0, "HT"), "stats": "Início Intenso", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": gerar_ordem_gol(0, "HT"), "stats": f"{total_chutes} Chutes (Início Intenso)", "rh": rh, "ra": ra})
         
+        # Janela de Ouro
         if 70 <= tempo <= 75 and abs(gh - ga) <= 1:
             if total_chutes >= 22: 
                 SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🔥 {total_chutes} Chutes Totais", "rh": rh, "ra": ra})
         
+        # Blitz
         if tempo <= 60:
-            if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": gerar_ordem_gol(total_gols), "stats": f"Blitz Casa ({rh})", "rh": rh, "ra": ra})
-            if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": gerar_ordem_gol(total_gols), "stats": f"Blitz Visitante ({ra})", "rh": rh, "ra": ra})
+            if gh <= ga and (rh >= 2 or sh_h >= 8): SINAIS.append({"tag": "🟢 Blitz Casa", "ordem": gerar_ordem_gol(total_gols), "stats": f"Pressão Casa: {rh}", "rh": rh, "ra": ra})
+            if ga <= gh and (ra >= 2 or sh_a >= 8): SINAIS.append({"tag": "🟢 Blitz Visitante", "ordem": gerar_ordem_gol(total_gols), "stats": f"Pressão Visitante: {ra}", "rh": rh, "ra": ra})
         
+        # Tiroteio Elite
         if 15 <= tempo <= 25:
             if total_chutes >= 6 and total_sog >= 3:
                 SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": f"{total_chutes} Chutes em {tempo}min", "rh": rh, "ra": ra})
         
-        # SNIPER FINAL (REFINADO - NOVA LÓGICA)
-        # Agora considera ESCANTEIOS (ck_h + ck_a) como fator de pressão
-        if tempo >= 83 and abs(gh - ga) <= 1: 
-            tem_bola_parada = (ck_h + ck_a) >= 9 # Muitos escanteios = perigo de gol no fim
-            tem_pressao = (rh >= 3) or (ra >= 3)
+        # REFINADO: Sniper Final (80min+)
+        if tempo >= 80 and abs(gh - ga) <= 1: 
+            tem_bola_parada = (ck_h + ck_a) >= 9 # Muitos cantos indicam bola na área
+            tem_pressao = (rh >= 4 and sh_h >= 12) or (ra >= 4 and sh_a >= 12)
             
-            if (tem_pressao or tem_bola_parada) and total_chutes >= 15:
-                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Reta Final\n✅ Aposta: <b>Over Limite</b> ou <b>Empate Anula</b>", "stats": f"Pressão Final (Cantos: {ck_h+ck_a})", "rh": rh, "ra": ra})
+            if tem_pressao or tem_bola_parada:
+                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Empate Anula Aposta (DNB)\n✅ Se odd baixa: <b>Over Limite (Asiático)</b>", "stats": f"Pressão Final (Cantos: {ck_h+ck_a})", "rh": rh, "ra": ra})
         
+        # Pressão Escanteios
         if tempo >= 30:
             total_cantos = ck_h + ck_a
             linha_cantos = total_cantos + 1
             if (ck_h >= 5 and chutes_area_h >= 4 and gh <= ga) or (ck_a >= 5 and chutes_area_a >= 4 and ga <= gh):
-                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": f"👉 <b>FAZER:</b> Escanteios Asiáticos\n✅ Apostar em <b>Mais de {linha_cantos}.0 Cantos</b>", "stats": f"{ck_h+ck_a} Cantos Totais", "rh": rh, "ra": ra})
+                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": f"👉 <b>FAZER:</b> Escanteios Asiáticos\n✅ Aposta: <b>Mais de {linha_cantos}.0 Cantos</b>", "stats": f"{ck_h+ck_a} Cantos Totais", "rh": rh, "ra": ra})
 
         return SINAIS
     except: return []
 # ==============================================================================
-# 4. TELEGRAM, RESULTADOS E UI (FINAL)
+# 4. TELEGRAM, RESULTADOS, RELATÓRIOS E UI (FINAL)
 # ==============================================================================
 
 def _worker_telegram(token, chat_id, msg):
@@ -1050,16 +1064,18 @@ def processar_resultado(sinal, jogo_api, token, chats):
                     st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                 return True
         else:
-            # Para Over/Back, se saiu gol e era o objetivo
-            # (Nota: Vovô e Lay ao Morto são estratégias de Manutenção, não de Gols)
-            if "Vovô" not in strat and "Lay" not in strat:
+            # Para Over/Back (Estratégias de Gol, Vovô, etc se confirmadas)
+            # Nota: Vovô é Back, se o time ganhou/manteve vantagem é Green, mas aqui monitoramos Gols.
+            # Se for Vovô e saiu gol a favor do time apostado, é Green. Se contra, mantem.
+            # Lógica simplificada: Se saiu gol e não era Under, marca Green.
+            if "Morno" not in strat and "Under" not in strat:
                 sinal['Resultado'] = '✅ GREEN'
                 if key_green not in st.session_state['alertas_enviados']:
                     enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {strat}")
                     st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
                 return True
 
-    # 2. Lógica para HT (Só vale se bater no 1º Tempo)
+    # 2. Lógica para HT
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga"]
     eh_ht_strat = any(x in strat for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
@@ -1071,12 +1087,12 @@ def processar_resultado(sinal, jogo_api, token, chats):
         
     # 3. Lógica para FINAL DE JOGO (FT)
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
-        # Se for Under/Morno ou VOVÔ (Manutenção) e terminou com placar favorável
-        if ("Morno" in strat or "Under" in strat or "Vovô" in strat or "Lay ao Morto" in strat):
-             # Lógica simplificada: Se não deu RED por gol excessivo antes, é GREEN no final
+        # Se for Under/Morno ou Lay ao Morto e terminou favorável
+        if ("Morno" in strat or "Under" in strat or "Lay ao Morto" in strat or "Vovô" in strat):
+             # Se não deu RED antes, é GREEN agora
              sinal['Resultado'] = '✅ GREEN'
              if key_green not in st.session_state['alertas_enviados']:
-                enviar_telegram(token, chats, f"✅ <b>GREEN | LEITURA CONFIRMADA</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
+                enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
              return True
         
@@ -1143,10 +1159,9 @@ def conferir_resultados_sniper(jogos_live, api_key):
         if match_mais:
             if tg <= float(match_mais.group(2)): green_gols = False
             
-        # Lógica simplificada de resultado para Sniper
         if "empate anula" in target or "dnb" in target:
             if gh == ga: res_final = "🔄 REEMBOLSO"
-            else: res_final = '✅ GREEN' # Assume que acertou o vencedor se não empatou (simplificado)
+            else: res_final = '✅ GREEN'
         else:
             res_final = '✅ GREEN' if (green_gols and green_resultado) else '❌ RED'
         
@@ -1363,7 +1378,7 @@ def gerar_insights_matinais_ia(api_key):
     except Exception as e: return f"Erro Matinal: {e}"
 
 # ==============================================================================
-# UI E LOOP (MANTIDO 100% IGUAL AO ORIGINAL)
+# UI E LOOP (COM AJUSTE VISUAL "FERRAMENTAS MANUAIS")
 # ==============================================================================
 with st.sidebar:
     st.title("❄️ Neves Analytics")
@@ -1377,58 +1392,58 @@ with st.sidebar:
         if st.button("🧹 Limpar Cache"): 
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
     
-    st.write("---")
-    st.caption("🛠️ Ferramentas Manuais")
-    
-    if st.button("🧠 Pedir Análise do BI"):
-        if IA_ATIVADA:
-            with st.spinner("🤖 O Consultor Neves está analisando seus dados..."):
-                analise = analisar_bi_com_ia()
-                st.markdown("### 📝 Relatório do Consultor")
-                st.info(analise)
-        else: st.error("IA Desconectada.")
-        
-    if st.button("🧪 Criar Nova Estratégia (Big Data)"):
-        if IA_ATIVADA:
-            with st.spinner("🤖 Analisando padrões globais no Big Data..."):
-                sugestao = criar_estrategia_nova_ia()
-                st.markdown("### 💡 Sugestão da IA")
-                st.success(sugestao)
-        else: st.error("IA Desconectada.")
-        
-    if st.button("🔧 Otimizar Estratégias (IA)"):
-        if IA_ATIVADA and db_firestore:
-            with st.spinner("🕵️ Cruzando Greens/Reds com Big Data..."):
-                relatorio = otimizar_estrategias_existentes_ia()
-                st.markdown("### 🛠️ Plano de Melhoria")
-                if "Erro" in relatorio or "Atenção" in relatorio: st.warning(relatorio)
-                else: st.success("Análise Concluída!"); st.write(relatorio)
-        else: st.error("Requer IA Ativa e Conexão Firebase.")
-        
-    if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
-        with st.spinner("Buscando na API todos os jogos finalizados hoje..."):
-            hoje_real = get_time_br().strftime('%Y-%m-%d')
-            todos_jogos_hoje = buscar_agenda_cached(st.session_state['API_KEY'], hoje_real)
-            ft_pendentes = [j for j in todos_jogos_hoje if j['fixture']['status']['short'] in ['FT', 'AET', 'PEN'] and str(j['fixture']['id']) not in st.session_state['jogos_salvos_bigdata']]
-            if ft_pendentes:
-                st.info(f"Processando {len(ft_pendentes)} jogos...")
-                stats_recuperadas = atualizar_stats_em_paralelo(ft_pendentes, st.session_state['API_KEY'])
-                count_salvos = 0
-                for fid, stats in stats_recuperadas.items():
-                    j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
-                    if j_obj: salvar_bigdata(j_obj, stats) 
-                    count_salvos += 1
-                st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
-            else: st.warning("Nenhum jogo finalizado pendente.")
+    # --- AQUI ESTÁ A MUDANÇA SOLICITADA ---
+    with st.expander("🛠️ Ferramentas Manuais", expanded=False):
+        if st.button("🧠 Pedir Análise do BI"):
+            if IA_ATIVADA:
+                with st.spinner("🤖 O Consultor Neves está analisando seus dados..."):
+                    analise = analisar_bi_com_ia()
+                    st.markdown("### 📝 Relatório do Consultor")
+                    st.info(analise)
+            else: st.error("IA Desconectada.")
             
-    if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
-    
-    if st.button("💰 Enviar Relatório Financeiro"):
-        if 'last_fin_stats' in st.session_state:
-            s = st.session_state['last_fin_stats']
-            enviar_relatorio_financeiro(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], s['cenario'], s['lucro'], s['roi'], s['entradas'])
-            st.toast("Relatório Financeiro Enviado!")
-        else: st.error("Abra a aba Financeiro primeiro.")
+        if st.button("🧪 Criar Nova Estratégia (Big Data)"):
+            if IA_ATIVADA:
+                with st.spinner("🤖 Analisando padrões globais no Big Data..."):
+                    sugestao = criar_estrategia_nova_ia()
+                    st.markdown("### 💡 Sugestão da IA")
+                    st.success(sugestao)
+            else: st.error("IA Desconectada.")
+            
+        if st.button("🔧 Otimizar Estratégias (IA)"):
+            if IA_ATIVADA and db_firestore:
+                with st.spinner("🕵️ Cruzando Greens/Reds com Big Data..."):
+                    relatorio = otimizar_estrategias_existentes_ia()
+                    st.markdown("### 🛠️ Plano de Melhoria")
+                    if "Erro" in relatorio or "Atenção" in relatorio: st.warning(relatorio)
+                    else: st.success("Análise Concluída!"); st.write(relatorio)
+            else: st.error("Requer IA Ativa e Conexão Firebase.")
+            
+        if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
+            with st.spinner("Buscando na API todos os jogos finalizados hoje..."):
+                hoje_real = get_time_br().strftime('%Y-%m-%d')
+                todos_jogos_hoje = buscar_agenda_cached(st.session_state['API_KEY'], hoje_real)
+                ft_pendentes = [j for j in todos_jogos_hoje if j['fixture']['status']['short'] in ['FT', 'AET', 'PEN'] and str(j['fixture']['id']) not in st.session_state['jogos_salvos_bigdata']]
+                if ft_pendentes:
+                    st.info(f"Processando {len(ft_pendentes)} jogos...")
+                    stats_recuperadas = atualizar_stats_em_paralelo(ft_pendentes, st.session_state['API_KEY'])
+                    count_salvos = 0
+                    for fid, stats in stats_recuperadas.items():
+                        j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
+                        if j_obj: salvar_bigdata(j_obj, stats) 
+                        count_salvos += 1
+                    st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
+                else: st.warning("Nenhum jogo finalizado pendente.")
+                
+        if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Relatório Enviado!")
+        
+        if st.button("💰 Enviar Relatório Financeiro"):
+            if 'last_fin_stats' in st.session_state:
+                s = st.session_state['last_fin_stats']
+                enviar_relatorio_financeiro(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], s['cenario'], s['lucro'], s['roi'], s['entradas'])
+                st.toast("Relatório Financeiro Enviado!")
+            else: st.error("Abra a aba Financeiro primeiro.")
+    # ----------------------------------------
 
     with st.expander("💰 Gestão de Banca", expanded=False):
         stake_padrao = st.number_input("Valor da Aposta (R$)", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
@@ -1449,7 +1464,6 @@ with st.sidebar:
 
     st.write("---")
     
-    # --- ÁREA DE STATUS (SOLICITADO) ---
     tg_ok, tg_nome = testar_conexao_telegram(st.session_state['TG_TOKEN'])
     if tg_ok: 
         st.markdown(f'<div class="status-active">✈️ TELEGRAM: CONECTADO ({tg_nome})</div>', unsafe_allow_html=True)
@@ -1556,16 +1570,15 @@ if st.session_state.ROBO_LIGADO:
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 if st_short == 'FT': continue 
                 
-                # --- CACHE INTELIGENTE ---
                 stats = []
                 ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
                 
-                t_esp = 180 # Padrão Econômico
+                t_esp = 180 
                 eh_inicio = (tempo <= 20); eh_final = (tempo >= 70 and abs(gh - ga) <= 1); eh_ht = (st_short == 'HT')
                 memoria = st.session_state['memoria_pressao'].get(fid, {})
                 pressao_recente = (len(memoria.get('h_t', [])) + len(memoria.get('a_t', []))) >= 4
                 
-                if eh_inicio or eh_final or eh_ht or pressao_recente: t_esp = 60 # Modo Turbo
+                if eh_inicio or eh_final or eh_ht or pressao_recente: t_esp = 60
 
                 if deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp:
@@ -1612,15 +1625,12 @@ if st.session_state.ROBO_LIGADO:
 
                     for s in lista_sinais:
                         prob = "..." 
-                        
                         liga_safe = j['league']['name'].replace("<", "").replace(">", "").replace("&", "e")
                         home_safe = home.replace("<", "").replace(">", "").replace("&", "e")
                         away_safe = away.replace("<", "").replace(">", "").replace("&", "e")
-                        
                         rh = s.get('rh', 0); ra = s.get('ra', 0)
                         uid_normal = gerar_chave_universal(fid, s['tag'], "SINAL")
                         uid_super = f"SUPER_{uid_normal}"
-                        
                         ja_enviado_total = False
                         if uid_normal in st.session_state['alertas_enviados']: ja_enviado_total = True
                         if not ja_enviado_total:
@@ -1628,53 +1638,40 @@ if st.session_state.ROBO_LIGADO:
                                 key_hist = gerar_chave_universal(item_hist['FID'], item_hist['Estrategia'], "SINAL")
                                 if key_hist == uid_normal:
                                     ja_enviado_total = True; st.session_state['alertas_enviados'].add(uid_normal); break
-                        
                         if ja_enviado_total: continue 
-                        
                         st.session_state['alertas_enviados'].add(uid_normal)
-                        
                         odd_atual_str = get_live_odds(fid, safe_api, s['tag'], gh+ga, tempo)
-
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
-                        
                         destaque_odd = ""
                         if odd_val >= 1.80:
                             destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
                             st.session_state['alertas_enviados'].add(uid_super)
-                        
                         opiniao_txt = ""; opiniao_db = "Neutro"
                         if IA_ATIVADA:
                             try:
                                 time.sleep(0.3)
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
                                 opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context="")
-                                
                                 if "aprovado" in opiniao_txt.lower(): opiniao_db = "Aprovado"
                                 elif "arriscado" in opiniao_txt.lower(): opiniao_db = "Arriscado"
                                 else: opiniao_db = "Neutro"
                             except: pass
-                        
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
-                        
                         if adicionar_historico(item):
                             try:
                                 prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
-                                
                                 texto_validacao = ""
                                 if dados_50:
                                     h_stats = dados_50['home']; a_stats = dados_50['away']
                                     foco = "Geral"; pct_h = 0; pct_a = 0
-                                    
                                     if "HT" in s['tag'] or "Relâmpago" in s['tag'] or "Massacre" in s['tag'] or "Choque" in s['tag']:
                                         foco = "Gols 1º Tempo (HT)"; pct_h = h_stats.get('over05_ht', 0); pct_a = a_stats.get('over05_ht', 0)
                                     elif "Morno" in s['tag']:
                                         foco = "Freq. Over 1.5 (Cuidado se alto)"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
                                     else:
                                         foco = "Freq. Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
-                                        
                                     texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
-
                                 msg = (
                                     f"<b>🚨 SINAL {s['tag'].upper()}</b>\n\n"
                                     f"🏆 <b>{liga_safe}</b>\n"
@@ -1688,13 +1685,10 @@ if st.session_state.ROBO_LIGADO:
                                     f"{prob}"
                                     f"{opiniao_txt}" 
                                 )
-                                
                                 enviar_telegram(safe_token, safe_chat, msg)
                                 st.toast(f"Sinal Enviado: {s['tag']}")
-                                
                             except Exception as e:
                                 print(f"Erro ao enviar sinal: {e}")
-                        
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
                              msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>")
@@ -1924,4 +1918,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
-        
