@@ -722,10 +722,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     FORMATO DE RESPOSTA (OBRIGATÓRIO):
     Aprovado/Arriscado - [Motivo Curto]
     PROB: [Número]%
-    
-    Exemplo:
-    Aprovado - Favorito amassando, gol maduro.
-    PROB: 84%
     """
 
     try:
@@ -760,7 +756,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
     except Exception as e: return "", "N/A"
 
-# --- FUNÇÕES AUXILIARES DE IA (RESTAURADAS PARA CORRIGIR O ERRO DOS BOTÕES) ---
+# --- FUNÇÕES AUXILIARES DE IA (RESTAURADAS) ---
 
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
@@ -1030,7 +1026,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         # --- UNDER: JOGO MORNO (Caça ao Under) ---
         if 55 <= tempo <= 75:
              if total_chutes <= 10 and (sog_h + sog_a) <= 2:
-                 if gh == ga: # Só se estiver empatado (0x0 ou 1x1)
+                 if gh == ga: # Só se estiver empatado
                      linha_under = total_gols + 0.5
                      SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": f"👉 <b>FAZER:</b> Under Gols (Segurar)\n✅ Aposta: <b>Menos de {linha_under} Gols</b> (Ou Under Limite)", "stats": f"Jogo Travado ({total_chutes} chutes totais)", "rh": rh, "ra": ra, "favorito": "UNDER"})
 
@@ -1056,11 +1052,12 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if 15 <= tempo <= 25 and total_chutes >= 6 and total_sog >= 3:
              SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": "Muitos Chutes", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
+        # --- FIX SNIPER FINAL: APENAS OVER GOL LIMITE ---
         if tempo >= 80 and abs(gh - ga) <= 1: 
             tem_bola_parada = (ck_h + ck_a) >= 9 
             tem_pressao = (rh >= 4 and sh_h >= 12) or (ra >= 4 and sh_a >= 12)
             if tem_pressao or tem_bola_parada:
-                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Empate Anula (DNB) ou Over Limite", "stats": "Pressão Final", "rh": rh, "ra": ra, "favorito": "GOLS/DNB"})
+                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite (Asiático)\n✅ Busque o Gol no Final", "stats": "Pressão Final", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
         if 10 <= tempo <= 40 and gh == ga:
             if (posse_h >= 55) and (sog_h >= 2) and (sh_h >= 5) and (sh_a <= 1) and rh >= 1: 
