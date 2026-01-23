@@ -122,7 +122,6 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "💎 GOLDEN BET": "Over Limite",
     "🏹 Tiroteio Elite": "Over Gols",
     "⚡ Contra-Ataque Letal": "Back Zebra",
-    "🚩 Pressão Escanteios": "Cantos Asiáticos",
     "💎 Sniper Final": "Over Limite",
     "🦁 Back Favorito (Nettuno)": "Back Vencedor",
     "💀 Lay ao Morto": "Lay Perdedor",
@@ -143,7 +142,6 @@ MAPA_ODDS_TEORICAS = {
     "💎 GOLDEN BET": {"min": 1.80, "max": 2.40},
     "🏹 Tiroteio Elite": {"min": 1.40, "max": 1.60},
     "⚡ Contra-Ataque Letal": {"min": 1.60, "max": 2.20},
-    "🚩 Pressão Escanteios": {"min": 1.50, "max": 1.80},
     "💎 Sniper Final": {"min": 1.80, "max": 2.50},
     "💀 Lay ao Morto": {"min": 1.60, "max": 2.00},
     "🔫 Lay Goleada": {"min": 1.60, "max": 2.20},
@@ -1038,12 +1036,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if tem_pressao or tem_bola_parada:
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Empate Anula Aposta (DNB)\n✅ Se odd baixa: <b>Over Limite (Asiático)</b>", "stats": f"Pressão Final (Cantos: {ck_h+ck_a})", "rh": rh, "ra": ra, "favorito": "GOLS/DNB"})
         
-        # Pressão Escanteios
-        if tempo >= 30:
-            total_cantos = ck_h + ck_a
-            linha_cantos = total_cantos + 1
-            if (ck_h >= 5 and chutes_area_h >= 4 and gh <= ga) or (ck_a >= 5 and chutes_area_a >= 4 and ga <= gh):
-                SINAIS.append({"tag": "🚩 Pressão Escanteios", "ordem": f"👉 <b>FAZER:</b> Escanteios Asiáticos\n✅ Aposta: <b>Mais de {linha_cantos}.0 Cantos</b>", "stats": f"{ck_h+ck_a} Cantos Totais", "rh": rh, "ra": ra, "favorito": "CANTOS"})
+        # (ESTRATÉGIA DE ESCANTEIOS REMOVIDA AQUI)
 
         return SINAIS
     except: return []
@@ -1075,14 +1068,6 @@ def processar_resultado(sinal, jogo_api, token, chats):
     # 1. Detecção de GOL
     if (gh + ga) > (ph + pa):
         
-        # --- ESCANTEIOS (IGNORAR GOLS) ---
-        if "Escanteios" in strat:
-            return False 
-
-        # --- FIX: Match Odds (Ignorar Gols durante o jogo) ---
-        if any(x in strat for x in ["Vovô", "Lay ao Morto", "Back Favorito"]):
-            return False
-
         # --- Under/Morno (Gol é RUIM) ---
         if "Morno" in strat or "Under" in strat:
             if (gh+ga) >= 2:
@@ -1092,6 +1077,27 @@ def processar_resultado(sinal, jogo_api, token, chats):
                     st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                 return True
         else:
+            # --- Vovô / Lay / Back (Gol pode ser BOM ou RUIM) ---
+            STRATS_HOLD_LEAD = ["Vovô", "Lay ao Morto", "Back Favorito"]
+            if any(x in strat for x in STRATS_HOLD_LEAD):
+                 home_win = ph > pa
+                 away_win = pa > ph
+                 bad_goal = False
+                 if home_win and (ga > pa): bad_goal = True 
+                 if away_win and (gh > ph): bad_goal = True 
+                 if bad_goal:
+                     sinal['Resultado'] = '❌ RED'
+                     if key_red not in st.session_state['alertas_enviados']:
+                         enviar_telegram(token, chats, f"❌ <b>RED | EMPATE/GOL SOFRIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {strat}")
+                         st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
+                     return True
+                 else:
+                     sinal['Resultado'] = '✅ GREEN'
+                     if key_green not in st.session_state['alertas_enviados']:
+                         enviar_telegram(token, chats, f"✅ <b>GREEN | VANTAGEM AUMENTOU</b>\n⚽ {sinal['Jogo']}\n📈 Placar: {gh}x{ga}\n🎯 {strat}")
+                         st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
+                     return True
+
             # --- Over Gols Padrão (Gol é BOM) ---
             sinal['Resultado'] = '✅ GREEN'
             if key_green not in st.session_state['alertas_enviados']:
@@ -1099,7 +1105,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
             return True
 
-    # 2. Lógica para HT
+    # 2. HT / FT (Final de período)
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga"]
     eh_ht_strat = any(x in strat for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
@@ -1109,57 +1115,13 @@ def processar_resultado(sinal, jogo_api, token, chats):
             st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
         return True
         
-    # 3. Lógica para FINAL DE JOGO (FT)
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
-        # Lógica para Vovô/Back (Vitória Seca)
-        if "Vovô" in strat or "Back" in strat:
-            ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
-            resultado = '❌ RED'
-            # Se apostamos no Casa (estava ganhando)
-            if ph > pa and gh > ga: resultado = '✅ GREEN'
-            # Se apostamos no Visitante (estava ganhando)
-            elif pa > ph and ga > gh: resultado = '✅ GREEN'
-            
-            if resultado == '✅ GREEN':
-                 if key_green not in st.session_state['alertas_enviados']:
-                    enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
-                    st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
-            else:
-                 if key_red not in st.session_state['alertas_enviados']:
-                    enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
-                    st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
-            sinal['Resultado'] = resultado
-            return True
-
-        # Lógica para Lay ao Morto (Dupla Chance)
-        elif "Lay ao Morto" in strat:
-            ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
-            resultado = '❌ RED'
-            # Se Home ganhava (Lay Away) -> Green se Home ganhar ou empatar
-            if ph > pa and gh >= ga: resultado = '✅ GREEN'
-            # Se Away ganhava (Lay Home) -> Green se Away ganhar ou empatar
-            elif pa > ph and ga >= gh: resultado = '✅ GREEN'
-            
-            if resultado == '✅ GREEN':
-                 if key_green not in st.session_state['alertas_enviados']:
-                    enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
-                    st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
-            else:
-                 if key_red not in st.session_state['alertas_enviados']:
-                    enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
-                    st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
-            sinal['Resultado'] = resultado
-            return True
-
-        # Se for Under/Morno e terminou
-        if ("Morno" in strat or "Under" in strat):
+        if ("Morno" in strat or "Under" in strat or "Lay ao Morto" in strat or "Vovô" in strat or "Back" in strat):
              sinal['Resultado'] = '✅ GREEN'
              if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
              return True
-        
-        # Para Over ou Escanteios que não bateu
         sinal['Resultado'] = '❌ RED'
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
@@ -1309,6 +1271,8 @@ def enviar_relatorio_bi(token, chat_ids):
         d_7d = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
         d_30d = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
         d_total = df
+        
+        # --- Helper para formatar placar geral ---
         def fmt_placar(d):
             if d.empty: return "0G - 0R (0%)"
             g = d['Resultado'].str.contains('GREEN', na=False).sum()
@@ -1316,6 +1280,7 @@ def enviar_relatorio_bi(token, chat_ids):
             t = g + r
             wr = (g/t*100) if t > 0 else 0
             return f"{g}G - {r}R ({wr:.0f}%)"
+            
         def fmt_ia_stats(periodo_df, label_periodo):
             if 'Opiniao_IA' not in periodo_df.columns: return ""
             d_fin = periodo_df[periodo_df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
@@ -1323,8 +1288,21 @@ def enviar_relatorio_bi(token, chat_ids):
             stats_risk = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Arriscado'])
             stats_sniper = fmt_placar(d_fin[d_fin['Opiniao_IA'] == 'Sniper'])
             return f"🤖 IA ({label_periodo}):\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}\n🎯 Sniper: {stats_sniper}"
+        
         insight_text = analisar_bi_com_ia()
-        msg_texto = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>\n📆 <b>HOJE:</b> {fmt_placar(d_hoje)}\n{fmt_ia_stats(d_hoje, "Hoje")}\n🗓 <b>SEMANA:</b> {fmt_placar(d_7d)}\n📅 <b>MÊS (30d):</b> {fmt_placar(d_30d)}\n♾ <b>TOTAL:</b> {fmt_placar(d_total)}\n\n🧠 <b>INSIGHT IA:</b>\n{insight_text}"""
+        
+        # --- Análise detalhada por Estratégia ---
+        txt_detalhe = ""
+        df_closed = d_hoje[d_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+        if not df_closed.empty:
+            strats_stats = df_closed.groupby('Estrategia').apply(
+                lambda x: f"{(x['Resultado'].str.contains('GREEN').sum() / len(x) * 100):.0f}% ({x['Resultado'].str.contains('GREEN').sum()}/{len(x)})"
+            ).to_dict()
+            txt_detalhe = "\n\n📊 <b>ASSERTIVIDADE POR ESTRATÉGIA:</b>"
+            for k, v in strats_stats.items():
+                txt_detalhe += f"\n▪️ {k}: <b>{v}</b>"
+        
+        msg_texto = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>\n📆 <b>HOJE:</b> {fmt_placar(d_hoje)}\n{fmt_ia_stats(d_hoje, "Hoje")}{txt_detalhe}\n\n🗓 <b>SEMANA:</b> {fmt_placar(d_7d)}\n📅 <b>MÊS (30d):</b> {fmt_placar(d_30d)}\n♾ <b>TOTAL:</b> {fmt_placar(d_total)}\n\n🧠 <b>INSIGHT IA:</b>\n{insight_text}"""
         enviar_telegram(token, chat_ids, msg_texto)
     except Exception as e: st.error(f"Erro ao gerar BI: {e}")
 
@@ -1762,8 +1740,12 @@ if st.session_state.ROBO_LIGADO:
                                     f"{prob_final_display}"
                                     f"{opiniao_txt}" 
                                 )
-                                enviar_telegram(safe_token, safe_chat, msg)
-                                st.toast(f"Sinal Enviado: {s['tag']}")
+                                # Filtrar envio apenas para APROVADOS
+                                if opiniao_db == "Aprovado":
+                                    enviar_telegram(safe_token, safe_chat, msg)
+                                    st.toast(f"✅ Sinal Aprovado Enviado: {s['tag']}")
+                                else:
+                                    st.toast(f"⚠️ Sinal Retido (IA: {opiniao_db}): {s['tag']}")
                             except Exception as e:
                                 print(f"Erro ao enviar sinal: {e}")
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
