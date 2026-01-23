@@ -678,7 +678,7 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
 # ==============================================================================
 
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
-    if not IA_ATIVADA: return ""
+    if not IA_ATIVADA: return "", "N/A"
     try:
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
@@ -690,8 +690,8 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         tempo = int(tempo_str) if tempo_str.isdigit() else 0
         
         if tempo > 20 and chutes_totais == 0 and ataques_totais == 0:
-            return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - Dados zerados (API Delay)."
-    except: return ""
+            return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - Dados zerados (API Delay).", "N/A"
+    except: return "", "N/A"
 
     chutes_area_casa = gv(s1, 'Shots insidebox')
     chutes_area_fora = gv(s2, 'Shots insidebox')
@@ -699,45 +699,55 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     dados_ricos = extrair_dados_completos(stats_raw)
     
     prompt = f"""
-    Atue como um ANALISTA DE APOSTAS SÊNIOR (Sniper).
+    Atue como um CIENTISTA DE DADOS DE APOSTAS ESPORTIVAS (Expert em Probabilidades).
     
     DADOS DO JOGO:
     {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
     Estratégia Indicada: {estrategia}
-    Time Foco da Aposta: {time_favoravel if time_favoravel else "Verificar Estratégia"}
+    Time Foco: {time_favoravel if time_favoravel else "Análise Geral"}
     
-    ESTATÍSTICAS:
+    ESTATÍSTICAS AO VIVO:
     Pressão (Momentum): Casa {rh} x {ra} Visitante
     Chutes na Área: Casa {chutes_area_casa} x {chutes_area_fora} Visitante
     Escanteios Totais: {escanteios}
     
-    CONTEXTO (Ratings/Histórico):
+    CONTEXTO HISTÓRICO:
     {extra_context}
 
     STATS COMPLETAS:
     {dados_ricos}
 
-    ANÁLISE DE PRESSÃO (DICA ESPECIAL):
-    1. Avalie se a pressão do adversário é REAL (Chutes na área, chances claras) ou apenas "FOGO DE PALHA" (Posse inútil, chutes de longe).
-    2. Se a estratégia for "Vovô" ou "Back Favorito" e a pressão for Fogo de Palha, APROVE.
-    3. IMPORTANTE: Analise a viabilidade para o time: {time_favoravel}. Não analise o perdedor.
+    SUA MISSÃO DUPLA:
+    1. VALIDAR A ENTRADA (Aprovado/Arriscado) considerando se a pressão é real ou "fogo de palha".
+    2. CALCULAR A PROBABILIDADE EXATA DE GREEN (0-100%) cruzando o histórico com o momento atual.
 
-    SUA MISSÃO: Validar a entrada e dar um veredicto final.
-    REGRA DE RESPOSTA (OBRIGATÓRIO):
-    Seja EXTREMAMENTE SINTÉTICO. Máximo 15 palavras.
-    Formato: [Aprovado/Arriscado] - [Motivo curto]
-    Exemplo: "Aprovado - Adversário só tem posse inútil, vitória segura."
+    FORMATO DE RESPOSTA (OBRIGATÓRIO):
+    Aprovado/Arriscado - [Motivo Curto]
+    PROB: [Número]%
+    
+    Exemplo:
+    Aprovado - Favorito amassando, gol maduro.
+    PROB: 84%
     """
 
     try:
         response = model_ia.generate_content(
             prompt, 
-            generation_config=genai.types.GenerationConfig(temperature=0.1),
+            generation_config=genai.types.GenerationConfig(temperature=0.2),
             request_options={"timeout": 10}
         )
         st.session_state['gemini_usage']['used'] += 1
         
-        texto_limpo = response.text.strip().replace("**", "").replace("*", "")
+        texto_completo = response.text.strip().replace("**", "").replace("*", "")
+        
+        # Extrair Probabilidade
+        prob_str = "..."
+        match_prob = re.search(r'PROB:\s*(\d+)%', texto_completo)
+        if match_prob:
+            prob_str = f"{match_prob.group(1)}%"
+            
+        # Limpar texto para exibição (remover a linha PROB)
+        texto_limpo = re.sub(r'PROB:\s*\d+%', '', texto_completo).strip()
         
         veredicto = "Arriscado" 
         if list(filter(texto_limpo.lower().startswith, ["aprovado", "[aprovado"])): veredicto = "Aprovado"
@@ -752,10 +762,12 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         motivo = motivo.replace("Aprovado", "").replace("Arriscado", "").strip()
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         
-        return f"\n🤖 <b>MENTORIA IA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>"
+        msg_final = f"\n🤖 <b>MENTORIA IA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>"
+        
+        return msg_final, prob_str
 
     except Exception as e:
-        return "" 
+        return "", "N/A"
 
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
@@ -1060,15 +1072,14 @@ def processar_resultado(sinal, jogo_api, token, chats):
     key_red = gerar_chave_universal(fid, strat, "RED")
     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
     
-    # 1. Detecção de GOL (Placar mudou para cima)
+    # 1. Detecção de GOL
     if (gh + ga) > (ph + pa):
         
-        # --- FIX 1: ESCANTEIOS (IGNORAR GOLS) ---
-        # Gol não resolve aposta de canto. Apenas ignora e segue monitorando.
+        # --- ESCANTEIOS (IGNORAR GOLS) ---
         if "Escanteios" in strat:
             return False 
 
-        # --- Lógica para Under/Morno (Gol é RUIM) ---
+        # --- Under/Morno (Gol é RUIM) ---
         if "Morno" in strat or "Under" in strat:
             if (gh+ga) >= 2:
                 sinal['Resultado'] = '❌ RED'
@@ -1077,18 +1088,14 @@ def processar_resultado(sinal, jogo_api, token, chats):
                     st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                 return True
         else:
-            # --- FIX 2: Vovô / Lay / Back (Gol pode ser BOM ou RUIM) ---
+            # --- Vovô / Lay / Back (Gol pode ser BOM ou RUIM) ---
             STRATS_HOLD_LEAD = ["Vovô", "Lay ao Morto", "Back Favorito"]
             if any(x in strat for x in STRATS_HOLD_LEAD):
                  home_win = ph > pa
                  away_win = pa > ph
-                 
                  bad_goal = False
-                 # Se Home ganhava e Away marcou -> RUIM (Sofreu empate ou diminuiu vantagem)
                  if home_win and (ga > pa): bad_goal = True 
-                 # Se Away ganhava e Home marcou -> RUIM
                  if away_win and (gh > ph): bad_goal = True 
-                 
                  if bad_goal:
                      sinal['Resultado'] = '❌ RED'
                      if key_red not in st.session_state['alertas_enviados']:
@@ -1096,21 +1103,20 @@ def processar_resultado(sinal, jogo_api, token, chats):
                          st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                      return True
                  else:
-                     # Se o gol foi do nosso time (ampliou vantagem), é Green
                      sinal['Resultado'] = '✅ GREEN'
                      if key_green not in st.session_state['alertas_enviados']:
                          enviar_telegram(token, chats, f"✅ <b>GREEN | VANTAGEM AUMENTOU</b>\n⚽ {sinal['Jogo']}\n📈 Placar: {gh}x{ga}\n🎯 {strat}")
                          st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
                      return True
 
-            # --- Lógica Padrão para Over Gols (Gol é BOM) ---
+            # --- Over Gols Padrão (Gol é BOM) ---
             sinal['Resultado'] = '✅ GREEN'
             if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
             return True
 
-    # 2. Lógica para HT
+    # 2. HT / FT (Final de período)
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga"]
     eh_ht_strat = any(x in strat for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
@@ -1120,17 +1126,13 @@ def processar_resultado(sinal, jogo_api, token, chats):
             st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
         return True
         
-    # 3. Lógica para FINAL DE JOGO (FT)
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
-        # Se for Under/Morno ou Lay/Vovô e terminou com o placar favorável (não deu RED antes)
         if ("Morno" in strat or "Under" in strat or "Lay ao Morto" in strat or "Vovô" in strat or "Back" in strat):
              sinal['Resultado'] = '✅ GREEN'
              if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
              return True
-        
-        # Para Over ou Escanteios que não bateu até o fim
         sinal['Resultado'] = '❌ RED'
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
@@ -1681,22 +1683,34 @@ if st.session_state.ROBO_LIGADO:
                         if odd_val >= 1.80:
                             destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
                             st.session_state['alertas_enviados'].add(uid_super)
-                        opiniao_txt = ""; opiniao_db = "Neutro"
+                        
+                        opiniao_txt = "" 
+                        prob_txt = "..."
+                        opiniao_db = "Neutro"
+                        
                         if IA_ATIVADA:
                             try:
                                 time.sleep(0.3)
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
                                 # PEGA O TIME FAVORITO DO SINAL PARA MANDAR PARA A IA
                                 time_fav_ia = s.get('favorito', '')
-                                opiniao_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context="", time_favoravel=time_fav_ia)
+                                opiniao_txt, prob_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context=extra_ctx, time_favoravel=time_fav_ia)
+                                
                                 if "aprovado" in opiniao_txt.lower(): opiniao_db = "Aprovado"
                                 elif "arriscado" in opiniao_txt.lower(): opiniao_db = "Arriscado"
                                 else: opiniao_db = "Neutro"
                             except: pass
+                        
                         item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away}", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
+                        
                         if adicionar_historico(item):
                             try:
-                                prob = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
+                                # Aqui substituímos a probabilidade estática pela da IA se disponível
+                                if prob_txt != "..." and prob_txt != "N/A":
+                                    prob_final_display = f"\n🔮 <b>Probabilidade IA: {prob_txt}</b>"
+                                else:
+                                    prob_final_display = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
+                                
                                 texto_validacao = ""
                                 if dados_50:
                                     h_stats = dados_50['home']; a_stats = dados_50['away']
@@ -1718,7 +1732,7 @@ if st.session_state.ROBO_LIGADO:
                                     f"📊 <i>Dados: {s['stats']}</i>\n"
                                     f"⚽ Médias (10j): Casa {medias_gols['home']} | Fora {medias_gols['away']}"
                                     f"{texto_validacao}\n"
-                                    f"{prob}"
+                                    f"{prob_final_display}"
                                     f"{opiniao_txt}" 
                                 )
                                 enviar_telegram(safe_token, safe_chat, msg)
