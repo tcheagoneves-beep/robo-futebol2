@@ -1079,6 +1079,10 @@ def processar_resultado(sinal, jogo_api, token, chats):
         if "Escanteios" in strat:
             return False 
 
+        # --- FIX: Match Odds (Ignorar Gols durante o jogo) ---
+        if any(x in strat for x in ["Vovô", "Lay ao Morto", "Back Favorito"]):
+            return False
+
         # --- Under/Morno (Gol é RUIM) ---
         if "Morno" in strat or "Under" in strat:
             if (gh+ga) >= 2:
@@ -1088,27 +1092,6 @@ def processar_resultado(sinal, jogo_api, token, chats):
                     st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                 return True
         else:
-            # --- Vovô / Lay / Back (Gol pode ser BOM ou RUIM) ---
-            STRATS_HOLD_LEAD = ["Vovô", "Lay ao Morto", "Back Favorito"]
-            if any(x in strat for x in STRATS_HOLD_LEAD):
-                 home_win = ph > pa
-                 away_win = pa > ph
-                 bad_goal = False
-                 if home_win and (ga > pa): bad_goal = True 
-                 if away_win and (gh > ph): bad_goal = True 
-                 if bad_goal:
-                     sinal['Resultado'] = '❌ RED'
-                     if key_red not in st.session_state['alertas_enviados']:
-                         enviar_telegram(token, chats, f"❌ <b>RED | EMPATE/GOL SOFRIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {strat}")
-                         st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
-                     return True
-                 else:
-                     sinal['Resultado'] = '✅ GREEN'
-                     if key_green not in st.session_state['alertas_enviados']:
-                         enviar_telegram(token, chats, f"✅ <b>GREEN | VANTAGEM AUMENTOU</b>\n⚽ {sinal['Jogo']}\n📈 Placar: {gh}x{ga}\n🎯 {strat}")
-                         st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
-                     return True
-
             # --- Over Gols Padrão (Gol é BOM) ---
             sinal['Resultado'] = '✅ GREEN'
             if key_green not in st.session_state['alertas_enviados']:
@@ -1116,7 +1099,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
             return True
 
-    # 2. HT / FT (Final de período)
+    # 2. Lógica para HT
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga"]
     eh_ht_strat = any(x in strat for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
@@ -1126,13 +1109,57 @@ def processar_resultado(sinal, jogo_api, token, chats):
             st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
         return True
         
+    # 3. Lógica para FINAL DE JOGO (FT)
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
-        if ("Morno" in strat or "Under" in strat or "Lay ao Morto" in strat or "Vovô" in strat or "Back" in strat):
+        # Lógica para Vovô/Back (Vitória Seca)
+        if "Vovô" in strat or "Back" in strat:
+            ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
+            resultado = '❌ RED'
+            # Se apostamos no Casa (estava ganhando)
+            if ph > pa and gh > ga: resultado = '✅ GREEN'
+            # Se apostamos no Visitante (estava ganhando)
+            elif pa > ph and ga > gh: resultado = '✅ GREEN'
+            
+            if resultado == '✅ GREEN':
+                 if key_green not in st.session_state['alertas_enviados']:
+                    enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
+                    st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
+            else:
+                 if key_red not in st.session_state['alertas_enviados']:
+                    enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
+                    st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
+            sinal['Resultado'] = resultado
+            return True
+
+        # Lógica para Lay ao Morto (Dupla Chance)
+        elif "Lay ao Morto" in strat:
+            ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
+            resultado = '❌ RED'
+            # Se Home ganhava (Lay Away) -> Green se Home ganhar ou empatar
+            if ph > pa and gh >= ga: resultado = '✅ GREEN'
+            # Se Away ganhava (Lay Home) -> Green se Away ganhar ou empatar
+            elif pa > ph and ga >= gh: resultado = '✅ GREEN'
+            
+            if resultado == '✅ GREEN':
+                 if key_green not in st.session_state['alertas_enviados']:
+                    enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
+                    st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
+            else:
+                 if key_red not in st.session_state['alertas_enviados']:
+                    enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
+                    st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
+            sinal['Resultado'] = resultado
+            return True
+
+        # Se for Under/Morno e terminou
+        if ("Morno" in strat or "Under" in strat):
              sinal['Resultado'] = '✅ GREEN'
              if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
              return True
+        
+        # Para Over ou Escanteios que não bateu
         sinal['Resultado'] = '❌ RED'
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
