@@ -78,6 +78,8 @@ if 'bigdata_enviado' not in st.session_state: st.session_state['bigdata_enviado'
 if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'] = False
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 if 'BLOQUEAR_SALVAMENTO' not in st.session_state: st.session_state['BLOQUEAR_SALVAMENTO'] = False
+# Nova variável para o contador
+if 'total_bigdata_count' not in st.session_state: st.session_state['total_bigdata_count'] = 0
 
 db_firestore = None
 if "FIREBASE_CONFIG" in st.secrets:
@@ -1904,11 +1906,29 @@ if st.session_state.ROBO_LIGADO:
                 if col_fb1.button("🔄 Carregar/Atualizar Tabela"):
                     try:
                         with st.spinner("Baixando dados do Firebase..."):
+                            # ---- CONTADOR (SINALEIRA) ----
+                            total_docs = 0
+                            try:
+                                count_query = db_firestore.collection("BigData_Futebol").count()
+                                res_count = count_query.get()
+                                total_docs = res_count[0][0].value
+                            except:
+                                # Fallback simples
+                                docs_all = db_firestore.collection("BigData_Futebol").select([]).stream()
+                                total_docs = sum(1 for _ in docs_all)
+                            st.session_state['total_bigdata_count'] = total_docs
+                            
+                            # Carregar Dados
                             docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
                             data = [d.to_dict() for d in docs]
                             st.session_state['cache_firebase_view'] = data 
-                            st.toast(f"Dados atualizados! ({len(data)} jogos)")
+                            st.toast(f"Dados atualizados! Total: {total_docs}")
                     except Exception as e: st.error(f"Erro ao ler Firebase: {e}")
+                
+                # Exibe a métrica se já tiver sido carregada
+                if st.session_state.get('total_bigdata_count', 0) > 0:
+                    st.metric("Total de Jogos Armazenados", st.session_state['total_bigdata_count'])
+
                 if 'cache_firebase_view' in st.session_state and st.session_state['cache_firebase_view']:
                     st.success(f"📂 Visualizando {len(st.session_state['cache_firebase_view'])} registros (Cache Local)")
                     st.dataframe(pd.DataFrame(st.session_state['cache_firebase_view']), use_container_width=True)
