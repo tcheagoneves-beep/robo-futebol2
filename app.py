@@ -713,11 +713,16 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     STATS COMPLETAS:
     {dados_ricos}
 
+    ANÁLISE DE PRESSÃO (DICA ESPECIAL):
+    Avalie se a pressão do adversário é REAL ou apenas "FOGO DE PALHA".
+    - Se for "Fogo de Palha" (pressão falsa, chutes de longe), estratégias como "Back Favorito" ou "Vovô" ganham força.
+    - Se for pressão real, sugira cautela.
+
     SUA MISSÃO: Validar a entrada e dar um veredicto final.
     REGRA DE RESPOSTA (OBRIGATÓRIO):
     Seja EXTREMAMENTE SINTÉTICO E DIRETO. Use no máximo 15 palavras.
     Formato: [Aprovado/Arriscado] - [Motivo curto]
-    Exemplo: "Aprovado - Pressão absurda do mandante, gol é questão de tempo."
+    Exemplo: "Aprovado - Pressão é fogo de palha, favorito segura o resultado."
     """
 
     try:
@@ -1582,11 +1587,11 @@ if st.session_state.ROBO_LIGADO:
 
                 if deve_buscar_stats(tempo, gh, ga, st_short):
                     if (datetime.now() - ult_chk).total_seconds() > t_esp:
-                          fid_res, s_res, h_res = fetch_stats_single(fid, safe_api)
-                          if s_res:
-                              st.session_state['controle_stats'][fid] = datetime.now()
-                              st.session_state[f"st_{fid}"] = s_res
-                              update_api_usage(h_res)
+                           fid_res, s_res, h_res = fetch_stats_single(fid, safe_api)
+                           if s_res:
+                               st.session_state['controle_stats'][fid] = datetime.now()
+                               st.session_state[f"st_{fid}"] = s_res
+                               update_api_usage(h_res)
                 
                 stats = st.session_state.get(f"st_{fid}", [])
                 status_vis = "👁️" if stats else "💤"
@@ -1917,4 +1922,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")        
+        st.info("💡 Robô em espera. Configure na lateral.")
