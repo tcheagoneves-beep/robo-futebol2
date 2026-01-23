@@ -108,7 +108,7 @@ LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
-# Mapa para referência (SEM ESCANTEIOS)
+# Mapa para referência (LIMPO)
 MAPA_LOGICA_ESTRATEGIAS = {
     "🟣 Porteira Aberta": "Over Gols",
     "⚡ Gol Relâmpago": "Over HT",
@@ -124,7 +124,6 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "⚡ Contra-Ataque Letal": "Back Zebra",
     "💎 Sniper Final": "Over Limite",
     "🦁 Back Favorito (Nettuno)": "Back Vencedor",
-    "💀 Lay ao Morto": "Lay Perdedor",
     "🔫 Lay Goleada": "Over Limite",
     "👴 Estratégia do Vovô": "Back Favorito (Segurança)"
 }
@@ -143,7 +142,6 @@ MAPA_ODDS_TEORICAS = {
     "🏹 Tiroteio Elite": {"min": 1.40, "max": 1.60},
     "⚡ Contra-Ataque Letal": {"min": 1.60, "max": 2.20},
     "💎 Sniper Final": {"min": 1.80, "max": 2.50},
-    "💀 Lay ao Morto": {"min": 1.60, "max": 2.00},
     "🔫 Lay Goleada": {"min": 1.60, "max": 2.20},
     "👴 Estratégia do Vovô": {"min": 1.05, "max": 1.25}
 }
@@ -827,14 +825,6 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             elif diff == -1 and rh < 2 and posse_a >= 45: 
                  SINAIS.append({"tag": "👴 Estratégia do Vovô", "ordem": "👉 <b>FAZER:</b> Back Favorito (Segurar)\n✅ Aposta: <b>Vitória do VISITANTE</b>", "stats": f"Jogo Controlado ({gh}x{ga})", "rh": rh, "ra": ra, "favorito": "VISITANTE"})
 
-        # --- MATCH ODDS: LAY AO MORTO (Dupla Chance) ---
-        if 55 <= tempo <= 69:
-            if abs(gh - ga) == 1:
-                if (gh < ga) and (rh == 0) and (sog_h <= 2):
-                    SINAIS.append({"tag": "💀 Lay ao Morto", "ordem": "👉 <b>FAZER:</b> Lay ao Perdedor\n✅ Aposta: <b>Dupla Chance Visitante</b>", "stats": f"Casa Inofensiva", "rh": rh, "ra": ra, "favorito": "VISITANTE"})
-                elif (ga < gh) and (ra == 0) and (sog_a <= 2):
-                    SINAIS.append({"tag": "💀 Lay ao Morto", "ordem": "👉 <b>FAZER:</b> Lay ao Perdedor\n✅ Aposta: <b>Dupla Chance Casa</b>", "stats": f"Visitante Inofensivo", "rh": rh, "ra": ra, "favorito": "CASA"})
-
         # --- OUTRAS ESTRATÉGIAS ---
         if tempo <= 30 and total_gols >= 2: 
             SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": f"Jogo Aberto ({total_gols} gols)", "rh": rh, "ra": ra, "favorito": "GOLS"})
@@ -891,10 +881,17 @@ def processar_resultado(sinal, jogo_api, token, chats):
     key_red = gerar_chave_universal(fid, strat, "RED")
     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
     
-    # 1. Detecção de GOL
+    # 1. Detecção de GOL (Bola na Rede)
     if (gh + ga) > (ph + pa):
         
-        # --- Under/Morno (Gol é RUIM) ---
+        # --- FIX CRÍTICO: Match Odds (Vovô/Back) ---
+        # Nessas estratégias, o jogo só acaba quando o juiz apita.
+        # Gol a favor NÃO é Green (ainda). Apenas ignora.
+        STRATS_MATCH_ODDS = ["Vovô", "Back Favorito"]
+        if any(x in strat for x in STRATS_MATCH_ODDS):
+            return False
+
+        # --- Under/Morno (Gol é RUIM e Encerra a Aposta) ---
         if "Morno" in strat or "Under" in strat:
             if (gh+ga) >= 2:
                 sinal['Resultado'] = '❌ RED'
@@ -903,35 +900,14 @@ def processar_resultado(sinal, jogo_api, token, chats):
                     st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                 return True
         else:
-            # --- Vovô / Lay / Back (Gol pode ser BOM ou RUIM) ---
-            STRATS_HOLD_LEAD = ["Vovô", "Lay ao Morto", "Back Favorito"]
-            if any(x in strat for x in STRATS_HOLD_LEAD):
-                 home_win = ph > pa
-                 away_win = pa > ph
-                 bad_goal = False
-                 if home_win and (ga > pa): bad_goal = True 
-                 if away_win and (gh > ph): bad_goal = True 
-                 if bad_goal:
-                     sinal['Resultado'] = '❌ RED'
-                     if key_red not in st.session_state['alertas_enviados']:
-                         enviar_telegram(token, chats, f"❌ <b>RED | EMPATE/GOL SOFRIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {strat}")
-                         st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
-                     return True
-                 else:
-                     sinal['Resultado'] = '✅ GREEN'
-                     if key_green not in st.session_state['alertas_enviados']:
-                         enviar_telegram(token, chats, f"✅ <b>GREEN | VANTAGEM AUMENTOU</b>\n⚽ {sinal['Jogo']}\n📈 Placar: {gh}x{ga}\n🎯 {strat}")
-                         st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
-                     return True
-
-            # --- Over Gols Padrão (Gol é BOM) ---
+            # --- Over Gols Padrão (Gol é BOM e Encerra a Aposta) ---
             sinal['Resultado'] = '✅ GREEN'
             if key_green not in st.session_state['alertas_enviados']:
-                enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: {gh}x{ga}</b>\n🎯 {strat}")
+                enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
             return True
 
-    # 2. HT / FT (Final de período)
+    # 2. HT / FT (Final de período) - AQUI SE RESOLVEM AS MATCH ODDS
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga"]
     eh_ht_strat = any(x in strat for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
@@ -942,12 +918,39 @@ def processar_resultado(sinal, jogo_api, token, chats):
         return True
         
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
-        if ("Morno" in strat or "Under" in strat or "Lay ao Morto" in strat or "Vovô" in strat or "Back" in strat):
+        # Lógica para Vovô/Back (Vitória Seca) - SÓ NO FINAL
+        if "Vovô" in strat or "Back" in strat:
+            # Recuperar quem era o favorito na hora do sinal
+            ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
+            resultado = '❌ RED'
+            
+            # Se a aposta foi no Casa (estava ganhando na hora do sinal)
+            if ph > pa:
+                if gh > ga: resultado = '✅ GREEN' # Terminou ganhando
+            # Se a aposta foi no Visitante (estava ganhando na hora do sinal)
+            elif pa > ph:
+                if ga > gh: resultado = '✅ GREEN' # Terminou ganhando
+            
+            if resultado == '✅ GREEN':
+                 if key_green not in st.session_state['alertas_enviados']:
+                    enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
+                    st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
+            else:
+                 if key_red not in st.session_state['alertas_enviados']:
+                    enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
+                    st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
+            sinal['Resultado'] = resultado
+            return True
+
+        # Se for Under/Morno e terminou
+        if ("Morno" in strat or "Under" in strat):
              sinal['Resultado'] = '✅ GREEN'
              if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
              return True
+        
+        # Para Over que não bateu (se chegou aqui é pq não saiu gol suficiente)
         sinal['Resultado'] = '❌ RED'
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
@@ -1816,4 +1819,5 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")
+        st.info("💡 Robô em espera. Configure na lateral.")        
+        
