@@ -1060,8 +1060,15 @@ def processar_resultado(sinal, jogo_api, token, chats):
     key_red = gerar_chave_universal(fid, strat, "RED")
     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
     
-    # 1. Lógica Geral para Over (Gols)
+    # 1. Detecção de GOL (Placar mudou para cima)
     if (gh + ga) > (ph + pa):
+        
+        # --- FIX 1: ESCANTEIOS (IGNORAR GOLS) ---
+        # Gol não resolve aposta de canto. Apenas ignora e segue monitorando.
+        if "Escanteios" in strat:
+            return False 
+
+        # --- Lógica para Under/Morno (Gol é RUIM) ---
         if "Morno" in strat or "Under" in strat:
             if (gh+ga) >= 2:
                 sinal['Resultado'] = '❌ RED'
@@ -1070,15 +1077,14 @@ def processar_resultado(sinal, jogo_api, token, chats):
                     st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                 return True
         else:
-            # FIX CRÍTICO: Lógica para Lay ao Morto / Vovô / Back Favorito
-            # Se saiu gol, temos que ver DE QUEM foi.
+            # --- FIX 2: Vovô / Lay / Back (Gol pode ser BOM ou RUIM) ---
             STRATS_HOLD_LEAD = ["Vovô", "Lay ao Morto", "Back Favorito"]
             if any(x in strat for x in STRATS_HOLD_LEAD):
                  home_win = ph > pa
                  away_win = pa > ph
                  
                  bad_goal = False
-                 # Se Home ganhava e Away marcou -> RUIM
+                 # Se Home ganhava e Away marcou -> RUIM (Sofreu empate ou diminuiu vantagem)
                  if home_win and (ga > pa): bad_goal = True 
                  # Se Away ganhava e Home marcou -> RUIM
                  if away_win and (gh > ph): bad_goal = True 
@@ -1090,20 +1096,19 @@ def processar_resultado(sinal, jogo_api, token, chats):
                          st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                      return True
                  else:
-                     # Se o gol foi do favorito (ampliou), é Green
+                     # Se o gol foi do nosso time (ampliou vantagem), é Green
                      sinal['Resultado'] = '✅ GREEN'
                      if key_green not in st.session_state['alertas_enviados']:
                          enviar_telegram(token, chats, f"✅ <b>GREEN | VANTAGEM AUMENTOU</b>\n⚽ {sinal['Jogo']}\n📈 Placar: {gh}x{ga}\n🎯 {strat}")
                          st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
                      return True
 
-            # Lógica Padrão para Over (Se não for as strats acima)
-            if "Morno" not in strat and "Under" not in strat:
-                sinal['Resultado'] = '✅ GREEN'
-                if key_green not in st.session_state['alertas_enviados']:
-                    enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {strat}")
-                    st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
-                return True
+            # --- Lógica Padrão para Over Gols (Gol é BOM) ---
+            sinal['Resultado'] = '✅ GREEN'
+            if key_green not in st.session_state['alertas_enviados']:
+                enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {strat}")
+                st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
+            return True
 
     # 2. Lógica para HT
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga"]
@@ -1117,16 +1122,15 @@ def processar_resultado(sinal, jogo_api, token, chats):
         
     # 3. Lógica para FINAL DE JOGO (FT)
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
-        # Se for Under/Morno ou Lay ao Morto e terminou favorável
-        if ("Morno" in strat or "Under" in strat or "Lay ao Morto" in strat or "Vovô" in strat):
-             # Se não deu RED antes, é GREEN agora
+        # Se for Under/Morno ou Lay/Vovô e terminou com o placar favorável (não deu RED antes)
+        if ("Morno" in strat or "Under" in strat or "Lay ao Morto" in strat or "Vovô" in strat or "Back" in strat):
              sinal['Resultado'] = '✅ GREEN'
              if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN | FINALIZADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_green); st.session_state['precisa_salvar'] = True
              return True
         
-        # Para Over que não bateu
+        # Para Over ou Escanteios que não bateu até o fim
         sinal['Resultado'] = '❌ RED'
         if key_red not in st.session_state['alertas_enviados']:
             enviar_telegram(token, chats, f"❌ <b>RED | ENCERRADO</b>\n⚽ {sinal['Jogo']}\n📉 Placar Final: {gh}x{ga}\n🎯 {strat}")
