@@ -1380,7 +1380,6 @@ with st.sidebar:
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
     
     with st.expander("🛠️ Ferramentas Manuais", expanded=False):
-        # --- BOTAO NOVO: TESTAR SNIPER AGORA ---
         if st.button("🌅 Testar Sniper Matinal Agora"):
             if IA_ATIVADA:
                 with st.spinner("Gerando Sniper Matinal (Formatado)..."):
@@ -1437,12 +1436,17 @@ with st.sidebar:
     with st.expander("📶 Consumo API", expanded=False):
         verificar_reset_diario()
         u = st.session_state['api_usage']; perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
-        st.progress(perc); st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
+        st.progress(perc)
+        # MOSTRANDO PORCENTAGEM
+        st.caption(f"Utilizado: **{u['used']}** / {u['limit']} (**{perc*100:.1f}%**)")
     
     with st.expander("🤖 Consumo IA (Gemini)", expanded=False):
         u_ia = st.session_state['gemini_usage']; u_ia['limit'] = 10000 
         perc_ia = min(u_ia['used'] / u_ia['limit'], 1.0)
-        st.progress(perc_ia); st.caption(f"Requições Hoje: **{u_ia['used']}** / {u_ia['limit']}")
+        st.progress(perc_ia)
+        # MOSTRANDO PORCENTAGEM
+        st.caption(f"Reqs Hoje: **{u_ia['used']}** / {u_ia['limit']} (**{perc_ia*100:.1f}%**)")
+        st.caption("ℹ️ Custo em $: Requer API de Billing")
         if st.button("🔓 Destravar IA Agora"):
             st.session_state['ia_bloqueada_ate'] = None; st.toast("✅ IA Destravada!")
 
@@ -1481,14 +1485,18 @@ with st.sidebar:
 
 if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
+        # --- STATUS VISUAL (PARA NÃO FICAR TELA PRETA) ---
+        status_main = st.status("🚀 Iniciando processamento...", expanded=True)
+        
+        status_main.write("📂 Carregando caches e planilhas...")
         carregar_tudo()
+        
         s_padrao = st.session_state.get('stake_padrao', 10.0)
         b_inicial = st.session_state.get('banca_inicial', 100.0)
         safe_token = st.session_state.get('TG_TOKEN', '')
         safe_chat = st.session_state.get('TG_CHAT', '')
         safe_api = st.session_state.get('API_KEY', '')
 
-        # FUNÇÕES JÁ ESTÃO DEFINIDAS ACIMA, SEM RISCO DE NAMEERROR
         verificar_automacao_bi(safe_token, safe_chat, s_padrao)
         verificar_alerta_matinal(safe_token, safe_chat, safe_api)
         
@@ -1503,6 +1511,7 @@ if st.session_state.ROBO_LIGADO:
 
         api_error = False; jogos_live = []
         try:
+            status_main.write("📡 Conectando API Sports (Live)...")
             url = "https://v3.football.api-sports.io/fixtures"
             resp = requests.get(url, headers={"x-apisports-key": safe_api}, params={"live": "all", "timezone": "America/Sao_Paulo"}, timeout=10)
             update_api_usage(resp.headers); res = resp.json()
@@ -1514,12 +1523,14 @@ if st.session_state.ROBO_LIGADO:
         except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
 
         if not api_error: 
+            status_main.write("🔎 Verificando Greens, Reds e VAR...")
             check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
             conferir_resultados_sniper(jogos_live, safe_api) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
         
         radar = []; agenda = []; candidatos_multipla = []; ids_no_radar = []
         if not api_error:
+            status_main.write("🧠 Analisando oportunidades ao vivo...")
             prox = buscar_agenda_cached(safe_api, hoje_real); agora = get_time_br()
             ft_para_salvar = []
             for p in prox:
@@ -1691,7 +1702,6 @@ if st.session_state.ROBO_LIGADO:
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
                              msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>")
-                             # Super Odd é oportunidade rara, envia mesmo se IA não aprovar explicitamente (opcional, mantive enviando)
                              enviar_telegram(safe_token, safe_chat, msg_super)
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
             
@@ -1713,13 +1723,16 @@ if st.session_state.ROBO_LIGADO:
                 except: pass
         
         # AQUI O SALVAMENTO JÁ FOI OTIMIZADO (SÓ SALVA SE HOUVE MUDANÇA VIA HASH)
+        status_main.write("💾 Sincronizando dados...")
         if st.session_state.get('precisa_salvar'):
             if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
-                st.caption("⏳ Sincronizando dados...")
                 salvar_aba("Historico", st.session_state['historico_full'])
         
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
         else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
+        
+        # Finaliza o status de processamento
+        status_main.update(label="✅ Ciclo Finalizado! Entrando em espera...", state="complete", expanded=False)
         
         hist_hj = pd.DataFrame(st.session_state['historico_sinais'])
         t, g, r, w = calcular_stats(hist_hj)
@@ -1925,25 +1938,30 @@ if st.session_state.ROBO_LIGADO:
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos (Isso consome leituras da cota).")
             else: st.warning("⚠️ Firebase não conectado.")
 
-        # --- TIMER OTIMIZADO (AQUI ESTÁ A MÁGICA PARA NÃO TRAVAR) ---
-        # Substitui o loop for antigo. Calcula o tempo, mostra texto e dorme de uma vez.
+        # --- TIMER VISUAL E LOOP NO MEIO DA TELA (PARA VOCÊ SABER QUE NÃO TRAVOU) ---
         
         placeholder_timer = st.empty()
+        display_main_timer = st.empty() # Mostra o timer GRANDE no meio da tela
         
         if 'last_run' not in st.session_state: st.session_state['last_run'] = time.time()
         tempo_passado = time.time() - st.session_state['last_run']
         tempo_restante = INTERVALO - tempo_passado
         
         if tempo_restante > 0:
-            placeholder_timer.markdown(
-                f'<div class="footer-timer">⏳ Aguardando próximo ciclo: {int(tempo_restante)}s...</div>', 
-                unsafe_allow_html=True
-            )
-            # Dorme pelo tempo exato que falta (liberando a CPU)
-            time.sleep(tempo_restante)
+            # Loop visual de segundo a segundo (Isso mantém o usuário informado)
+            for i in range(int(tempo_restante), 0, -1):
+                placeholder_timer.markdown(
+                    f'<div class="footer-timer">⏳ Próxima varredura em {i}s</div>', 
+                    unsafe_allow_html=True
+                )
+                display_main_timer.info(f"💤 Aguardando próximo ciclo em **{i}s**...")
+                time.sleep(1)
+            
+            # Quando acaba o tempo, roda de novo
+            st.session_state['last_run'] = time.time()
             st.rerun()
         else:
-            # Tempo esgotado, hora de rodar novamente!
+            # Se o tempo já passou, roda imediatamente
             st.session_state['last_run'] = time.time()
             st.rerun()
 else:
