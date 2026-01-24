@@ -5,7 +5,6 @@ import time
 import os
 import threading
 import random
-import gc 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib
 matplotlib.use('Agg')
@@ -390,15 +389,6 @@ def carregar_tudo(force=False):
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
         st.session_state['jogos_salvos_bigdata_carregados'] = True
     st.session_state['last_db_update'] = now
-    
-    # --- PROTEÇÃO CONTRA SNIPER DUPLICADO NO REINÍCIO ---
-    # Verifica se já existe um Sniper Matinal no histórico de hoje para não reenviar se o bot reiniciou
-    hoje_check = get_time_br().strftime('%Y-%m-%d')
-    if 'historico_sinais' in st.session_state:
-        for s in st.session_state['historico_sinais']:
-            if s['Estrategia'] == 'Sniper Matinal' and s['Data'] == hoje_check:
-                st.session_state['matinal_enviado'] = True
-                break
 def adicionar_historico(item):
     if 'historico_full' not in st.session_state: st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
     df_memoria = st.session_state['historico_full']
@@ -1144,6 +1134,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
         fid = int(clean_fid(s.get('FID', 0)))
         strat = s['Estrategia']
         
+        # Verifica se já processou (evita reprocessamento)
         key_green = gerar_chave_universal(fid, strat, "GREEN")
         key_red = gerar_chave_universal(fid, strat, "RED")
         if key_green in st.session_state['alertas_enviados']: s['Resultado'] = '✅ GREEN'; updates_buffer.append(s); continue
@@ -1180,13 +1171,16 @@ def conferir_resultados_sniper(jogos_live, api_key):
         
         res_final = '❌ RED'
         try:
+            # Tenta extrair placar original. Ex: "Time A x Time B (1x1)"
             placar_sinal = re.search(r'\((\d+)x(\d+)\)', s.get('Jogo', '')) 
             if not placar_sinal:
+                 # Fallback: tenta deduzir do campo Placar_Sinal se existir
                  try: p = s['Placar_Sinal'].split('x'); gols_sinal = int(p[0]) + int(p[1])
                  except: gols_sinal = 99
             else:
                 gols_sinal = int(placar_sinal.group(1)) + int(placar_sinal.group(2))
             
+            # Sniper é Over Limite: Precisa de MAIS gols que no sinal
             if tg > gols_sinal: res_final = '✅ GREEN'
             else: res_final = '❌ RED'
         except: pass
@@ -1194,6 +1188,7 @@ def conferir_resultados_sniper(jogos_live, api_key):
         s['Resultado'] = res_final
         updates.append(s)
         
+        # Filtro Anti-Spam também para Sniper
         key_sinal = gerar_chave_universal(fid, s['Estrategia'], "SINAL")
         if key_sinal in st.session_state.get('alertas_enviados', set()):
             enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], f"{res_final} <b>SNIPER FINALIZADO</b>\n⚽ {s['Jogo']}\n📉 Placar Final: {gh}x{ga}")
@@ -1215,6 +1210,7 @@ def verificar_var_rollback(jogos_live, token, chats):
             gh = jogo_api['goals']['home'] or 0; ga = jogo_api['goals']['away'] or 0
             try:
                 ph, pa = map(int, s['Placar_Sinal'].split('x'))
+                # Se o placar atual for MENOR que o do Green, houve VAR
                 if (gh + ga) <= (ph + pa):
                     assinatura_var = f"{fid}_{s['Estrategia']}_{gh}x{ga}"
                     if assinatura_var in st.session_state['var_avisado_cache']:
@@ -1241,23 +1237,20 @@ def deve_buscar_stats(tempo, gh, ga, status):
 def fetch_stats_single(fid, api_key):
     try:
         url = "https://v3.football.api-sports.io/fixtures/statistics"
-        # TIMEOUT REDUZIDO PARA 2 SEGUNDOS (Anti-Travamento)
-        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=2)
+        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
 
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
-    # REDUÇÃO: 4 Workers para estabilidade
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
+        time.sleep(0.2)
         for future in as_completed(futures):
-            try:
-                fid, stats, headers = future.result()
-                if stats:
-                    resultados[fid] = stats
-                    update_api_usage(headers)
-            except: pass
+            fid, stats, headers = future.result()
+            if stats:
+                resultados[fid] = stats
+                update_api_usage(headers)
     return resultados
 
 def enviar_analise_estrategia(token, chat_ids):
@@ -1337,28 +1330,12 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
-    hoje_check = agora.strftime('%Y-%m-%d')
-    
-    # --- TRAVA DE SEGURANÇA CONTRA DUPLICIDADE ---
-    ja_enviou_hoje = False
-    if 'historico_sinais' in st.session_state:
-        for s in st.session_state['historico_sinais']:
-            if "Sniper Matinal" in s.get('Estrategia', '') and s.get('Data') == hoje_check:
-                ja_enviou_hoje = True
-                break
-    if ja_enviou_hoje: st.session_state['matinal_enviado'] = True
-
     if 8 <= agora.hour < 11 and not st.session_state['matinal_enviado']:
         insights = gerar_insights_matinais_ia(api_key)
         if insights and "Sem jogos" not in insights:
             ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
             msg_final = f"🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n\n{insights}"
             for cid in ids: enviar_telegram(token, cid, msg_final)
-            
-            # Registra no histórico imediatamente
-            item = {"FID": f"SNIPER_{int(time.time())}", "Data": hoje_check, "Hora": agora.strftime('%H:%M'), "Liga": "-", "Jogo": "Sniper Matinal (Relatório)", "Placar_Sinal": "-", "Estrategia": "Sniper Matinal", "Resultado": "Pendente", "HomeID": "", "AwayID": "", "Odd": "", "Opiniao_IA": "Sniper"}
-            adicionar_historico(item)
-            
             st.session_state['matinal_enviado'] = True
 
 # --- 4.2 UI E LOOP DE EXECUÇÃO ---
@@ -1376,6 +1353,7 @@ with st.sidebar:
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
     
     with st.expander("🛠️ Ferramentas Manuais", expanded=False):
+        # --- BOTAO NOVO: TESTAR SNIPER AGORA ---
         if st.button("🌅 Testar Sniper Matinal Agora"):
             if IA_ATIVADA:
                 with st.spinner("Gerando Sniper Matinal (Formatado)..."):
@@ -1483,6 +1461,7 @@ if st.session_state.ROBO_LIGADO:
         safe_chat = st.session_state.get('TG_CHAT', '')
         safe_api = st.session_state.get('API_KEY', '')
 
+        # FUNÇÕES JÁ ESTÃO DEFINIDAS ACIMA, SEM RISCO DE NAMEERROR
         verificar_automacao_bi(safe_token, safe_chat, s_padrao)
         verificar_alerta_matinal(safe_token, safe_chat, safe_api)
         
@@ -1515,7 +1494,6 @@ if st.session_state.ROBO_LIGADO:
         radar = []; agenda = []; candidatos_multipla = []; ids_no_radar = []
         if not api_error:
             prox = buscar_agenda_cached(safe_api, hoje_real); agora = get_time_br()
-            
             ft_para_salvar = []
             for p in prox:
                 try:
@@ -1523,61 +1501,13 @@ if st.session_state.ROBO_LIGADO:
                         ft_para_salvar.append(p)
                 except: pass
             if ft_para_salvar:
-                lote = random.sample(ft_para_salvar, min(len(ft_para_salvar), 5)) 
+                lote = random.sample(ft_para_salvar, min(len(ft_para_salvar), 3)) 
                 stats_ft = atualizar_stats_em_paralelo(lote, safe_api)
                 for fid, s in stats_ft.items():
                     j_obj = next((x for x in lote if x['fixture']['id'] == fid), None)
                     if j_obj: salvar_bigdata(j_obj, s)
 
             STATUS_BOLA_ROLANDO = ['1H', '2H', 'HT', 'ET', 'P', 'BT']
-            
-            # =============================================================
-            # OTIMIZAÇÃO CRÍTICA: LOTE DE 5 JOGOS (SEGURANÇA MÁXIMA)
-            # =============================================================
-            jogos_para_atualizar = []
-            
-            for j in jogos_live:
-                lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
-                if lid in ids_black: continue
-                status_short = j['fixture']['status']['short']
-                if status_short not in STATUS_BOLA_ROLANDO: continue
-                
-                tempo = j['fixture']['status']['elapsed'] or 0
-                gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-                
-                t_esp = 180 
-                eh_inicio = (tempo <= 20)
-                eh_final = (tempo >= 70 and abs(gh - ga) <= 1)
-                eh_ht = (status_short == 'HT')
-                memoria = st.session_state['memoria_pressao'].get(fid, {})
-                pressao_recente = (len(memoria.get('h_t', [])) + len(memoria.get('a_t', []))) >= 4
-                
-                if eh_inicio or eh_final or eh_ht or pressao_recente: t_esp = 45 
-
-                ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
-                
-                if deve_buscar_stats(tempo, gh, ga, status_short):
-                    if (datetime.now() - ult_chk).total_seconds() > t_esp:
-                        jogos_para_atualizar.append(j)
-            
-            # --- TRAVA DE SEGURANÇA: MÁXIMO 5 JOGOS POR VEZ ---
-            # Se tiver 129 jogos, ele atualiza 5, e no próximo ciclo mais 5.
-            # Isso evita o "White Screen of Death" do Streamlit.
-            jogos_para_atualizar = jogos_para_atualizar[:5] 
-            
-            if jogos_para_atualizar:
-                msg_load = f"⚡ Atualizando {len(jogos_para_atualizar)} jogos..."
-                placeholder_root.caption(msg_load)
-                
-                try:
-                    novas_stats = atualizar_stats_em_paralelo(jogos_para_atualizar, safe_api)
-                    for fid_up, s_up in novas_stats.items():
-                        st.session_state['controle_stats'][fid_up] = datetime.now()
-                        st.session_state[f"st_{fid_up}"] = s_up
-                except Exception as e:
-                    print(f"Erro no Update em Lote: {e}")
-
-            # --- EXIBIÇÃO INSTANTÂNEA ---
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
                 if lid in ids_black: continue
@@ -1594,6 +1524,25 @@ if st.session_state.ROBO_LIGADO:
                 tempo = j['fixture']['status']['elapsed'] or 0; st_short = j['fixture']['status']['short']
                 home = j['teams']['home']['name']; away = j['teams']['away']['name']
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
+                if st_short == 'FT': continue 
+                
+                stats = []
+                ult_chk = st.session_state['controle_stats'].get(fid, datetime.min)
+                
+                t_esp = 180 
+                eh_inicio = (tempo <= 20); eh_final = (tempo >= 70 and abs(gh - ga) <= 1); eh_ht = (st_short == 'HT')
+                memoria = st.session_state['memoria_pressao'].get(fid, {})
+                pressao_recente = (len(memoria.get('h_t', [])) + len(memoria.get('a_t', []))) >= 4
+                
+                if eh_inicio or eh_final or eh_ht or pressao_recente: t_esp = 60
+
+                if deve_buscar_stats(tempo, gh, ga, st_short):
+                    if (datetime.now() - ult_chk).total_seconds() > t_esp:
+                           fid_res, s_res, h_res = fetch_stats_single(fid, safe_api)
+                           if s_res:
+                               st.session_state['controle_stats'][fid] = datetime.now()
+                               st.session_state[f"st_{fid}"] = s_res
+                               update_api_usage(h_res)
                 
                 stats = st.session_state.get(f"st_{fid}", [])
                 status_vis = "👁️" if stats else "💤"
@@ -1614,9 +1563,7 @@ if st.session_state.ROBO_LIGADO:
                             sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
                             if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
                         except: pass
-                else: 
-                    if deve_buscar_stats(tempo, gh, ga, st_short):
-                        gerenciar_erros(lid, j['league']['country'], j['league']['name'], fid)
+                else: gerenciar_erros(lid, j['league']['country'], j['league']['name'], fid)
 
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
@@ -1663,6 +1610,7 @@ if st.session_state.ROBO_LIGADO:
                         
                         if IA_ATIVADA:
                             try:
+                                time.sleep(0.3)
                                 dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
                                 time_fav_ia = s.get('favorito', '')
                                 opiniao_txt, prob_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context=extra_ctx, time_favoravel=time_fav_ia)
@@ -1705,6 +1653,7 @@ if st.session_state.ROBO_LIGADO:
                                     f"{prob_final_display}"
                                     f"{opiniao_txt}" 
                                 )
+                                # --- FILTRO: SÓ ENVIA PARA O TELEGRAM SE APROVADO ---
                                 if opiniao_db == "Aprovado":
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     st.toast(f"✅ Sinal Aprovado Enviado: {s['tag']}")
@@ -1715,6 +1664,7 @@ if st.session_state.ROBO_LIGADO:
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
                              msg_super = (f"💎 <b>OPORTUNIDADE DE VALOR!</b>\n\n⚽ {home} 🆚 {away}\n📈 <b>A Odd subiu!</b> Entrada valorizada.\n🔥 <b>Estratégia:</b> {s['tag']}\n💰 <b>Nova Odd: @{odd_atual_str}</b>")
+                             # Super Odd é oportunidade rara, envia mesmo se IA não aprovar explicitamente (opcional, mantive enviando)
                              enviar_telegram(safe_token, safe_chat, msg_super)
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
             
@@ -1946,9 +1896,6 @@ if st.session_state.ROBO_LIGADO:
                     st.dataframe(pd.DataFrame(st.session_state['cache_firebase_view']), use_container_width=True)
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos (Isso consome leituras da cota).")
             else: st.warning("⚠️ Firebase não conectado.")
-
-        # --- LIMPEZA DE MEMÓRIA CRÍTICA ---
-        gc.collect() 
 
         for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
