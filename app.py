@@ -145,153 +145,6 @@ MAPA_ODDS_TEORICAS = {
     "🔫 Lay Goleada": {"min": 1.60, "max": 2.20},
     "👴 Estratégia do Vovô": {"min": 1.05, "max": 1.25}
 }
-import streamlit as st
-import pandas as pd
-import requests
-import time
-import os
-import threading
-import random
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import plotly.express as px
-import plotly.graph_objects as go
-import io
-from datetime import datetime, timedelta
-import pytz
-from streamlit_gsheets import GSheetsConnection
-import google.generativeai as genai
-import json
-import re
-import firebase_admin
-from firebase_admin import credentials, firestore
-
-# ==============================================================================
-# 1. CONFIGURAÇÃO INICIAL E CSS
-# ==============================================================================
-st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
-placeholder_root = st.empty()
-
-st.markdown("""
-<style>
-    .stApp {background-color: #0E1117; color: white;}
-    .main .block-container { max-width: 100%; padding: 1rem 1rem 80px 1rem; }
-    .metric-box { background-color: #1A1C24; border: 1px solid #333; border-radius: 8px; padding: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); margin-bottom: 10px; }
-    .metric-title {font-size: 10px; color: #aaaaaa; text-transform: uppercase; margin-bottom: 2px;}
-    .metric-value {font-size: 20px; font-weight: bold; color: #00FF00;}
-    .metric-sub {font-size: 10px; color: #cccccc;}
-    .status-active { background-color: #1F4025; color: #00FF00; border: 1px solid #00FF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 5px; font-weight: bold; font-size: 14px;}
-    .status-error { background-color: #3B1010; color: #FF4B4B; border: 1px solid #FF4B4B; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 5px; font-weight: bold; font-size: 14px;}
-    .status-warning { background-color: #3B3B10; color: #FFFF00; border: 1px solid #FFFF00; padding: 8px; border-radius: 6px; text-align: center; margin-bottom: 5px; font-weight: bold; font-size: 14px;}
-    .stButton button { width: 100%; height: 55px !important; font-size: 18px !important; font-weight: bold !important; background-color: #262730; border: 1px solid #4e4e4e; color: white; border-radius: 8px; }
-    .stButton button:hover { border-color: #00FF00; color: #00FF00; }
-    .footer-timer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #0E1117; color: #FFD700; text-align: center; padding: 10px; font-size: 12px; border-top: 1px solid #333; z-index: 99999; box-shadow: 0 -2px 10px rgba(0,0,0,0.5); }
-    .stDataFrame { font-size: 12px; }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-</style>
-""", unsafe_allow_html=True)
-
-# ==============================================================================
-# 2. INICIALIZAÇÃO DE VARIÁVEIS
-# ==============================================================================
-if 'TG_TOKEN' not in st.session_state: st.session_state['TG_TOKEN'] = ""
-if 'TG_CHAT' not in st.session_state: st.session_state['TG_CHAT'] = ""
-if 'API_KEY' not in st.session_state: st.session_state['API_KEY'] = ""
-if 'ROBO_LIGADO' not in st.session_state: st.session_state.ROBO_LIGADO = False
-if 'last_db_update' not in st.session_state: st.session_state['last_db_update'] = 0
-if 'last_static_update' not in st.session_state: st.session_state['last_static_update'] = 0 
-if 'stake_padrao' not in st.session_state: st.session_state['stake_padrao'] = 10.0
-if 'banca_inicial' not in st.session_state: st.session_state['banca_inicial'] = 100.0
-if 'api_usage' not in st.session_state: st.session_state['api_usage'] = {'used': 0, 'limit': 75000}
-if 'data_api_usage' not in st.session_state: st.session_state['data_api_usage'] = datetime.now(pytz.utc).date()
-if 'gemini_usage' not in st.session_state: st.session_state['gemini_usage'] = {'used': 0, 'limit': 10000}
-if 'alvos_do_dia' not in st.session_state: st.session_state['alvos_do_dia'] = {}
-if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
-if 'var_avisado_cache' not in st.session_state: st.session_state['var_avisado_cache'] = set()
-if 'multiplas_enviadas' not in st.session_state: st.session_state['multiplas_enviadas'] = set()
-if 'memoria_pressao' not in st.session_state: st.session_state['memoria_pressao'] = {}
-if 'controle_stats' not in st.session_state: st.session_state['controle_stats'] = {}
-if 'jogos_salvos_bigdata' not in st.session_state: st.session_state['jogos_salvos_bigdata'] = set()
-if 'jogos_salvos_bigdata_carregados' not in st.session_state: st.session_state['jogos_salvos_bigdata_carregados'] = False
-if 'ia_bloqueada_ate' not in st.session_state: st.session_state['ia_bloqueada_ate'] = None
-if 'last_check_date' not in st.session_state: st.session_state['last_check_date'] = ""
-if 'bi_enviado' not in st.session_state: st.session_state['bi_enviado'] = False
-if 'ia_enviada' not in st.session_state: st.session_state['ia_enviada'] = False
-if 'financeiro_enviado' not in st.session_state: st.session_state['financeiro_enviado'] = False
-if 'bigdata_enviado' not in st.session_state: st.session_state['bigdata_enviado'] = False
-if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'] = False
-if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
-if 'BLOQUEAR_SALVAMENTO' not in st.session_state: st.session_state['BLOQUEAR_SALVAMENTO'] = False
-if 'total_bigdata_count' not in st.session_state: st.session_state['total_bigdata_count'] = 0
-
-db_firestore = None
-if "FIREBASE_CONFIG" in st.secrets:
-    try:
-        if not firebase_admin._apps:
-            fb_creds = json.loads(st.secrets["FIREBASE_CONFIG"])
-            cred = credentials.Certificate(fb_creds)
-            firebase_admin.initialize_app(cred)
-        db_firestore = firestore.client()
-    except Exception as e: st.error(f"Erro Firebase: {e}")
-
-IA_ATIVADA = False
-try:
-    if "GEMINI_KEY" in st.secrets:
-        genai.configure(api_key=st.secrets["GEMINI_KEY"])
-        model_ia = genai.GenerativeModel('gemini-2.0-flash') 
-        IA_ATIVADA = True
-except: IA_ATIVADA = False
-
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada', 'Opiniao_IA']
-COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
-COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
-COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
-LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
-DB_CACHE_TIME = 60
-STATIC_CACHE_TIME = 600
-
-# Mapa para referência
-MAPA_LOGICA_ESTRATEGIAS = {
-    "🟣 Porteira Aberta": "Over Gols",
-    "⚡ Gol Relâmpago": "Over HT",
-    "💰 Janela de Ouro": "Over Limite",
-    "🟢 Blitz Casa": "Over Gols",
-    "🟢 Blitz Visitante": "Over Gols",
-    "🔥 Massacre": "Over HT",
-    "⚔️ Choque Líderes": "Over HT",
-    "🥊 Briga de Rua": "Over HT",
-    "❄️ Jogo Morno": "Under HT/FT",
-    "💎 GOLDEN BET": "Over Limite",
-    "🏹 Tiroteio Elite": "Over Gols",
-    "⚡ Contra-Ataque Letal": "Back Zebra",
-    "💎 Sniper Final": "Over Limite",
-    "🦁 Back Favorito (Nettuno)": "Back Vencedor",
-    "🔫 Lay Goleada": "Over Limite",
-    "👴 Estratégia do Vovô": "Back Favorito (Segurança)"
-}
-
-MAPA_ODDS_TEORICAS = {
-    "🟣 Porteira Aberta": {"min": 1.50, "max": 1.80},
-    "⚡ Gol Relâmpago": {"min": 1.30, "max": 1.45},
-    "💰 Janela de Ouro": {"min": 1.70, "max": 2.10},
-    "🟢 Blitz Casa": {"min": 1.50, "max": 1.70},
-    "🟢 Blitz Visitante": {"min": 1.50, "max": 1.70},
-    "🔥 Massacre": {"min": 1.25, "max": 1.40},
-    "⚔️ Choque Líderes": {"min": 1.40, "max": 1.60},
-    "🥊 Briga de Rua": {"min": 1.40, "max": 1.60},
-    "❄️ Jogo Morno": {"min": 1.20, "max": 1.35},
-    "💎 GOLDEN BET": {"min": 1.80, "max": 2.40},
-    "🏹 Tiroteio Elite": {"min": 1.40, "max": 1.60},
-    "⚡ Contra-Ataque Letal": {"min": 1.60, "max": 2.20},
-    "💎 Sniper Final": {"min": 1.80, "max": 2.50},
-    "🔫 Lay Goleada": {"min": 1.60, "max": 2.20},
-    "👴 Estratégia do Vovô": {"min": 1.05, "max": 1.25}
-}
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES, DADOS E API
 # ==============================================================================
@@ -843,15 +696,15 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     escanteios = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
     dados_ricos = extrair_dados_completos(stats_raw)
     
+    # --- PROMPT REFORMULADO: FILTRO DE ELITE ("AUDITOR SÊNIOR") ---
     prompt = f"""
-    Atue como um CIENTISTA DE DADOS DE APOSTAS ESPORTIVAS (Expert em Probabilidades).
+    Atue como um AUDITOR SÊNIOR de Apostas Esportivas (Risco Zero).
     
     DADOS DO JOGO:
     {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
-    Estratégia Indicada: {estrategia}
-    Time Foco: {time_favoravel if time_favoravel else "Análise Geral"}
+    Estratégia Indicada pelo Robô: {estrategia}
     
-    ESTATÍSTICAS AO VIVO:
+    RAIO-X AO VIVO:
     Pressão (Momentum): Casa {rh} x {ra} Visitante
     Chutes na Área: Casa {chutes_area_casa} x {chutes_area_fora} Visitante
     Escanteios Totais: {escanteios}
@@ -859,22 +712,29 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     CONTEXTO HISTÓRICO:
     {extra_context}
 
-    STATS COMPLETAS:
+    STATS GERAIS:
     {dados_ricos}
 
-    SUA MISSÃO DUPLA:
-    1. VALIDAR A ENTRADA (Aprovado/Arriscado) considerando se a pressão é real ou "fogo de palha".
-    2. CALCULAR A PROBABILIDADE EXATA DE GREEN (0-100%) cruzando o histórico com o momento atual.
+    SUA MISSÃO: Validar a entrada com RIGOR EXTREMO.
+    
+    REGRA PARA 'APROVADO' (CRITÉRIO SNIPER):
+    Para aprovar, você precisa de CONFLUÊNCIA TOTAL:
+    1. A Pressão (Momentum) deve estar CLARAMENTE a favor da aposta.
+    2. As Estatísticas (Chutes na área) devem ser esmagadoras.
+    3. O Histórico não pode contrariar a lógica.
+    
+    SE HOUVER QUALQUER DÚVIDA, RISCO OU EQUILÍBRIO: Classifique como 'ARRISCADO'.
+    Não tenha medo de classificar como Arriscado. Quero 'APROVADO' apenas no 'Creme de la Creme'.
 
     FORMATO DE RESPOSTA (OBRIGATÓRIO):
-    Aprovado/Arriscado - [Motivo Curto]
-    PROB: [Número]%
+    Aprovado/Arriscado - [Motivo Curto e Direto]
+    PROB: [Número 0-100]%
     """
 
     try:
         response = model_ia.generate_content(
             prompt, 
-            generation_config=genai.types.GenerationConfig(temperature=0.2),
+            generation_config=genai.types.GenerationConfig(temperature=0.1), # Frio e Calculista
             request_options={"timeout": 10}
         )
         st.session_state['gemini_usage']['used'] += 1
@@ -903,7 +763,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
     except Exception as e: return "", "N/A"
 
-# --- FUNÇÕES AUXILIARES DE IA (RESTAURADAS) ---
+# --- FUNÇÕES AUXILIARES DE IA (RESTAURADAS E PROTEGIDAS) ---
 
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
@@ -1173,16 +1033,17 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         # --- UNDER: JOGO MORNO (Caça ao Under) ---
         if 55 <= tempo <= 75:
              if total_chutes <= 10 and (sog_h + sog_a) <= 2:
-                 if gh == ga: # Só se estiver empatado
+                 if gh == ga: 
                      linha_under = total_gols + 0.5
                      SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": f"👉 <b>FAZER:</b> Under Gols (Segurar)\n✅ Aposta: <b>Menos de {linha_under} Gols</b> (Ou Under Limite)", "stats": f"Jogo Travado ({total_chutes} chutes totais)", "rh": rh, "ra": ra, "favorito": "UNDER"})
 
-        # --- MATCH ODDS: VOVÔ (Segurança) ---
+        # --- MATCH ODDS: VOVÔ (ENDURECIDO: Só entra se adversário for NULO) ---
         if 70 <= tempo <= 80 and total_chutes < 18:
             diff = gh - ga
-            if diff == 1 and ra < 2 and posse_h >= 45: 
+            # Só entra no Back se o adversário tiver menos de 2 chutes no gol
+            if diff == 1 and ra < 2 and posse_h >= 45 and sog_a < 2: 
                  SINAIS.append({"tag": "👴 Estratégia do Vovô", "ordem": "👉 <b>FAZER:</b> Back Favorito (Segurar)\n✅ Aposta: <b>Vitória do CASA</b>", "stats": f"Jogo Controlado ({gh}x{ga})", "rh": rh, "ra": ra, "favorito": "CASA"})
-            elif diff == -1 and rh < 2 and posse_a >= 45: 
+            elif diff == -1 and rh < 2 and posse_a >= 45 and sog_h < 2: 
                  SINAIS.append({"tag": "👴 Estratégia do Vovô", "ordem": "👉 <b>FAZER:</b> Back Favorito (Segurar)\n✅ Aposta: <b>Vitória do VISITANTE</b>", "stats": f"Jogo Controlado ({gh}x{ga})", "rh": rh, "ra": ra, "favorito": "VISITANTE"})
 
         # --- OUTRAS ESTRATÉGIAS ---
@@ -1221,7 +1082,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
 # 4. TELEGRAM, RESULTADOS, RELATÓRIOS E UI (FINAL)
 # ==============================================================================
 
-# --- 4.1 DEFINIÇÃO DAS FUNÇÕES DE TELEGRAM E RELATÓRIOS ---
+# --- 4.1 DEFINIÇÃO DAS FUNÇÕES DE TELEGRAM E RELATÓRIOS (Antes do uso) ---
 
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10)
@@ -1246,21 +1107,26 @@ def processar_resultado(sinal, jogo_api, token, chats):
     
     # 1. Detecção de GOL (Bola na Rede)
     if (gh + ga) > (ph + pa):
-        # Match Odds: Só resolve no final. Ignora gol agora.
+        
+        # --- FIX CRÍTICO: Match Odds (Vovô/Back) ---
+        # O jogo só acaba no FT. Gol a favor agora não garante vitória.
+        # Ignora evento de gol para essas estratégias.
         STRATS_MATCH_ODDS = ["Vovô", "Back Favorito"]
         if any(x in strat for x in STRATS_MATCH_ODDS):
             return False
 
-        # Under/Morno: Gol é ruim (se bater a linha)
+        # --- Under/Morno (Gol é RUIM) ---
         if "Morno" in strat or "Under" in strat:
-            if (gh+ga) >= 2: # Exemplo: Over 1.5 bateu, Under perdeu
+            # Se a linha era Under X.5 e passou, é Red. 
+            # Simplificação: Se sair 2 gols no total (Over 1.5), Morno costuma quebrar.
+            if (gh+ga) >= 2:
                 sinal['Resultado'] = '❌ RED'
                 if key_red not in st.session_state['alertas_enviados']:
                     enviar_telegram(token, chats, f"❌ <b>RED | OVER 1.5 BATIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {strat}")
                     st.session_state['alertas_enviados'].add(key_red); st.session_state['precisa_salvar'] = True
                 return True
         else:
-            # Over Gols Padrão: Gol é Green imediato
+            # --- Over Gols Padrão (Gol é BOM e Encerra a Aposta) ---
             sinal['Resultado'] = '✅ GREEN'
             if key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {strat}")
@@ -1278,14 +1144,14 @@ def processar_resultado(sinal, jogo_api, token, chats):
         return True
         
     if st_short in ['FT', 'AET', 'PEN', 'ABD']:
-        # Match Odds (Vovô/Back)
+        # Match Odds (Vovô/Back) - SÓ NO FINAL
         if "Vovô" in strat or "Back" in strat:
             ph, pa = map(int, sinal['Placar_Sinal'].split('x'))
             resultado = '❌ RED'
-            if ph > pa: # Casa ganhava
-                if gh > ga: resultado = '✅ GREEN'
-            elif pa > ph: # Visitante ganhava
-                if ga > gh: resultado = '✅ GREEN'
+            if ph > pa: # Apostamos na Casa
+                if gh > ga: resultado = '✅ GREEN' # Terminou ganhando
+            elif pa > ph: # Apostamos no Visitante
+                if ga > gh: resultado = '✅ GREEN' # Terminou ganhando
             
             if resultado == '✅ GREEN':
                  if key_green not in st.session_state['alertas_enviados']:
@@ -1360,28 +1226,20 @@ def conferir_resultados_sniper(jogos_live, api_key):
         gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0; tg = gh + ga
         
         # Recupera placar original do sinal (Ex: "3x2") para saber se saiu gol
-        # Precisamos comparar TG Final > TG Sinal
+        res_final = '❌ RED'
         try:
-            placar_sinal = re.search(r'(\d+)x(\d+)', s.get('Jogo', '')).groups() # Tenta pegar do nome se salvo
+            placar_sinal = re.search(r'\((\d+)x(\d+)\)', s.get('Jogo', '')) # Tenta pegar do nome se salvo com placar
             if not placar_sinal:
-                 # Se não salvou no nome, tenta deduzir ou assume RED se igual
-                 # (Melhoria: Salvar placar original no BD futuramente)
-                 res_final = '❌ RED' # Default conservador
+                 # Fallback: Se não tem no nome, usa o Placar_Sinal da tabela
+                 try: p_sinal = s['Placar_Sinal'].split('x'); gols_sinal = int(p_sinal[0]) + int(p_sinal[1])
+                 except: gols_sinal = 99 # Erro, força Red para segurança
             else:
-                tg_sinal = int(placar_sinal[0]) + int(placar_sinal[1])
-                if tg > tg_sinal: res_final = '✅ GREEN'
-                else: res_final = '❌ RED'
-        except:
-            # Fallback simples: Se não houve gol no fim, é red.
-            # O ideal é comparar com o placar do momento do sinal. 
-            # Como o sinal sniper é "Over Limite", se saiu gol é Green.
-            res_final = '❌ RED' # Assumimos Red se a lógica falhar, para segurança.
-            # (Na prática, o usuário vê o Green se o placar mudou)
+                gols_sinal = int(placar_sinal.group(1)) + int(placar_sinal.group(2))
             
-        # AJUSTE MANUAL: Se o placar final for diferente do placar da hora do sinal (que não temos salvo explicitamente aqui, mas podemos inferir se a odd era de over limite)
-        # Vamos simplificar: Sniper é Over Limite.
-        # Se o jogo acabou e não foi processado antes, assumimos RED a menos que detectemos gol.
-        
+            if tg > gols_sinal: res_final = '✅ GREEN'
+            else: res_final = '❌ RED'
+        except: pass
+            
         s['Resultado'] = res_final
         updates.append(s)
         enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], f"{res_final} <b>SNIPER FINALIZADO</b>\n⚽ {s['Jogo']}\n📉 Placar Final: {gh}x{ga}")
@@ -1439,8 +1297,6 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
                 resultados[fid] = stats
                 update_api_usage(headers)
     return resultados
-
-# --- FUNÇÕES DE RELATÓRIO E BI (Definidas AQUI para evitar NameError) ---
 
 def enviar_analise_estrategia(token, chat_ids):
     sugestao = criar_estrategia_nova_ia()
@@ -1656,6 +1512,7 @@ if st.session_state.ROBO_LIGADO:
         safe_chat = st.session_state.get('TG_CHAT', '')
         safe_api = st.session_state.get('API_KEY', '')
 
+        # FUNÇÕES JÁ ESTÃO DEFINIDAS ACIMA
         verificar_automacao_bi(safe_token, safe_chat, s_padrao)
         verificar_alerta_matinal(safe_token, safe_chat, safe_api)
         
