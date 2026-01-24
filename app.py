@@ -1414,7 +1414,7 @@ with st.sidebar:
                     count_salvos = 0
                     for fid, stats in stats_recuperadas.items():
                         j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
-                        if j_obj: salvar_bigdata(j_obj, stats) 
+                        if j_obj: salvar_bigdata(j_obj, s)
                         count_salvos += 1
                     st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
                 else: st.warning("Nenhum jogo finalizado pendente.")
@@ -1430,7 +1430,7 @@ with st.sidebar:
 
     with st.expander("💰 Gestão de Banca", expanded=False):
         stake_padrao = st.number_input("Valor da Aposta (Stake):", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
-        banca_inicial = st.number_input("Banca Inicial:", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
+        banca_inicial = st.number_input("Banca Inicial (R$)", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
         st.session_state['stake_padrao'] = stake_padrao; st.session_state['banca_inicial'] = banca_inicial
         
     with st.expander("📶 Consumo API", expanded=False):
@@ -1444,7 +1444,7 @@ with st.sidebar:
         perc_ia = min(u_ia['used'] / u_ia['limit'], 1.0)
         st.progress(perc_ia)
         st.caption(f"Reqs Hoje: **{u_ia['used']}** / {u_ia['limit']} (**{perc_ia*100:.1f}%**)")
-        # BILLING REMOVIDO CONFORME SOLICITADO
+        # BILLING REMOVIDO
         if st.button("🔓 Destravar IA Agora"):
             st.session_state['ia_bloqueada_ate'] = None; st.toast("✅ IA Destravada!")
 
@@ -1483,12 +1483,12 @@ with st.sidebar:
 
 if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
-        # --- CONTAINER DE STATUS ATIVO (DÁ FEEDBACK REAL AO USUÁRIO) ---
+        # --- CONTAINER DE STATUS (COM FEEDBACK VISUAL PASSO A PASSO) ---
         status_main = st.status("🚀 Iniciando processamento...", expanded=True)
         
         status_main.update(label="📂 Carregando caches e planilhas...", state="running")
         carregar_tudo()
-        status_main.write("✅ Caches Carregados") # Feedback visual (V)
+        status_main.write("✅ Caches Carregados") 
         
         s_padrao = st.session_state.get('stake_padrao', 10.0)
         b_inicial = st.session_state.get('banca_inicial', 100.0)
@@ -1519,7 +1519,7 @@ if st.session_state.ROBO_LIGADO:
             jogos_live = list(dict_clean.values())
             api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
-            status_main.write("✅ Conexão API OK") # Feedback visual (V)
+            status_main.write("✅ Conexão API OK") 
         except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
 
         if not api_error: 
@@ -1527,7 +1527,7 @@ if st.session_state.ROBO_LIGADO:
             check_green_red_hibrido(jogos_live, safe_token, safe_chat, safe_api)
             conferir_resultados_sniper(jogos_live, safe_api) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
-            status_main.write("✅ Resultados Conferidos") # Feedback visual (V)
+            status_main.write("✅ Resultados Conferidos") 
         
         radar = []; agenda = []; candidatos_multipla = []; ids_no_radar = []
         if not api_error:
@@ -1723,20 +1723,20 @@ if st.session_state.ROBO_LIGADO:
                             agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
                 except: pass
         
-        status_main.write("✅ Análise Ao Vivo Concluída") # Feedback visual (V)
+        status_main.write("✅ Análise Ao Vivo Concluída") 
 
         # AQUI O SALVAMENTO JÁ FOI OTIMIZADO (SÓ SALVA SE HOUVE MUDANÇA VIA HASH)
         status_main.update(label="💾 Sincronizando dados...", state="running")
         if st.session_state.get('precisa_salvar'):
             if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
                 salvar_aba("Historico", st.session_state['historico_full'])
-        status_main.write("✅ Dados Sincronizados") # Feedback visual (V)
+        status_main.write("✅ Dados Sincronizados") 
         
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
         else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # Fecha a caixa de status para liberar espaço para o timer
-        status_main.update(label="✅ Ciclo Finalizado! Entrando em espera...", state="complete", expanded=False)
+        # Fecha a caixa de status
+        status_main.update(label="✅ Ciclo Finalizado!", state="complete", expanded=False)
         
         hist_hj = pd.DataFrame(st.session_state['historico_sinais'])
         t, g, r, w = calcular_stats(hist_hj)
@@ -1942,34 +1942,26 @@ if st.session_state.ROBO_LIGADO:
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos (Isso consome leituras da cota).")
             else: st.warning("⚠️ Firebase não conectado.")
 
-        # --- TIMER OTIMIZADO E VISUAL (FICA NA TELA) ---
+        # --- TIMER OTIMIZADO APENAS NO RODAPÉ ---
         
-        # Cria espaços para o timer no rodapé e no topo principal
         placeholder_timer = st.empty()
-        display_main_timer = st.empty() 
         
         if 'last_run' not in st.session_state: st.session_state['last_run'] = time.time()
         tempo_passado = time.time() - st.session_state['last_run']
         tempo_restante = INTERVALO - tempo_passado
         
         if tempo_restante > 0:
-            # Mostra o timer decrementando na tela (para o usuário ver que não travou)
-            # Usa um loop para atualizar o texto visualmente
+            # Mostra o timer decrementando (APENAS NO RODAPÉ, SEM CAIXA AZUL NO MEIO)
             for i in range(int(tempo_restante), 0, -1):
-                # Timer rodapé
                 placeholder_timer.markdown(
                     f'<div class="footer-timer">⏳ Próxima varredura em {i}s</div>', 
                     unsafe_allow_html=True
                 )
-                # Timer principal (Grande e Azul)
-                display_main_timer.info(f"💤 Aguardando próximo ciclo em **{i}s**...")
                 time.sleep(1)
             
-            # Quando acaba, roda de novo
             st.session_state['last_run'] = time.time()
             st.rerun()
         else:
-            # Se já passou do tempo (ex: a execução demorou mais que o ciclo), roda direto
             st.session_state['last_run'] = time.time()
             st.rerun()
 else:
