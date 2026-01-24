@@ -20,6 +20,7 @@ import json
 import re
 import firebase_admin
 from firebase_admin import credentials, firestore
+import hashlib # Adicionado para garantir integridade no salvamento otimizado
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO INICIAL E CSS
@@ -79,6 +80,8 @@ if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 if 'BLOQUEAR_SALVAMENTO' not in st.session_state: st.session_state['BLOQUEAR_SALVAMENTO'] = False
 if 'total_bigdata_count' not in st.session_state: st.session_state['total_bigdata_count'] = 0
+# Variável para o timer otimizado
+if 'last_run' not in st.session_state: st.session_state['last_run'] = time.time()
 
 db_firestore = None
 if "FIREBASE_CONFIG" in st.secrets:
@@ -231,18 +234,39 @@ def carregar_aba(nome_aba, colunas_esperadas):
         return pd.DataFrame(columns=colunas_esperadas)
 
 def salvar_aba(nome_aba, df_para_salvar):
+    """
+    MODIFICADO: Usa Hash para garantir que só salva se o conteúdo MUDOU.
+    Mantém execução SÍNCRONA (segura, sem threads) para garantir integridade.
+    """
     if nome_aba in ["Historico", "Seguras", "Obs"] and df_para_salvar.empty: return False
     if st.session_state.get('BLOQUEAR_SALVAMENTO', False):
         st.session_state['precisa_salvar'] = True 
         return False
+    
     try:
+        # 1. Cria uma assinatura única (Hash) dos dados atuais
+        data_hash = hashlib.md5(pd.util.hash_pandas_object(df_para_salvar, index=True).values).hexdigest()
+        
+        # 2. Verifica a assinatura do último salvamento
+        chave_hash = f'hash_last_save_{nome_aba}'
+        last_hash = st.session_state.get(chave_hash, '')
+
+        # 3. SE OS DADOS FOREM IDÊNTICOS, NÃO GASTA TEMPO ENVIANDO
+        # Isso elimina o delay de 5-10s quando o robô só está 'olhando' sem fazer nada
+        if data_hash == last_hash:
+            if nome_aba == "Historico": st.session_state['precisa_salvar'] = False
+            return True 
+
+        # 4. Se mudou, SALVA DE VERDADE (Bloqueante e Seguro)
         conn.update(worksheet=nome_aba, data=df_para_salvar)
+        
+        # Atualiza o hash de controle para a próxima vez
+        st.session_state[chave_hash] = data_hash
         if nome_aba == "Historico": st.session_state['precisa_salvar'] = False
         return True
     except: 
         st.session_state['precisa_salvar'] = True
         return False
-
 def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
     id_norm = normalizar_id(id_liga)
@@ -422,6 +446,8 @@ def salvar_bigdata(jogo_api, stats):
     if not db_firestore: return
     try:
         fid = str(jogo_api['fixture']['id'])
+        # PROTEÇÃO CONTRA DUPLICIDADE: Só salva se não estiver na memória.
+        # Mantém a operação SÍNCRONA para garantir que salvou.
         if fid in st.session_state['jogos_salvos_bigdata']: return 
 
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
@@ -949,8 +975,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             
             if (pressao_casa and sh_h > sh_a) or (pressao_fora and sh_a > sh_h):
                  if total_gols >= 1 or total_chutes >= 18:
-                      SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra, "favorito": "GOLS"})
-                      golden_bet_ativada = True
+                       SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra, "favorito": "GOLS"})
+                       golden_bet_ativada = True
 
         # --- GOLS: JANELA DE OURO (A "Vice") ---
         if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1:
@@ -1010,6 +1036,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
 
         return SINAIS
     except: return []
+
 # ==============================================================================
 # 4. TELEGRAM, RESULTADOS, RELATÓRIOS E UI (FINAL)
 # ==============================================================================
@@ -1121,6 +1148,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
         st.session_state['precisa_salvar'] = True
         return True
     return False
+
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
     hist = st.session_state['historico_sinais']
     pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
@@ -1262,7 +1290,6 @@ def enviar_analise_estrategia(token, chat_ids):
 def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
     msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro Líquido:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}\n\n<i>Cálculo baseado na gestão configurada.</i>"
     enviar_telegram(token, chat_ids, msg)
-
 def enviar_relatorio_bi(token, chat_ids):
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return
@@ -1685,9 +1712,10 @@ if st.session_state.ROBO_LIGADO:
                             agenda.append({"Hora": p['fixture']['date'][11:16], "Liga": l_nm, "Jogo": f"{p['teams']['home']['name']} vs {p['teams']['away']['name']}"})
                 except: pass
         
+        # AQUI O SALVAMENTO JÁ FOI OTIMIZADO (SÓ SALVA SE HOUVE MUDANÇA VIA HASH)
         if st.session_state.get('precisa_salvar'):
             if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
-                st.caption("⏳ Sincronizando dados pendentes...")
+                st.caption("⏳ Sincronizando dados...")
                 salvar_aba("Historico", st.session_state['historico_full'])
         
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
@@ -1897,10 +1925,27 @@ if st.session_state.ROBO_LIGADO:
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos (Isso consome leituras da cota).")
             else: st.warning("⚠️ Firebase não conectado.")
 
-        for i in range(INTERVALO, 0, -1):
-            st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
-            time.sleep(1)
-        st.rerun()
+        # --- TIMER OTIMIZADO (AQUI ESTÁ A MÁGICA PARA NÃO TRAVAR) ---
+        # Substitui o loop for antigo. Calcula o tempo, mostra texto e dorme de uma vez.
+        
+        placeholder_timer = st.empty()
+        
+        if 'last_run' not in st.session_state: st.session_state['last_run'] = time.time()
+        tempo_passado = time.time() - st.session_state['last_run']
+        tempo_restante = INTERVALO - tempo_passado
+        
+        if tempo_restante > 0:
+            placeholder_timer.markdown(
+                f'<div class="footer-timer">⏳ Aguardando próximo ciclo: {int(tempo_restante)}s...</div>', 
+                unsafe_allow_html=True
+            )
+            # Dorme pelo tempo exato que falta (liberando a CPU)
+            time.sleep(tempo_restante)
+            st.rerun()
+        else:
+            # Tempo esgotado, hora de rodar novamente!
+            st.session_state['last_run'] = time.time()
+            st.rerun()
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
