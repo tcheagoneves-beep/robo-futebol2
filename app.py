@@ -100,7 +100,6 @@ except: IA_ATIVADA = False
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- ATUALIZAÇÃO V4: INCLUÍDA COLUNA 'Probabilidade' ---
 COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada', 'Opiniao_IA', 'Probabilidade']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
@@ -223,7 +222,6 @@ def carregar_aba(nome_aba, colunas_esperadas):
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    # Se for a coluna Probabilidade nova, preenche com 0
                     if col == 'Probabilidade': df[col] = "0"
                     else: df[col] = "1.20" if col == 'Odd' else ""
             return df.fillna("").astype(str)
@@ -1025,7 +1023,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
         STRATS_MATCH_ODDS = ["Vovô", "Back Favorito"]
         if any(x in strat for x in STRATS_MATCH_ODDS): return False
 
-        # --- RED IMEDIATO NO UNDER (Correção) ---
+        # --- CORREÇÃO: RED IMEDIATO NO UNDER ---
         if "Morno" in strat or "Under" in strat:
             sinal['Resultado'] = '❌ RED'
             if deve_enviar_msg and key_red not in st.session_state['alertas_enviados']:
@@ -1033,7 +1031,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
                 st.session_state['alertas_enviados'].add(key_red)
             st.session_state['precisa_salvar'] = True
             return True
-        # ----------------------------------------
+        # ---------------------------------------
         else:
             sinal['Resultado'] = '✅ GREEN'
             if deve_enviar_msg and key_green not in st.session_state['alertas_enviados']:
@@ -1248,15 +1246,51 @@ def enviar_relatorio_bi(token, chat_ids):
         insight_text = analisar_bi_com_ia()
         txt_detalhe = ""
         df_closed = d_hoje[d_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-        if not df_closed.empty:
-            strats_stats = df_closed.groupby('Estrategia').apply(
-                lambda x: f"{(x['Resultado'].str.contains('GREEN').sum() / len(x) * 100):.0f}% ({x['Resultado'].str.contains('GREEN').sum()}/{len(x)})"
-            ).to_dict()
-            txt_detalhe = "\n\n📊 <b>ASSERTIVIDADE POR ESTRATÉGIA:</b>"
-            for k, v in strats_stats.items():
-                txt_detalhe += f"\n▪️ {k}: <b>{v}</b>"
         
-        msg_texto = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>\n📆 <b>HOJE:</b> {fmt_placar(d_hoje)}\n{fmt_ia_stats(d_hoje, "Hoje")}{txt_detalhe}\n\n🗓 <b>SEMANA:</b> {fmt_placar(d_7d)}\n\n🧠 <b>INSIGHT IA:</b>\n{insight_text}"""
+        # --- NOVAS MÉTRICAS SOLICITADAS ---
+        txt_melhor_liga = "N/A"
+        txt_pior_liga = "N/A"
+        txt_high_conf = "N/A"
+        
+        if not df_closed.empty:
+            # 1. Estratégias
+            strats_stats = df_closed.groupby('Estrategia').apply(lambda x: f"{(x['Resultado'].str.contains('GREEN').sum() / len(x) * 100):.0f}% ({x['Resultado'].str.contains('GREEN').sum()}/{len(x)})").to_dict()
+            txt_detalhe = "\n\n📊 <b>ASSERTIVIDADE POR ESTRATÉGIA:</b>"
+            for k, v in strats_stats.items(): txt_detalhe += f"\n▪️ {k}: <b>{v}</b>"
+            
+            # 2. Melhor e Pior Liga
+            rank_ligas = df_closed.groupby('Liga')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)).sort_values(ascending=False)
+            if not rank_ligas.empty: txt_melhor_liga = f"{rank_ligas.index[0]} ({rank_ligas.iloc[0]*100:.0f}%)"
+            
+            reds_ligas = df_closed[df_closed['Resultado'].str.contains('RED')]['Liga'].value_counts()
+            if not reds_ligas.empty: txt_pior_liga = f"{reds_ligas.index[0]} ({reds_ligas.iloc[0]} Reds)"
+            
+            # 3. Alta Confiança (Prob >= 80%)
+            if 'Probabilidade' in df_closed.columns:
+                def get_prob_num(x):
+                    try: return int(str(x).replace('%','').strip())
+                    except: return 0
+                df_high = df_closed[df_closed['Probabilidade'].apply(get_prob_num) >= 80]
+                if not df_high.empty:
+                    gh = df_high['Resultado'].str.contains('GREEN').sum()
+                    th = len(df_high)
+                    txt_high_conf = f"{gh}/{th} ({(gh/th)*100:.0f}%)"
+                else: txt_high_conf = "Sem sinais >80%"
+        # -----------------------------------
+        
+        msg_texto = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>
+📆 <b>HOJE:</b> {fmt_placar(d_hoje)}
+{fmt_ia_stats(d_hoje, "Hoje")}
+
+🏆 <b>Melhor Liga:</b> {txt_melhor_liga}
+💀 <b>Pior Liga:</b> {txt_pior_liga}
+💎 <b>Alta Confiança (>80%):</b> {txt_high_conf}
+{txt_detalhe}
+
+🗓 <b>SEMANA:</b> {fmt_placar(d_7d)}
+
+🧠 <b>INSIGHT IA:</b>
+{insight_text}"""
         enviar_telegram(token, chat_ids, msg_texto)
     except Exception as e: st.error(f"Erro ao gerar BI: {e}")
 
