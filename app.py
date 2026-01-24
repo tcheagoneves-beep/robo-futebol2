@@ -788,17 +788,53 @@ def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     if not db_firestore: return "Firebase Offline."
     try:
-        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(200).stream()
+        # 1. Busca dados reais do banco
+        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(100).stream()
         data_raw = [d.to_dict() for d in docs]
-        if len(data_raw) < 10: return "Coletando dados... (Mínimo 10 jogos no BigData)"
-        df = pd.DataFrame(data_raw)
-        historico_para_ia = ""
-        for _, row in df.head(150).iterrows():
-            historico_para_ia += f"Jogo: {row['jogo']} | Placar: {row['placar_final']} | Stats: {json.dumps(row.get('estatisticas', {}))}\n"
-        prompt = f"Analise esse Big Data de {len(df)} jogos. Encontre um padrão estatístico oculto e crie uma estratégia nova."
+        
+        if len(data_raw) < 10: return "Coletando dados... (Mínimo 10 jogos no BigData para criar padrão)"
+        
+        # 2. Formata os dados para a IA entender o cenário de jogo (Quantitativo)
+        historico_para_ia = "BASE DE DADOS (JOGOS REAIS):\n"
+        for row in data_raw[:40]: # Limita a 40 para não estourar tokens, mas com alta qualidade
+            stats = row.get('estatisticas', {})
+            # Formata apenas o que importa para trade
+            historico_para_ia += (
+                f"- Jogo: {row['jogo']} | Placar Final: {row['placar_final']} | "
+                f"Rating: {row.get('rating_home')}x{row.get('rating_away')} | "
+                f"Chutes Totais: {stats.get('chutes_total', 0)} | "
+                f"Chutes Gol: {stats.get('chutes_gol', 0)} | "
+                f"Cantos: {stats.get('escanteios_total', 0)} | "
+                f"Posse Casa: {stats.get('posse_casa', '50')}%\n"
+            )
+
+        # 3. Prompt "Quant Trader" (Sem conversa fiada)
+        prompt = f"""
+        Você é um ANALISTA QUANTITATIVO (QUANT) de Futebol. Seu trabalho é encontrar ineficiências matemáticas no mercado.
+        
+        Analise esta amostra de dados reais do meu banco de dados:
+        {historico_para_ia}
+        
+        TAREFA OBRIGATÓRIA:
+        Encontre UM padrão estatístico específico que se repete em jogos com Gols (Over) ou jogos Travados (Under).
+        
+        NÃO ME DÊ CONSELHOS GENÉRICOS. Crie uma regra lógica ("Algoritmo") baseada nos números acima.
+        
+        FORMATO DE SAÍDA (Siga rigorosamente):
+        
+        🎯 **Nome da Nova Estratégia:** [Crie um nome criativo, ex: Sniper de Escanteios]
+        📊 **Lógica Detectada:** [Explique o padrão que você viu nos dados, ex: "Jogos com Rating > 7.0 e Chutes > 10 tendem a sair gol"]
+        ⚙️ **Regra de Entrada (Setup):**
+           - Tempo: [Minuto ideal]
+           - Estatística Chave: [Ex: Mais de 8 chutes totais]
+           - Filtro de Segurança: [Ex: Odd mínima 1.50]
+        💰 **Mercado Alvo:** [Ex: Over 0.5 HT ou Back Casa]
+        """
+
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
+
     except Exception as e: return f"Erro Big Data: {e}"
 
 def otimizar_estrategias_existentes_ia():
@@ -1759,3 +1795,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
