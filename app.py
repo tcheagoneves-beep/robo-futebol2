@@ -5,6 +5,7 @@ import time
 import os
 import threading
 import random
+import gc 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib
 matplotlib.use('Agg')
@@ -1240,7 +1241,8 @@ def deve_buscar_stats(tempo, gh, ga, status):
 def fetch_stats_single(fid, api_key):
     try:
         url = "https://v3.football.api-sports.io/fixtures/statistics"
-        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
+        # TIMEOUT REDUZIDO PARA 2 SEGUNDOS (Anti-Travamento)
+        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=2)
         return fid, r.json().get('response', []), r.headers
     except: return fid, [], None
 
@@ -1335,12 +1337,15 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     hoje_check = agora.strftime('%Y-%m-%d')
-    # Checagem extra de segurança no histórico
+    
+    # --- TRAVA DE SEGURANÇA CONTRA DUPLICIDADE ---
     ja_enviou_hoje = False
     if 'historico_sinais' in st.session_state:
         for s in st.session_state['historico_sinais']:
-            if "Sniper Matinal" in s['Estrategia'] and s['Data'] == hoje_check:
-                ja_enviou_hoje = True; break
+            # Se já tem "Sniper Matinal" no histórico de hoje, bloqueia
+            if "Sniper Matinal" in s.get('Estrategia', '') and s.get('Data') == hoje_check:
+                ja_enviou_hoje = True
+                break
     if ja_enviou_hoje: st.session_state['matinal_enviado'] = True
 
     if 8 <= agora.hour < 11 and not st.session_state['matinal_enviado']:
@@ -1350,9 +1355,10 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             msg_final = f"🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n\n{insights}"
             for cid in ids: enviar_telegram(token, cid, msg_final)
             
-            # Registra no histórico para não duplicar
+            # Registra no histórico imediatamente
             item = {"FID": f"SNIPER_{int(time.time())}", "Data": hoje_check, "Hora": agora.strftime('%H:%M'), "Liga": "-", "Jogo": "Sniper Matinal (Relatório)", "Placar_Sinal": "-", "Estrategia": "Sniper Matinal", "Resultado": "Pendente", "HomeID": "", "AwayID": "", "Odd": "", "Opiniao_IA": "Sniper"}
             adicionar_historico(item)
+            
             st.session_state['matinal_enviado'] = True
 
 # --- 4.2 UI E LOOP DE EXECUÇÃO ---
@@ -1526,7 +1532,7 @@ if st.session_state.ROBO_LIGADO:
             STATUS_BOLA_ROLANDO = ['1H', '2H', 'HT', 'ET', 'P', 'BT']
             
             # =============================================================
-            # OTIMIZAÇÃO CRÍTICA: LIMITE DE LOTE (ANTI-TRAVAMENTO)
+            # OTIMIZAÇÃO CRÍTICA: LOTE DE 12 JOGOS (ANTI-TRAVAMENTO)
             # =============================================================
             jogos_para_atualizar = []
             
@@ -1554,8 +1560,10 @@ if st.session_state.ROBO_LIGADO:
                     if (datetime.now() - ult_chk).total_seconds() > t_esp:
                         jogos_para_atualizar.append(j)
             
-            # --- CORREÇÃO: Limita o lote a 25 jogos por vez para não travar ---
-            jogos_para_atualizar = jogos_para_atualizar[:25] 
+            # --- TRAVA DE SEGURANÇA: MÁXIMO 12 JOGOS POR VEZ ---
+            # Isso impede que o Streamlit trave a tela por tentar processar 129 jogos.
+            # Os jogos restantes serão processados no próximo ciclo (daqui a 60s).
+            jogos_para_atualizar = jogos_para_atualizar[:12] 
             
             if jogos_para_atualizar:
                 msg_load = f"⚡ Atualizando {len(jogos_para_atualizar)} jogos..."
@@ -1936,6 +1944,9 @@ if st.session_state.ROBO_LIGADO:
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos (Isso consome leituras da cota).")
             else: st.warning("⚠️ Firebase não conectado.")
 
+        # --- LIMPEZA DE MEMÓRIA CRÍTICA ---
+        gc.collect() 
+
         for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
             time.sleep(1)
@@ -1944,3 +1955,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")    
+                
