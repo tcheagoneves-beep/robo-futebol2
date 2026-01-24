@@ -788,17 +788,14 @@ def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     if not db_firestore: return "Firebase Offline."
     try:
-        # 1. Busca dados reais do banco
         docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(100).stream()
         data_raw = [d.to_dict() for d in docs]
         
         if len(data_raw) < 10: return "Coletando dados... (Mínimo 10 jogos no BigData para criar padrão)"
         
-        # 2. Formata os dados para a IA entender o cenário de jogo (Quantitativo)
         historico_para_ia = "BASE DE DADOS (JOGOS REAIS):\n"
-        for row in data_raw[:40]: # Limita a 40 para não estourar tokens, mas com alta qualidade
+        for row in data_raw[:40]:
             stats = row.get('estatisticas', {})
-            # Formata apenas o que importa para trade
             historico_para_ia += (
                 f"- Jogo: {row['jogo']} | Placar Final: {row['placar_final']} | "
                 f"Rating: {row.get('rating_home')}x{row.get('rating_away')} | "
@@ -808,33 +805,21 @@ def criar_estrategia_nova_ia():
                 f"Posse Casa: {stats.get('posse_casa', '50')}%\n"
             )
 
-        # 3. Prompt "Quant Trader" (Sem conversa fiada)
         prompt = f"""
-        Você é um ANALISTA QUANTITATIVO (QUANT) de Futebol. Seu trabalho é encontrar ineficiências matemáticas no mercado.
-        
+        Você é um ANALISTA QUANTITATIVO (QUANT) de Futebol.
         Analise esta amostra de dados reais do meu banco de dados:
         {historico_para_ia}
-        
-        TAREFA OBRIGATÓRIA:
-        Encontre UM padrão estatístico específico que se repete em jogos com Gols (Over) ou jogos Travados (Under).
-        
-        NÃO ME DÊ CONSELHOS GENÉRICOS. Crie uma regra lógica ("Algoritmo") baseada nos números acima.
-        
-        FORMATO DE SAÍDA (Siga rigorosamente):
-        
-        🎯 **Nome da Nova Estratégia:** [Crie um nome criativo, ex: Sniper de Escanteios]
-        📊 **Lógica Detectada:** [Explique o padrão que você viu nos dados, ex: "Jogos com Rating > 7.0 e Chutes > 10 tendem a sair gol"]
-        ⚙️ **Regra de Entrada (Setup):**
-           - Tempo: [Minuto ideal]
-           - Estatística Chave: [Ex: Mais de 8 chutes totais]
-           - Filtro de Segurança: [Ex: Odd mínima 1.50]
-        💰 **Mercado Alvo:** [Ex: Over 0.5 HT ou Back Casa]
+        TAREFA: Encontre UM padrão estatístico específico que se repete em jogos com Gols ou jogos Travados.
+        NÃO ME DÊ CONSELHOS GENÉRICOS. Crie uma regra lógica ("Algoritmo").
+        FORMATO DE SAÍDA:
+        🎯 **Nome da Nova Estratégia:**
+        📊 **Lógica Detectada:**
+        ⚙️ **Regra de Entrada (Setup):** (Tempo, Estatística Chave, Filtro)
+        💰 **Mercado Alvo:**
         """
-
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
-
     except Exception as e: return f"Erro Big Data: {e}"
 
 def otimizar_estrategias_existentes_ia():
@@ -975,6 +960,17 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if 15 <= tempo <= 25 and total_chutes >= 6 and (sog_h + sog_a) >= 3:
              SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": "Muitos Chutes", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
+        # --- NOVA ESTRATÉGIA: O CATALISADOR (Sugestão IA) ---
+        if 20 <= tempo <= 35 and gh == 0 and ga == 0:
+            total_sog_catalisador = sog_h + sog_a
+            if total_sog_catalisador >= 6:
+                SINAIS.append({
+                    "tag": "🔥 O Catalisador (IA)",
+                    "ordem": "👉 <b>FAZER:</b> Over 0.5 HT (Gol no 1º Tempo)\n✅ Aposta: <b>Mais de 0.5 Gols</b>",
+                    "stats": f"🎯 Pontaria Alta: {total_sog_catalisador} Chutes no Gol",
+                    "rh": rh, "ra": ra, "favorito": "GOLS"
+                })
+
         if tempo >= 80 and abs(gh - ga) <= 1: 
             tem_bola_parada = (ck_h + ck_a) >= 10 
             tem_pressao = (rh >= 4 and sh_h >= 14) or (ra >= 4 and sh_a >= 14)
@@ -1016,20 +1012,23 @@ def processar_resultado(sinal, jogo_api, token, chats):
     deve_enviar_msg = (key_sinal_orig in st.session_state.get('alertas_enviados', set()))
     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
     
-    # 1. Detecção de GOL
+    # 1. Detecção de GOL (Bola na Rede)
     if (gh + ga) > (ph + pa):
         STRATS_MATCH_ODDS = ["Vovô", "Back Favorito"]
         if any(x in strat for x in STRATS_MATCH_ODDS): return False
 
+        # --- CORREÇÃO APLICADA: RED IMEDIATO NO UNDER ---
         if "Morno" in strat or "Under" in strat:
-            if (gh+ga) >= 2: # Estourou Under 1.5 (exemplo simplificado)
-                sinal['Resultado'] = '❌ RED'
-                if deve_enviar_msg and key_red not in st.session_state['alertas_enviados']:
-                    enviar_telegram(token, chats, f"❌ <b>RED | OVER 1.5 BATIDO</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {strat}")
-                    st.session_state['alertas_enviados'].add(key_red)
-                st.session_state['precisa_salvar'] = True
-                return True
+            # Qualquer gol acima do sinal é RED
+            sinal['Resultado'] = '❌ RED'
+            if deve_enviar_msg and key_red not in st.session_state['alertas_enviados']:
+                enviar_telegram(token, chats, f"❌ <b>RED | GOL SAIU</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {strat}")
+                st.session_state['alertas_enviados'].add(key_red)
+            st.session_state['precisa_salvar'] = True
+            return True
+        # ------------------------------------------------
         else:
+            # Over Gols Padrão: Gol é Green imediato
             sinal['Resultado'] = '✅ GREEN'
             if deve_enviar_msg and key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {strat}")
@@ -1037,8 +1036,8 @@ def processar_resultado(sinal, jogo_api, token, chats):
             st.session_state['precisa_salvar'] = True
             return True
 
-    # 2. HT / FT
-    STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga"]
+    # 2. HT / FT (Final de período)
+    STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga", "Catalisador"] # Adicionei Catalisador aqui
     eh_ht_strat = any(x in strat for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
@@ -1193,7 +1192,7 @@ def fetch_stats_single(fid, api_key):
 
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
-    with ThreadPoolExecutor(max_workers=5) as executor: # Aumentei workers
+    with ThreadPoolExecutor(max_workers=5) as executor: 
         futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
         time.sleep(0.1)
         for future in as_completed(futures):
@@ -1275,6 +1274,7 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     if 8 <= agora.hour < 11 and not st.session_state['matinal_enviado']:
+        # LOGICA PADRAO RESTAURADA, MAS COM AVISO DE CONSOLE SE PRECISAR PAUSAR
         insights = gerar_insights_matinais_ia(api_key)
         if insights and "Sem jogos" not in insights:
             ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
@@ -1311,7 +1311,7 @@ with st.sidebar:
                     sugestao = criar_estrategia_nova_ia(); st.markdown("### 💡 Sugestão da IA"); st.success(sugestao)
             else: st.error("IA Desconectada.")
         
-        # --- BOTÃO RESTAURADO ---
+        # --- BOTÃO OTIMIZAR RESTAURADO ---
         if st.button("🔧 Otimizar Estratégias (Histórico + BigData)"):
             if IA_ATIVADA:
                 with st.spinner("🤖 Cruzando performance real com Big Data..."):
@@ -1319,7 +1319,8 @@ with st.sidebar:
                     st.markdown("### 🛠️ Plano de Melhoria")
                     st.info(sugestao_otimizacao)
             else: st.error("IA Desconectada.")
-        
+        # ---------------------------------
+
         if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
             with st.spinner("Buscando na API todos os jogos finalizados hoje..."):
                 hoje_real = get_time_br().strftime('%Y-%m-%d')
@@ -1619,8 +1620,7 @@ if st.session_state.ROBO_LIGADO:
         c1, c2, c3 = st.columns(3)
         c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
-        
-        # --- UI ATUALIZADA: Métrica de Assertividade ---
+        # --- UI TWEAK: ASSERTIVIDADE DIA ---
         cor_winrate = "#00FF00" if w >= 50 else "#FFFF00"
         c3.markdown(f'<div class="metric-box"><div class="metric-title">Assertividade Dia</div><div class="metric-value" style="color:{cor_winrate};">{w:.1f}%</div><div class="metric-sub">Winrate Diário</div></div>', unsafe_allow_html=True)
         
@@ -1795,4 +1795,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
