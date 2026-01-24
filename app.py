@@ -731,30 +731,44 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         st.session_state['gemini_usage']['used'] += 1
         texto_completo = response.text.strip().replace("**", "").replace("*", "")
         
-        prob_str = "..."
-        match_prob = re.search(r'PROB:\s*(\d+)%', texto_completo)
-        if match_prob: prob_str = f"{match_prob.group(1)}%"
-        texto_limpo = re.sub(r'PROB:\s*\d+%', '', texto_completo).strip()
+        # --- CORREÇÃO DE FORMATAÇÃO DA PROBABILIDADE ---
+        prob_str = "N/A"
+        
+        # Regex mais robusto: captura números com ponto ou virgula, com ou sem %
+        match_prob = re.search(r'PROB:\s*(\d+[\.,]?\d*)', texto_completo)
+        
+        if match_prob: 
+            try:
+                # Normaliza trocando vírgula por ponto para converter float
+                val_raw = float(match_prob.group(1).replace(',', '.'))
+                
+                # Se a IA respondeu em decimal (ex: 0.85), converte para 85
+                if val_raw <= 1.0 and val_raw > 0:
+                    val_raw = val_raw * 100
+                
+                # Garante que é um inteiro e adiciona o %
+                prob_str = f"{int(val_raw)}%"
+            except:
+                prob_str = "N/A"
+
+        # Remove a probabilidade do texto do motivo para não duplicar
+        texto_limpo = re.sub(r'PROB:\s*[\d\.,]+%?', '', texto_completo).strip()
         
         veredicto = "Arriscado" 
         if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
         
-        # --- CORREÇÃO DE FORMATAÇÃO (ESTILO IMAGEM 1 - TEXTO CURTO) ---
-        # 1. Limpa palavras chaves repetidas
+        # --- LIMPEZA DO MOTIVO ---
         motivo_sujo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
-        
-        # 2. Pega apenas a primeira frase completa (até o primeiro ponto final)
         primeira_frase = motivo_sujo.split('.')[0] + "."
         
-        # 3. Trava de segurança: Se a frase for muito longa (> 120 caracteres), corta.
         if len(primeira_frase) > 120:
             primeira_frase = primeira_frase[:117] + "..."
             
         motivo = primeira_frase.strip()
-        # -------------------------------------------------------------
 
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         return f"\n🤖 <b>ANÁLISE QUÂNTICA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>", prob_str
+    
     except Exception as e: return "", "N/A"
 
 def analisar_bi_com_ia():
@@ -1879,3 +1893,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
