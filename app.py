@@ -20,10 +20,10 @@ import json
 import re
 import firebase_admin
 from firebase_admin import credentials, firestore
-import hashlib # Adicionado para a otimização do Google Sheets
+import hashlib # Adicionado para a trava de segurança do salvamento
 
 # ==============================================================================
-# 1. CONFIGURAÇÃO INICIAL E CSS (SEU LAYOUT ORIGINAL 100% MANTIDO)
+# 1. CONFIGURAÇÃO INICIAL E CSS
 # ==============================================================================
 st.set_page_config(page_title="Neves Analytics PRO", layout="wide", page_icon="❄️")
 placeholder_root = st.empty()
@@ -80,7 +80,7 @@ if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 if 'BLOQUEAR_SALVAMENTO' not in st.session_state: st.session_state['BLOQUEAR_SALVAMENTO'] = False
 if 'total_bigdata_count' not in st.session_state: st.session_state['total_bigdata_count'] = 0
-if 'last_run' not in st.session_state: st.session_state['last_run'] = 0 # Necessário para o Timer
+if 'last_run' not in st.session_state: st.session_state['last_run'] = 0 # Variável do timer
 
 db_firestore = None
 if "FIREBASE_CONFIG" in st.secrets:
@@ -152,15 +152,18 @@ MAPA_ODDS_TEORICAS = {
 # ==============================================================================
 
 def get_time_br(): return datetime.now(pytz.timezone('America/Sao_Paulo'))
+
 def clean_fid(x): 
     try: return str(int(float(x))) 
     except: return '0'
+
 def normalizar_id(val):
     try:
         s_val = str(val).strip()
         if not s_val or s_val.lower() == 'nan': return ""
         return str(int(float(s_val)))
     except: return str(val).strip()
+
 def formatar_inteiro_visual(val):
     try:
         if str(val) == 'nan' or str(val) == '': return "0"
@@ -178,7 +181,7 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     return chave
 
 def gerar_barra_pressao(rh, ra):
-    return "" # Visual Removido
+    return "" # Visual Removido conforme original
 
 def update_api_usage(headers):
     if not headers: return
@@ -248,27 +251,26 @@ def carregar_aba(nome_aba, colunas_esperadas):
 def salvar_aba(nome_aba, df_para_salvar):
     """
     SALVAMENTO OTIMIZADO (HASH):
-    Evita que o robô trave salvando dados repetidos.
+    Evita salvar se os dados não mudaram, prevenindo lentidão.
     """
     if nome_aba in ["Historico", "Seguras", "Obs"] and df_para_salvar.empty: return False
     if st.session_state.get('BLOQUEAR_SALVAMENTO', False):
         st.session_state['precisa_salvar'] = True 
         return False
-    
     try:
-        # Cria um "DNA" (Hash) dos dados atuais
+        # Cria um Hash único dos dados atuais
         data_hash = hashlib.md5(pd.util.hash_pandas_object(df_para_salvar, index=True).values).hexdigest()
         chave_hash = f'hash_last_save_{nome_aba}'
         last_hash = st.session_state.get(chave_hash, '')
 
-        # Se o DNA for igual ao último salvo, não gasta tempo enviando
+        # Se o hash for igual, os dados não mudaram -> Não salva (ganha performance)
         if data_hash == last_hash:
             if nome_aba == "Historico": st.session_state['precisa_salvar'] = False
             return True 
 
         # Se mudou, salva de verdade
         conn.update(worksheet=nome_aba, data=df_para_salvar)
-        st.session_state[chave_hash] = data_hash
+        st.session_state[chave_hash] = data_hash # Atualiza o hash
         if nome_aba == "Historico": st.session_state['precisa_salvar'] = False
         return True
     except: 
@@ -710,7 +712,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         chutes_totais = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 0
-        if tempo > 20 and chutes_totais == 0: return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> (API Delay).", "N/A"
+        if tempo > 20 and chutes_totais == 0: return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - Dados zerados (API Delay).", "N/A"
     except: return "", "N/A"
 
     chutes_area_casa = gv(s1, 'Shots insidebox')
@@ -756,6 +758,8 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         return f"\n🤖 <b>ANÁLISE QUÂNTICA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>", prob
     except: return "", "N/A"
 
+# --- FUNÇÕES AUXILIARES DE IA (RESTAURADAS) ---
+
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -768,7 +772,7 @@ def analisar_bi_com_ia():
         df_f = df_hoje[df_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         total = len(df_f); greens = len(df_f[df_f['Resultado'].str.contains('GREEN')])
         resumo = df_f.groupby('Estrategia')['Resultado'].apply(lambda x: f"{(x.str.contains('GREEN').sum()/len(x)*100):.1f}%").to_dict()
-        prompt = f"Analise o dia ({hoje_str}): Total: {total}, Greens: {greens}. Estratégias: {json.dumps(resumo, ensure_ascii=False)}. Resumo curto."
+        prompt = f"Analise o dia ({hoje_str}): Total: {total}, Greens: {greens}. Estratégias: {json.dumps(resumo, ensure_ascii=False)}. Destaque o que funcionou e o que falhou (ótica de Trader)."
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
@@ -787,10 +791,12 @@ def analisar_financeiro_com_ia(stake, banca):
         for _, row in df_hoje.iterrows():
             res = str(row['Resultado'])
             odd_final = obter_odd_final_para_calculo(row['Odd'], row['Estrategia'])
-            if 'GREEN' in res: lucro_total += (stake * odd_final) - stake; investido += stake
-            elif 'RED' in res: lucro_total -= stake; investido += stake
+            if 'GREEN' in res:
+                lucro_total += (stake * odd_final) - stake; investido += stake
+            elif 'RED' in res:
+                lucro_total -= stake; investido += stake
         roi = (lucro_total / investido * 100) if investido > 0 else 0
-        prompt_fin = f"Gestor Financeiro. Dia: Banca Ini: {banca} | Fim: {banca+lucro_total}. Lucro: {lucro_total}. ROI: {roi}%. Dê um conselho curto."
+        prompt_fin = f"Gestor Financeiro. Dia: Banca Ini: {banca} | Fim: {banca+lucro_total}. Lucro: {lucro_total}. ROI: {roi}%. Dê um conselho sobre gestão de banca."
         response = model_ia.generate_content(prompt_fin)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
@@ -800,14 +806,14 @@ def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     if not db_firestore: return "Firebase Offline."
     try:
-        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(150).stream()
+        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(200).stream()
         data_raw = [d.to_dict() for d in docs]
         if len(data_raw) < 10: return "Coletando dados... (Mínimo 10 jogos no BigData)"
         df = pd.DataFrame(data_raw)
         historico_para_ia = ""
-        for _, row in df.head(100).iterrows():
+        for _, row in df.head(150).iterrows():
             historico_para_ia += f"Jogo: {row['jogo']} | Placar: {row['placar_final']} | Stats: {json.dumps(row.get('estatisticas', {}))}\n"
-        prompt = f"Analise esse Big Data de {len(df)} jogos. Encontre um padrão estatístico oculto e crie uma estratégia nova."
+        prompt = f"Analise esse Big Data de {len(df)} jogos. Encontre um padrão estatístico oculto (ex: posse x chutes) que resulte em gols e crie uma estratégia nova."
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
@@ -826,7 +832,7 @@ def gerar_insights_matinais_ia(api_key):
         jogos = res.get('response', [])
         LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
         jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP]
-        if not jogos_top: return "Sem jogos Elite hoje."
+        if not jogos_top: return "Sem jogos Elite para análise Sniper hoje."
         jogos_selecionados = jogos_top[:3]
         dados_para_ia = ""
         for j in jogos_selecionados:
@@ -834,11 +840,11 @@ def gerar_insights_matinais_ia(api_key):
             hid = j['teams']['home']['id']; aid = j['teams']['away']['id']
             stats_hist = analisar_tendencia_50_jogos(api_key, hid, aid)
             rating_h = buscar_rating_inteligente(api_key, hid); rating_a = buscar_rating_inteligente(api_key, aid)
-            dados_para_ia += f"JOGO: {home_nm} x {away_nm} | Over 1.5: {stats_hist['home']['over15_ft']}%/{stats_hist['away']['over15_ft']}% | Ratings: {rating_h}/{rating_a}\n"
-        prompt = f"Atue como SNIPER MATINAL. Analise: {dados_para_ia}. Dê 3 palpites com explicação."
+            dados_para_ia += f"JOGO: {home_nm} x {away_nm} (Liga: {j['league']['name']})\nDADOS HISTÓRICOS:\n- {home_nm}: Over 1.5 FT em {stats_hist['home']['over15_ft']}%.\n- {away_nm}: Over 1.5 FT em {stats_hist['away']['over15_ft']}%.\nRATINGS: {rating_h} / {rating_a}\n"
+        prompt = f"Atue como o SNIPER MATINAL (Especialista em Pré-Live). Analise: {dados_para_ia}. Dê palpites."
         resp = model_ia.generate_content(prompt); st.session_state['gemini_usage']['used'] += 1
         return resp.text
-    except: return "Erro Matinal."
+    except Exception as e: return f"Erro Matinal: {e}"
 
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
@@ -917,8 +923,10 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         return SINAIS
     except: return []
 # ==============================================================================
-# 4. TELEGRAM, RESULTADOS E LOOP PRINCIPAL
+# 4. TELEGRAM, RESULTADOS, RELATÓRIOS E UI (FINAL)
 # ==============================================================================
+
+# --- 4.1 DEFINIÇÃO DAS FUNÇÕES DE TELEGRAM E RELATÓRIOS ---
 
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10)
@@ -1002,13 +1010,31 @@ def processar_resultado(sinal, jogo_api, token, chats):
 
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
     hist = st.session_state.get('historico_sinais', [])
-    pendentes = [s for s in hist if s['Resultado'] == 'Pendente' and "Sniper" not in s['Estrategia']]
+    pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
     if not pendentes: return
-    mapa_live = {j['fixture']['id']: j for j in jogos_live}; updates = []
+    hoje_str = get_time_br().strftime('%Y-%m-%d')
+    updates_buffer = []
+    mapa_live = {j['fixture']['id']: j for j in jogos_live}
     for s in pendentes:
-        j_api = mapa_live.get(int(clean_fid(s.get('FID', 0))))
-        if j_api and processar_resultado(s, j_api, token, chats): updates.append(s)
-    if updates: atualizar_historico_ram(updates)
+        if s.get('Data') != hoje_str: continue
+        if "Sniper" in s['Estrategia']: continue
+        fid = int(clean_fid(s.get('FID', 0)))
+        strat = s['Estrategia']
+        
+        key_green = gerar_chave_universal(fid, strat, "GREEN")
+        key_red = gerar_chave_universal(fid, strat, "RED")
+        if key_green in st.session_state['alertas_enviados']: s['Resultado'] = '✅ GREEN'; updates_buffer.append(s); continue
+        if key_red in st.session_state['alertas_enviados']: s['Resultado'] = '❌ RED'; updates_buffer.append(s); continue
+        
+        jogo_encontrado = mapa_live.get(fid)
+        if not jogo_encontrado:
+             try:
+                 res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
+                 if res['response']: jogo_encontrado = res['response'][0]
+             except: pass
+        if jogo_encontrado:
+            if processar_resultado(s, jogo_encontrado, token, chats): updates_buffer.append(s)
+    if updates_buffer: atualizar_historico_ram(updates_buffer)
 
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
@@ -1018,16 +1044,23 @@ def conferir_resultados_sniper(jogos_live, api_key):
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
     for s in snipers:
         jogo = ids_live.get(str(s['FID']))
-        if jogo and jogo['fixture']['status']['short'] in ['FT', 'AET', 'PEN']:
-            gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0
+        if not jogo:
             try:
-                p = s['Placar_Sinal'].split('x'); gs = int(p[0]) + int(p[1])
-                res = '✅ GREEN' if (gh + ga) > gs else '❌ RED'
-                s['Resultado'] = res; updates.append(s)
-                if gerar_chave_universal(s['FID'], s['Estrategia'], "SINAL") in st.session_state.get('alertas_enviados', set()):
-                    enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], f"{res} SNIPER: {s['Jogo']}")
-                st.session_state['precisa_salvar'] = True
+                res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
+                if res.get('response'): jogo = res['response'][0]
             except: pass
+        if not jogo: continue
+        status = jogo['fixture']['status']['short']
+        if status not in ['FT', 'AET', 'PEN', 'INT']: continue
+        gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0
+        try:
+            p = s['Placar_Sinal'].split('x'); gs = int(p[0]) + int(p[1])
+            res = '✅ GREEN' if (gh + ga) > gs else '❌ RED'
+            s['Resultado'] = res; updates.append(s)
+            if gerar_chave_universal(s['FID'], s['Estrategia'], "SINAL") in st.session_state.get('alertas_enviados', set()):
+                enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], f"{res} SNIPER: {s['Jogo']}")
+            st.session_state['precisa_salvar'] = True
+        except: pass
     if updates: atualizar_historico_ram(updates)
 
 def verificar_var_rollback(jogos_live, token, chats):
@@ -1120,6 +1153,30 @@ def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
     msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}"
     enviar_telegram(token, chat_ids, msg)
 
+def deve_buscar_stats(tempo, gh, ga, status):
+    if status == 'HT': return True
+    if 0 <= tempo <= 95: return True
+    return False
+
+def fetch_stats_single(fid, api_key):
+    try:
+        url = "https://v3.football.api-sports.io/fixtures/statistics"
+        r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid}, timeout=3)
+        return fid, r.json().get('response', []), r.headers
+    except: return fid, [], None
+
+def atualizar_stats_em_paralelo(jogos_alvo, api_key):
+    resultados = {}
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
+        time.sleep(0.2)
+        for future in as_completed(futures):
+            fid, stats, headers = future.result()
+            if stats:
+                resultados[fid] = stats
+                update_api_usage(headers)
+    return resultados
+
 # --- 4.2 UI E LOOP DE EXECUÇÃO ---
 
 with st.sidebar:
@@ -1193,6 +1250,7 @@ with st.sidebar:
 
 if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
+        # --- LOOP INTELIGENTE ---
         if 'last_run' not in st.session_state: st.session_state['last_run'] = 0
         
         # Só processa se passou o tempo
@@ -1236,6 +1294,7 @@ if st.session_state.ROBO_LIGADO:
                     lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
                     if lid in ids_black: continue
                     status_short = j['fixture']['status']['short']
+                    # Filtra apenas o que interessa
                     if status_short not in ['1H', '2H', 'HT', 'ET']: continue
                     
                     nome_liga = j['league']['name']
