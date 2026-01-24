@@ -217,7 +217,6 @@ def carregar_aba(nome_aba, colunas_esperadas):
     elif nome_aba == "Obs": chave_memoria = 'df_vip'
     elif nome_aba == "Blacklist": chave_memoria = 'df_black'
     try:
-        # PERFORMANCE: Cache de 10 minutos
         df = conn.read(worksheet=nome_aba, ttl=600)
         if not df.empty:
             for col in colunas_esperadas:
@@ -741,9 +740,16 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
         
         # --- CORREÇÃO DE FORMATAÇÃO (ESTILO IMAGEM 1 - TEXTO CURTO) ---
+        # 1. Limpa palavras chaves repetidas
         motivo_sujo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
+        
+        # 2. Pega apenas a primeira frase completa (até o primeiro ponto final)
         primeira_frase = motivo_sujo.split('.')[0] + "."
-        if len(primeira_frase) > 120: primeira_frase = primeira_frase[:117] + "..."
+        
+        # 3. Trava de segurança: Se a frase for muito longa (> 120 caracteres), corta.
+        if len(primeira_frase) > 120:
+            primeira_frase = primeira_frase[:117] + "..."
+            
         motivo = primeira_frase.strip()
         # -------------------------------------------------------------
 
@@ -1135,9 +1141,9 @@ def conferir_resultados_sniper(jogos_live, api_key):
         
         res_final = '❌ RED'
         try:
-             try: p = s['Placar_Sinal'].split('x'); gols_sinal = int(p[0]) + int(p[1])
-             except: gols_sinal = 99
-             if tg > gols_sinal: res_final = '✅ GREEN'
+             # Correção do Sniper: Verifica se foi Over 1.5 (regra padrão)
+             # Se tiver mais que 1 gol no total, é Green.
+             if tg >= 2: res_final = '✅ GREEN'
              else: res_final = '❌ RED'
         except: pass
             
@@ -1247,25 +1253,22 @@ def enviar_relatorio_bi(token, chat_ids):
         txt_detalhe = ""
         df_closed = d_hoje[d_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         
-        # --- NOVAS MÉTRICAS SOLICITADAS ---
+        # --- NOVAS MÉTRICAS (V4) ---
         txt_melhor_liga = "N/A"
         txt_pior_liga = "N/A"
         txt_high_conf = "N/A"
         
         if not df_closed.empty:
-            # 1. Estratégias
             strats_stats = df_closed.groupby('Estrategia').apply(lambda x: f"{(x['Resultado'].str.contains('GREEN').sum() / len(x) * 100):.0f}% ({x['Resultado'].str.contains('GREEN').sum()}/{len(x)})").to_dict()
             txt_detalhe = "\n\n📊 <b>ASSERTIVIDADE POR ESTRATÉGIA:</b>"
             for k, v in strats_stats.items(): txt_detalhe += f"\n▪️ {k}: <b>{v}</b>"
             
-            # 2. Melhor e Pior Liga
             rank_ligas = df_closed.groupby('Liga')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)).sort_values(ascending=False)
             if not rank_ligas.empty: txt_melhor_liga = f"{rank_ligas.index[0]} ({rank_ligas.iloc[0]*100:.0f}%)"
             
             reds_ligas = df_closed[df_closed['Resultado'].str.contains('RED')]['Liga'].value_counts()
             if not reds_ligas.empty: txt_pior_liga = f"{reds_ligas.index[0]} ({reds_ligas.iloc[0]} Reds)"
             
-            # 3. Alta Confiança (Prob >= 80%)
             if 'Probabilidade' in df_closed.columns:
                 def get_prob_num(x):
                     try: return int(str(x).replace('%','').strip())
@@ -1276,7 +1279,6 @@ def enviar_relatorio_bi(token, chat_ids):
                     th = len(df_high)
                     txt_high_conf = f"{gh}/{th} ({(gh/th)*100:.0f}%)"
                 else: txt_high_conf = "Sem sinais >80%"
-        # -----------------------------------
         
         msg_texto = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>
 📆 <b>HOJE:</b> {fmt_placar(d_hoje)}
