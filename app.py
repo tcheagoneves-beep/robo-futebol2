@@ -367,6 +367,23 @@ def carregar_tudo(force=False):
         st.session_state['last_static_update'] = now
     if 'historico_full' not in st.session_state or force:
         df = carregar_aba("Historico", COLS_HIST)
+        
+        # --- FIX LEGADO: Padronização de Probabilidade ---
+        if not df.empty and 'Probabilidade' in df.columns:
+            def normalizar_legado_prob(val):
+                s_val = str(val).strip().replace(',', '.')
+                if '%' in s_val: return s_val 
+                if s_val == 'nan' or s_val == '': return '0%'
+                try:
+                    float_val = float(s_val)
+                    if float_val <= 1.0: float_val *= 100
+                    return f"{int(float_val)}%"
+                except:
+                    return s_val
+            
+            df['Probabilidade'] = df['Probabilidade'].apply(normalizar_legado_prob)
+        # -------------------------------------------------
+
         if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
             df = st.session_state['historico_full'] 
         if not df.empty and 'Data' in df.columns:
@@ -391,7 +408,6 @@ def carregar_tudo(force=False):
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
         st.session_state['jogos_salvos_bigdata_carregados'] = True
     st.session_state['last_db_update'] = now
-
 def adicionar_historico(item):
     if 'historico_full' not in st.session_state: st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
     df_memoria = st.session_state['historico_full']
@@ -420,6 +436,7 @@ def atualizar_historico_ram(lista_atualizada_hoje):
         return row
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
+
 def salvar_bigdata(jogo_api, stats):
     if not db_firestore: return
     try:
@@ -1009,7 +1026,6 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
 
         return SINAIS
     except: return []
-
 # ==============================================================================
 # 4. TELEGRAM, RESULTADOS, RELATÓRIOS E UI (FINAL)
 # ==============================================================================
@@ -1024,6 +1040,7 @@ def enviar_telegram(token, chat_ids, msg):
     for cid in ids:
         t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
         t.daemon = True; t.start()
+
 def processar_resultado(sinal, jogo_api, token, chats):
     gh = jogo_api['goals']['home'] or 0; ga = jogo_api['goals']['away'] or 0
     st_short = jogo_api['fixture']['status']['short']
@@ -1893,4 +1910,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
