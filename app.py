@@ -1248,7 +1248,8 @@ def fetch_stats_single(fid, api_key):
 
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    # REDUÇÃO: 4 Workers para estabilidade
+    with ThreadPoolExecutor(max_workers=4) as executor:
         futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
         for future in as_completed(futures):
             try:
@@ -1342,7 +1343,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     ja_enviou_hoje = False
     if 'historico_sinais' in st.session_state:
         for s in st.session_state['historico_sinais']:
-            # Se já tem "Sniper Matinal" no histórico de hoje, bloqueia
             if "Sniper Matinal" in s.get('Estrategia', '') and s.get('Data') == hoje_check:
                 ja_enviou_hoje = True
                 break
@@ -1532,7 +1532,7 @@ if st.session_state.ROBO_LIGADO:
             STATUS_BOLA_ROLANDO = ['1H', '2H', 'HT', 'ET', 'P', 'BT']
             
             # =============================================================
-            # OTIMIZAÇÃO CRÍTICA: LOTE DE 12 JOGOS (ANTI-TRAVAMENTO)
+            # OTIMIZAÇÃO CRÍTICA: LOTE DE 5 JOGOS (SEGURANÇA MÁXIMA)
             # =============================================================
             jogos_para_atualizar = []
             
@@ -1560,19 +1560,22 @@ if st.session_state.ROBO_LIGADO:
                     if (datetime.now() - ult_chk).total_seconds() > t_esp:
                         jogos_para_atualizar.append(j)
             
-            # --- TRAVA DE SEGURANÇA: MÁXIMO 12 JOGOS POR VEZ ---
-            # Isso impede que o Streamlit trave a tela por tentar processar 129 jogos.
-            # Os jogos restantes serão processados no próximo ciclo (daqui a 60s).
-            jogos_para_atualizar = jogos_para_atualizar[:12] 
+            # --- TRAVA DE SEGURANÇA: MÁXIMO 5 JOGOS POR VEZ ---
+            # Se tiver 129 jogos, ele atualiza 5, e no próximo ciclo mais 5.
+            # Isso evita o "White Screen of Death" do Streamlit.
+            jogos_para_atualizar = jogos_para_atualizar[:5] 
             
             if jogos_para_atualizar:
                 msg_load = f"⚡ Atualizando {len(jogos_para_atualizar)} jogos..."
-                if len(jogos_para_atualizar) > 5: placeholder_root.caption(msg_load)
+                placeholder_root.caption(msg_load)
                 
-                novas_stats = atualizar_stats_em_paralelo(jogos_para_atualizar, safe_api)
-                for fid_up, s_up in novas_stats.items():
-                    st.session_state['controle_stats'][fid_up] = datetime.now()
-                    st.session_state[f"st_{fid_up}"] = s_up
+                try:
+                    novas_stats = atualizar_stats_em_paralelo(jogos_para_atualizar, safe_api)
+                    for fid_up, s_up in novas_stats.items():
+                        st.session_state['controle_stats'][fid_up] = datetime.now()
+                        st.session_state[f"st_{fid_up}"] = s_up
+                except Exception as e:
+                    print(f"Erro no Update em Lote: {e}")
 
             # --- EXIBIÇÃO INSTANTÂNEA ---
             for j in jogos_live:
@@ -1955,4 +1958,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")    
-                
