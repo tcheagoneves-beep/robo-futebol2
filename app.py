@@ -738,8 +738,21 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         
         veredicto = "Arriscado" 
         if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
-              
-        motivo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
+        
+        # --- CORREÇÃO DE FORMATAÇÃO (ESTILO IMAGEM 1 - TEXTO CURTO) ---
+        # 1. Limpa palavras chaves repetidas
+        motivo_sujo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
+        
+        # 2. Pega apenas a primeira frase completa (até o primeiro ponto final)
+        primeira_frase = motivo_sujo.split('.')[0] + "."
+        
+        # 3. Trava de segurança: Se a frase for muito longa (> 120 caracteres), corta.
+        if len(primeira_frase) > 120:
+            primeira_frase = primeira_frase[:117] + "..."
+            
+        motivo = primeira_frase.strip()
+        # -------------------------------------------------------------
+
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         return f"\n🤖 <b>ANÁLISE QUÂNTICA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>", prob_str
     except Exception as e: return "", "N/A"
