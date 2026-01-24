@@ -389,7 +389,6 @@ def carregar_tudo(force=False):
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
         st.session_state['jogos_salvos_bigdata_carregados'] = True
     st.session_state['last_db_update'] = now
-
 def adicionar_historico(item):
     if 'historico_full' not in st.session_state: st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
     df_memoria = st.session_state['historico_full']
@@ -679,14 +678,15 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
     if not IA_ATIVADA: return "", "N/A"
     try:
+        # Extração de dados crus
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
         chutes_totais = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
-        
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 0
         
+        # Filtro básico de API morta
         if tempo > 20 and chutes_totais == 0:
             return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - Dados zerados (API Delay).", "N/A"
     except: return "", "N/A"
@@ -694,45 +694,47 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     chutes_area_casa = gv(s1, 'Shots insidebox')
     chutes_area_fora = gv(s2, 'Shots insidebox')
     escanteios = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
+    posse_casa = str(gv(s1, 'Ball Possession')).replace('%', '')
     dados_ricos = extrair_dados_completos(stats_raw)
     
-    # --- PROMPT REFORMULADO: FILTRO DE ELITE ("AUDITOR SÊNIOR" - BASEADO EM THEO/NETTUNO) ---
+    # --- NOVO PROMPT: MATEMÁTICA PURA E SEM MEDO ---
     prompt = f"""
-    Atue como um TRADER ESPORTIVO PROFISSIONAL (Mentalidade de Risco Zero).
-    
+    Atue como um ANALISTA DE DADOS ESTATÍSTICOS (Mentalidade: EV+ MATEMÁTICO).
+    Esqueça gestão de banca, esqueça medo de red. Seu único objetivo é validar se a estatística suporta a entrada.
+
     DADOS DO JOGO:
     {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
     Estratégia Indicada: {estrategia}
+    Time Favorável no Sinal: {time_favoravel}
     
-    RAIO-X DO MOMENTUM (A "SEGUNDA BOLA"):
-    Pressão Recente (Barras): Casa {rh} x {ra} Visitante
-    Chutes na Área: Casa {chutes_area_casa} x {chutes_area_fora} Visitante
-    Escanteios: {escanteios}
+    ESTATÍSTICAS EM TEMPO REAL:
+    - Pressão (Momentum): Casa {rh} x {ra} Visitante
+    - Chutes na Área (Perigo Real): Casa {chutes_area_casa} x {chutes_area_fora} Visitante
+    - Escanteios: {escanteios}
+    - Posse: Casa {posse_casa}%
     
-    CONTEXTO E STATS:
+    CONTEXTO HISTÓRICO E ODDS (Obrigatório considerar):
     {extra_context}
     {dados_ricos}
 
-    SUA MISSÃO: Filtrar a entrada.
-    
-    CRITÉRIOS DE APROVAÇÃO (RIGOR MÁXIMO):
-    1. ARAME LISO (Drako): Se o time tem posse (>60%) mas não chuta na área, REPROVE. É posse estéril.
-    2. SEGUNDA BOLA (Nettuno): Para estratégias de Gols/Blitz, o time precisa estar sufocando (Barras de pressão > 3 e sequenciais).
-    3. CAOS (Theo Borges): Se o Favorito está perdendo/empatando E amassando (muitos chutes), APROVE (Valor esperado alto).
-    
-    VEREDICTO:
-    - Se houver DÚVIDA ou JOGO MORNO: Classifique como 'Arriscado'.
-    - Se houver CONFLUÊNCIA CLARA (Stats + Momentum): Classifique como 'Aprovado'.
+    SUA ANÁLISE DEVE SER FRIA:
+    1. CRUZAMENTO DE DADOS: O time indicado na estratégia está criando chances REAIS agora (Chutes na área/Pressão)?
+    2. VALIDAÇÃO DE PADRÃO: Se o histórico (Contexto) diz que é time de Over, e o jogo está movimentado, APROVE.
+    3. IGNORAR POSSE ESTÉRIL: Posse sem chute é irrelevante. Chute na área é ouro.
 
-    FORMATO DE RESPOSTA (Obrigatório):
-    Aprovado/Arriscado - [Motivo Técnico em 1 frase curta]
+    DECISÃO BINÁRIA (Sem ficar em cima do muro):
+    - Se a probabilidade matemática do evento ocorrer for > 60% baseado nos chutes/pressão: APROVADO.
+    - Se o jogo estiver parado/morto sem chutes: ARRISCADO.
+
+    FORMATO DE RESPOSTA (Rigoroso):
+    Aprovado/Arriscado - [Análise técnica direta e curta, sem "eu acho", apenas fatos]
     PROB: [Número 0-100]%
     """
 
     try:
         response = model_ia.generate_content(
             prompt, 
-            generation_config=genai.types.GenerationConfig(temperature=0.1),
+            generation_config=genai.types.GenerationConfig(temperature=0.2), # Temperatura baixa para ser consistente
             request_options={"timeout": 10}
         )
         st.session_state['gemini_usage']['used'] += 1
@@ -745,22 +747,16 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
             
         texto_limpo = re.sub(r'PROB:\s*\d+%', '', texto_completo).strip()
         
+        # Lógica para forçar o aprovado se a IA não usar a palavra exata no começo
         veredicto = "Arriscado" 
-        if list(filter(texto_limpo.lower().startswith, ["aprovado", "[aprovado"])): veredicto = "Aprovado"
-        elif "Aprovado" in texto_limpo[:15]: veredicto = "Aprovado"
+        if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
               
-        motivo = texto_limpo
-        for div in ["-", ":", "\n"]:
-            if div in texto_limpo:
-                try: motivo = texto_limpo.split(div, 1)[1].strip(); break
-                except: pass
-        
-        motivo = motivo.replace("Aprovado", "").replace("Arriscado", "").strip()
+        motivo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
-        return f"\n🤖 <b>MENTORIA IA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>", prob_str
+        
+        return f"\n🤖 <b>ANÁLISE QUÂNTICA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>", prob_str
 
     except Exception as e: return "", "N/A"
-
 # --- FUNÇÕES AUXILIARES DE IA ---
 
 def analisar_bi_com_ia():
@@ -830,30 +826,66 @@ def gerar_insights_matinais_ia(api_key):
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
         url = "https://v3.football.api-sports.io/fixtures"
+        # Busca jogos do dia inteiro, não importa a hora
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
-        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3] # Premier, La Liga, Serie A, etc.
-        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP][:5] 
-        if not jogos_top: return "Sem jogos Elite hoje."
         
-        texto_jogos = ""
-        for j in jogos_top:
-            texto_jogos += f"- {j['teams']['home']['name']} x {j['teams']['away']['name']} (Liga: {j['league']['name']})\n"
+        # Filtra Ligas Principais para o Sniper
+        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
+        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP]
+        
+        # Pega os 3 melhores jogos para analisar profundamente
+        if not jogos_top: return "Sem jogos Elite para análise Sniper hoje."
+        jogos_selecionados = jogos_top[:3]
+        
+        dados_para_ia = ""
+        
+        for j in jogos_selecionados:
+            home_nm = j['teams']['home']['name']
+            away_nm = j['teams']['away']['name']
+            hid = j['teams']['home']['id']
+            aid = j['teams']['away']['id']
             
+            # Busca dados estatísticos (Cacheado)
+            stats_hist = analisar_tendencia_50_jogos(api_key, hid, aid)
+            rating_h = buscar_rating_inteligente(api_key, hid)
+            rating_a = buscar_rating_inteligente(api_key, aid)
+            
+            dados_para_ia += f"""
+            JOGO: {home_nm} x {away_nm} (Liga: {j['league']['name']})
+            DADOS HISTÓRICOS:
+            - {home_nm}: Over 1.5 FT em {stats_hist['home']['over15_ft']}% dos últimos jogos.
+            - {away_nm}: Over 1.5 FT em {stats_hist['away']['over15_ft']}% dos últimos jogos.
+            RATINGS (Força do Time):
+            - {home_nm}: {rating_h}
+            - {away_nm}: {rating_a}
+            ------------------------------------------
+            """
+
         prompt = f"""
-        Atue como Tipster Profissional. Analise esses jogos de hoje:
-        {texto_jogos}
+        Atue como o SNIPER MATINAL (Especialista em Pré-Live).
+        Use EXATAMENTE o formato abaixo para cada jogo. Seja direto.
         
-        SUA MISSÃO: Indique 1 ou 2 oportunidades 'Sniper' (Alta probabilidade).
-        REGRAS: 
-        1. Seja direto. Nada de "Vamos analisar".
-        2. Formato OBRIGATÓRIO: BET: [Time/Mercado] | MOTIVO: [Texto curto]
+        Analise estes dados:
+        {dados_para_ia}
+
+        FORMATO OBRIGATÓRIO DE RESPOSTA (Repita para cada jogo):
+        
+        ⚽ **[Time Casa] x [Time Fora]**
+        📊 **Histórico:** [Time Casa] com [X]% de Over 1.5 e [Time Fora] com [Y]% de Over 1.5.
+        ⭐ **Rating:** [Descreva o equilibrio baseado nos números de rating fornecidos].
+        🧠 **API Advice:** [Sua conclusão lógica: Vitória de quem ou Gols?]
+        
+        🎯 **SNIPER:** [Sua aposta final - Ex: Over 1.5 Gols]
+        
+        (Pule uma linha entre jogos)
         """
+        
         resp = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         return resp.text
-    except: return "Erro Matinal."
+    except Exception as e: return f"Erro Matinal: {e}"
 
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
@@ -917,8 +949,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             
             if (pressao_casa and sh_h > sh_a) or (pressao_fora and sh_a > sh_h):
                  if total_gols >= 1 or total_chutes >= 18:
-                     SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra, "favorito": "GOLS"})
-                     golden_bet_ativada = True
+                      SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra, "favorito": "GOLS"})
+                      golden_bet_ativada = True
 
         # --- GOLS: JANELA DE OURO (A "Vice") ---
         if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1:
@@ -1089,7 +1121,6 @@ def processar_resultado(sinal, jogo_api, token, chats):
         st.session_state['precisa_salvar'] = True
         return True
     return False
-
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
     hist = st.session_state['historico_sinais']
     pendentes = [s for s in hist if s['Resultado'] == 'Pendente']
@@ -1322,6 +1353,14 @@ with st.sidebar:
             st.cache_data.clear(); carregar_tudo(force=True); st.session_state['last_db_update'] = 0; st.toast("Cache Limpo!")
     
     with st.expander("🛠️ Ferramentas Manuais", expanded=False):
+        # --- BOTAO NOVO: TESTAR SNIPER AGORA ---
+        if st.button("🌅 Testar Sniper Matinal Agora"):
+            if IA_ATIVADA:
+                with st.spinner("Gerando Sniper Matinal (Formatado)..."):
+                    insights = gerar_insights_matinais_ia(st.session_state['API_KEY'])
+                    st.markdown(insights)
+            else: st.error("IA Offline")
+            
         if st.button("🧠 Pedir Análise do BI"):
             if IA_ATIVADA:
                 with st.spinner("🤖 O Consultor Neves está analisando seus dados..."):
@@ -1349,7 +1388,7 @@ with st.sidebar:
                     count_salvos = 0
                     for fid, stats in stats_recuperadas.items():
                         j_obj = next((x for x in ft_pendentes if str(x['fixture']['id']) == str(fid)), None)
-                        if j_obj: salvar_bigdata(j_obj, s) 
+                        if j_obj: salvar_bigdata(j_obj, stats) 
                         count_salvos += 1
                     st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
                 else: st.warning("Nenhum jogo finalizado pendente.")
@@ -1865,4 +1904,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")
+        st.info("💡 Robô em espera. Configure na lateral.")    
