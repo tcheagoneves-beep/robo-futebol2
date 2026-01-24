@@ -100,7 +100,8 @@ except: IA_ATIVADA = False
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada', 'Opiniao_IA']
+# --- ATUALIZAÇÃO V4: INCLUÍDA COLUNA 'Probabilidade' ---
+COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada', 'Opiniao_IA', 'Probabilidade']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
@@ -217,12 +218,14 @@ def carregar_aba(nome_aba, colunas_esperadas):
     elif nome_aba == "Obs": chave_memoria = 'df_vip'
     elif nome_aba == "Blacklist": chave_memoria = 'df_black'
     try:
-        # PERFORMANCE: Cache de 10 minutos para evitar chamadas excessivas
+        # PERFORMANCE: Cache de 10 minutos
         df = conn.read(worksheet=nome_aba, ttl=600)
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
-                    df[col] = "1.20" if col == 'Odd' else ""
+                    # Se for a coluna Probabilidade nova, preenche com 0
+                    if col == 'Probabilidade': df[col] = "0"
+                    else: df[col] = "1.20" if col == 'Odd' else ""
             return df.fillna("").astype(str)
         return pd.DataFrame(columns=colunas_esperadas)
     except Exception as e:
@@ -740,16 +743,9 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
         
         # --- CORREÇÃO DE FORMATAÇÃO (ESTILO IMAGEM 1 - TEXTO CURTO) ---
-        # 1. Limpa palavras chaves repetidas
         motivo_sujo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
-        
-        # 2. Pega apenas a primeira frase completa (até o primeiro ponto final)
         primeira_frase = motivo_sujo.split('.')[0] + "."
-        
-        # 3. Trava de segurança: Se a frase for muito longa (> 120 caracteres), corta.
-        if len(primeira_frase) > 120:
-            primeira_frase = primeira_frase[:117] + "..."
-            
+        if len(primeira_frase) > 120: primeira_frase = primeira_frase[:117] + "..."
         motivo = primeira_frase.strip()
         # -------------------------------------------------------------
 
@@ -1021,27 +1017,24 @@ def processar_resultado(sinal, jogo_api, token, chats):
     key_green = gerar_chave_universal(fid, strat, "GREEN")
     key_red = gerar_chave_universal(fid, strat, "RED")
     
-    # Só processa se o sinal foi realmente enviado (Anti-Spam de "Arriscados")
     deve_enviar_msg = (key_sinal_orig in st.session_state.get('alertas_enviados', set()))
     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
     
-    # 1. Detecção de GOL (Bola na Rede)
+    # 1. Detecção de GOL
     if (gh + ga) > (ph + pa):
         STRATS_MATCH_ODDS = ["Vovô", "Back Favorito"]
         if any(x in strat for x in STRATS_MATCH_ODDS): return False
 
-        # --- CORREÇÃO APLICADA: RED IMEDIATO NO UNDER ---
+        # --- RED IMEDIATO NO UNDER (Correção) ---
         if "Morno" in strat or "Under" in strat:
-            # Qualquer gol acima do sinal é RED
             sinal['Resultado'] = '❌ RED'
             if deve_enviar_msg and key_red not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"❌ <b>RED | GOL SAIU</b>\n⚽ {sinal['Jogo']}\n📉 Placar: {gh}x{ga}\n🎯 {strat}")
                 st.session_state['alertas_enviados'].add(key_red)
             st.session_state['precisa_salvar'] = True
             return True
-        # ------------------------------------------------
+        # ----------------------------------------
         else:
-            # Over Gols Padrão: Gol é Green imediato
             sinal['Resultado'] = '✅ GREEN'
             if deve_enviar_msg and key_green not in st.session_state['alertas_enviados']:
                 enviar_telegram(token, chats, f"✅ <b>GREEN CONFIRMADO!</b>\n⚽ {sinal['Jogo']}\n🏆 {sinal['Liga']}\n📈 Placar: <b>{gh}x{ga}</b>\n🎯 {strat}")
@@ -1049,8 +1042,8 @@ def processar_resultado(sinal, jogo_api, token, chats):
             st.session_state['precisa_salvar'] = True
             return True
 
-    # 2. HT / FT (Final de período)
-    STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga", "Catalisador"] # Adicionei Catalisador aqui
+    # 2. HT / FT
+    STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga", "Catalisador"]
     eh_ht_strat = any(x in strat for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
         sinal['Resultado'] = '❌ RED'
@@ -1173,7 +1166,7 @@ def verificar_var_rollback(jogos_live, token, chats):
             gh = jogo_api['goals']['home'] or 0; ga = jogo_api['goals']['away'] or 0
             try:
                 ph, pa = map(int, s['Placar_Sinal'].split('x'))
-                if (gh + ga) <= (ph + pa): # VAR: Placar voltou
+                if (gh + ga) <= (ph + pa):
                     assinatura_var = f"{fid}_{s['Estrategia']}_{gh}x{ga}"
                     if assinatura_var in st.session_state['var_avisado_cache']:
                         if s['Resultado'] != 'Pendente': s['Resultado'] = 'Pendente'; updates.append(s)
@@ -1205,7 +1198,7 @@ def fetch_stats_single(fid, api_key):
 
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
-    with ThreadPoolExecutor(max_workers=5) as executor: 
+    with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
         time.sleep(0.1)
         for future in as_completed(futures):
@@ -1253,7 +1246,6 @@ def enviar_relatorio_bi(token, chat_ids):
             return f"🤖 IA ({label_periodo}):\n👍 Aprovados: {stats_aprov}\n⚠️ Arriscados: {stats_risk}"
         
         insight_text = analisar_bi_com_ia()
-        
         txt_detalhe = ""
         df_closed = d_hoje[d_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         if not df_closed.empty:
@@ -1287,7 +1279,6 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     if 8 <= agora.hour < 11 and not st.session_state['matinal_enviado']:
-        # LOGICA PADRAO RESTAURADA, MAS COM AVISO DE CONSOLE SE PRECISAR PAUSAR
         insights = gerar_insights_matinais_ia(api_key)
         if insights and "Sem jogos" not in insights:
             ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
@@ -1332,7 +1323,6 @@ with st.sidebar:
                     st.markdown("### 🛠️ Plano de Melhoria")
                     st.info(sugestao_otimizacao)
             else: st.error("IA Desconectada.")
-        # ---------------------------------
 
         if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
             with st.spinner("Buscando na API todos os jogos finalizados hoje..."):
@@ -1577,7 +1567,24 @@ if st.session_state.ROBO_LIGADO:
                                 else: opiniao_db = "Neutro"
                             except: pass
                         
-                        item = {"FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": j['league']['name'], "Jogo": f"{home} x {away} ({placar})", "Placar_Sinal": placar, "Estrategia": s['tag'], "Resultado": "Pendente", "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db}
+                        # --- MODIFICADO V4: Adicionada Probabilidade no Item ---
+                        item = {
+                            "FID": str(fid), 
+                            "Data": get_time_br().strftime('%Y-%m-%d'), 
+                            "Hora": get_time_br().strftime('%H:%M'), 
+                            "Liga": j['league']['name'], 
+                            "Jogo": f"{home} x {away} ({placar})", 
+                            "Placar_Sinal": placar, 
+                            "Estrategia": s['tag'], 
+                            "Resultado": "Pendente", 
+                            "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", 
+                            "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "", 
+                            "Odd": odd_atual_str, 
+                            "Odd_Atualizada": "", 
+                            "Opiniao_IA": opiniao_db,
+                            "Probabilidade": prob_txt # <--- NOVO CAMPO
+                        }
+                        # --------------------------------------------------------
                         
                         if adicionar_historico(item):
                             try:
@@ -1698,7 +1705,7 @@ if st.session_state.ROBO_LIGADO:
             else: st.caption("Vazio.")
 
         with abas[4]: 
-            st.markdown("### 📊 Inteligência de Mercado")
+            st.markdown("### 📊 Inteligência de Mercado (V4 - Drill Down)")
             df_bi = st.session_state.get('historico_full', pd.DataFrame())
             if df_bi.empty: st.warning("Sem dados históricos.")
             else:
@@ -1719,24 +1726,52 @@ if st.session_state.ROBO_LIGADO:
                     else: df_show = df_bi 
                     
                     if not df_show.empty:
+                        # --- SLIDER DE FILTRO DE PROBABILIDADE (NOVO) ---
+                        if 'Probabilidade' in df_show.columns:
+                            prob_min = st.slider("🎯 Filtrar Probabilidade Mínima IA (%)", 0, 100, 0)
+                            if prob_min > 0:
+                                def limpar_prob(x):
+                                    try: return int(str(x).replace('%', ''))
+                                    except: return 0
+                                df_show = df_show[df_show['Probabilidade'].apply(limpar_prob) >= prob_min]
+                        # ------------------------------------------------
+
                         gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum(); tt = len(df_show); ww = (gr/tt*100) if tt>0 else 0
                         m1, m2, m3, m4 = st.columns(4)
                         m1.metric("Sinais", tt); m2.metric("Greens", gr); m3.metric("Reds", rd); m4.metric("Assertividade", f"{ww:.1f}%")
                         st.divider()
-                        st.markdown("### 🏆 Melhores e Piores Ligas")
+                        
+                        st.markdown("### 🏆 Melhores e Piores Ligas (Com Detalhe de Estratégia)")
                         df_finished = df_show[df_show['Resultado'].isin(['✅ GREEN', '❌ RED'])]
                         if not df_finished.empty:
                             stats_ligas = df_finished.groupby('Liga')['Resultado'].apply(lambda x: pd.Series({'Winrate': (x.str.contains('GREEN').sum() / len(x) * 100), 'Total': len(x), 'Reds': x.str.contains('RED').sum(), 'Greens': x.str.contains('GREEN').sum()})).unstack()
                             stats_ligas = stats_ligas[stats_ligas['Total'] >= 2]
+                            
+                            # --- FUNÇÃO DRILL-DOWN ---
+                            def get_top_strat(liga):
+                                d_l = df_finished[df_finished['Liga'] == liga]
+                                if d_l.empty: return "-"
+                                s = d_l.groupby('Estrategia')['Resultado'].apply(lambda x: x.str.contains('GREEN').sum()/len(x)).sort_values(ascending=False)
+                                return f"{s.index[0]} ({s.iloc[0]*100:.0f}%)"
+                            
+                            def get_worst_strat(liga):
+                                d_l = df_finished[(df_finished['Liga'] == liga) & (df_finished['Resultado'].str.contains('RED'))]
+                                if d_l.empty: return "Nenhuma"
+                                s = d_l['Estrategia'].value_counts()
+                                return f"{s.index[0]} ({s.iloc[0]} Reds)"
+                            # -------------------------
+
                             col_top, col_worst = st.columns(2)
                             with col_top:
-                                st.caption("🌟 Top Ligas")
+                                st.caption("🌟 Top Ligas (Mais Lucrativas)")
                                 top_ligas = stats_ligas.sort_values(by=['Winrate', 'Total'], ascending=[False, False]).head(10)
-                                st.dataframe(top_ligas[['Winrate', 'Total', 'Greens']].style.format({'Winrate': '{:.2f}%', 'Total': '{:.0f}', 'Greens': '{:.0f}'}), use_container_width=True)
+                                top_ligas['Top Estratégia'] = top_ligas.index.map(get_top_strat)
+                                st.dataframe(top_ligas[['Winrate', 'Total', 'Top Estratégia']].style.format({'Winrate': '{:.0f}%', 'Total': '{:.0f}'}), use_container_width=True)
                             with col_worst:
-                                st.caption("💀 Ligas Críticas")
+                                st.caption("💀 Ligas Críticas (Mais Reds)")
                                 worst_ligas = stats_ligas.sort_values(by=['Reds'], ascending=False).head(10)
-                                st.dataframe(worst_ligas[['Winrate', 'Total', 'Reds']].style.format({'Winrate': '{:.2f}%', 'Total': '{:.0f}', 'Reds': '{:.0f}'}), use_container_width=True)
+                                worst_ligas['Pior Estratégia'] = worst_ligas.index.map(get_worst_strat)
+                                st.dataframe(worst_ligas[['Reds', 'Total', 'Pior Estratégia']].style.format({'Reds': '{:.0f}', 'Total': '{:.0f}'}), use_container_width=True)
                         st.divider()
                         st.markdown("### 🧠 Auditoria da IA")
                         if 'Opiniao_IA' in df_show.columns:
