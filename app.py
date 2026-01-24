@@ -389,6 +389,15 @@ def carregar_tudo(force=False):
     if 'jogos_salvos_bigdata_carregados' not in st.session_state or not st.session_state['jogos_salvos_bigdata_carregados'] or force:
         st.session_state['jogos_salvos_bigdata_carregados'] = True
     st.session_state['last_db_update'] = now
+    
+    # --- PROTEÇÃO CONTRA SNIPER DUPLICADO NO REINÍCIO ---
+    # Verifica se já existe um Sniper Matinal no histórico de hoje para não reenviar se o bot reiniciou
+    hoje_check = get_time_br().strftime('%Y-%m-%d')
+    if 'historico_sinais' in st.session_state:
+        for s in st.session_state['historico_sinais']:
+            if s['Estrategia'] == 'Sniper Matinal' and s['Data'] == hoje_check:
+                st.session_state['matinal_enviado'] = True
+                break
 def adicionar_historico(item):
     if 'historico_full' not in st.session_state: st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
     df_memoria = st.session_state['historico_full']
@@ -1237,7 +1246,6 @@ def fetch_stats_single(fid, api_key):
 
 def atualizar_stats_em_paralelo(jogos_alvo, api_key):
     resultados = {}
-    # --- OTIMIZAÇÃO: 10 WORKERS PARA ACELERAR O LIVE ---
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = {executor.submit(fetch_stats_single, j['fixture']['id'], api_key): j for j in jogos_alvo}
         for future in as_completed(futures):
@@ -1326,12 +1334,25 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
+    hoje_check = agora.strftime('%Y-%m-%d')
+    # Checagem extra de segurança no histórico
+    ja_enviou_hoje = False
+    if 'historico_sinais' in st.session_state:
+        for s in st.session_state['historico_sinais']:
+            if "Sniper Matinal" in s['Estrategia'] and s['Data'] == hoje_check:
+                ja_enviou_hoje = True; break
+    if ja_enviou_hoje: st.session_state['matinal_enviado'] = True
+
     if 8 <= agora.hour < 11 and not st.session_state['matinal_enviado']:
         insights = gerar_insights_matinais_ia(api_key)
         if insights and "Sem jogos" not in insights:
             ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
             msg_final = f"🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n\n{insights}"
             for cid in ids: enviar_telegram(token, cid, msg_final)
+            
+            # Registra no histórico para não duplicar
+            item = {"FID": f"SNIPER_{int(time.time())}", "Data": hoje_check, "Hora": agora.strftime('%H:%M'), "Liga": "-", "Jogo": "Sniper Matinal (Relatório)", "Placar_Sinal": "-", "Estrategia": "Sniper Matinal", "Resultado": "Pendente", "HomeID": "", "AwayID": "", "Odd": "", "Opiniao_IA": "Sniper"}
+            adicionar_historico(item)
             st.session_state['matinal_enviado'] = True
 
 # --- 4.2 UI E LOOP DE EXECUÇÃO ---
@@ -1504,7 +1525,9 @@ if st.session_state.ROBO_LIGADO:
 
             STATUS_BOLA_ROLANDO = ['1H', '2H', 'HT', 'ET', 'P', 'BT']
             
-            # --- OTIMIZAÇÃO: PASSO 1 (IDENTIFICAR E ATUALIZAR EM LOTE) ---
+            # =============================================================
+            # OTIMIZAÇÃO CRÍTICA: LIMITE DE LOTE (ANTI-TRAVAMENTO)
+            # =============================================================
             jogos_para_atualizar = []
             
             for j in jogos_live:
@@ -1531,6 +1554,9 @@ if st.session_state.ROBO_LIGADO:
                     if (datetime.now() - ult_chk).total_seconds() > t_esp:
                         jogos_para_atualizar.append(j)
             
+            # --- CORREÇÃO: Limita o lote a 25 jogos por vez para não travar ---
+            jogos_para_atualizar = jogos_para_atualizar[:25] 
+            
             if jogos_para_atualizar:
                 msg_load = f"⚡ Atualizando {len(jogos_para_atualizar)} jogos..."
                 if len(jogos_para_atualizar) > 5: placeholder_root.caption(msg_load)
@@ -1540,7 +1566,7 @@ if st.session_state.ROBO_LIGADO:
                     st.session_state['controle_stats'][fid_up] = datetime.now()
                     st.session_state[f"st_{fid_up}"] = s_up
 
-            # --- OTIMIZAÇÃO: PASSO 2 (EXIBIÇÃO INSTANTÂNEA) ---
+            # --- EXIBIÇÃO INSTANTÂNEA ---
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
                 if lid in ids_black: continue
