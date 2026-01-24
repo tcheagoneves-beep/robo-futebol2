@@ -20,7 +20,7 @@ import json
 import re
 import firebase_admin
 from firebase_admin import credentials, firestore
-import hashlib # Adicionado para garantir integridade no salvamento otimizado
+import hashlib 
 
 # ==============================================================================
 # 1. CONFIGURAÇÃO INICIAL E CSS
@@ -80,7 +80,6 @@ if 'matinal_enviado' not in st.session_state: st.session_state['matinal_enviado'
 if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] = False
 if 'BLOQUEAR_SALVAMENTO' not in st.session_state: st.session_state['BLOQUEAR_SALVAMENTO'] = False
 if 'total_bigdata_count' not in st.session_state: st.session_state['total_bigdata_count'] = 0
-# Variável para o timer otimizado
 if 'last_run' not in st.session_state: st.session_state['last_run'] = time.time()
 
 db_firestore = None
@@ -179,7 +178,7 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     return chave
 
 def gerar_barra_pressao(rh, ra):
-    return "" # Visual Removido
+    return "" 
 
 def update_api_usage(headers):
     if not headers: return
@@ -234,33 +233,24 @@ def carregar_aba(nome_aba, colunas_esperadas):
         return pd.DataFrame(columns=colunas_esperadas)
 
 def salvar_aba(nome_aba, df_para_salvar):
-    """
-    MODIFICADO: Usa Hash para garantir que só salva se o conteúdo MUDOU.
-    Mantém execução SÍNCRONA (segura, sem threads) para garantir integridade.
-    """
     if nome_aba in ["Historico", "Seguras", "Obs"] and df_para_salvar.empty: return False
     if st.session_state.get('BLOQUEAR_SALVAMENTO', False):
         st.session_state['precisa_salvar'] = True 
         return False
     
     try:
-        # 1. Cria uma assinatura única (Hash) dos dados atuais
+        # SALVAMENTO INTELIGENTE COM HASH
         data_hash = hashlib.md5(pd.util.hash_pandas_object(df_para_salvar, index=True).values).hexdigest()
-        
-        # 2. Verifica a assinatura do último salvamento
         chave_hash = f'hash_last_save_{nome_aba}'
         last_hash = st.session_state.get(chave_hash, '')
 
-        # 3. SE OS DADOS FOREM IDÊNTICOS, NÃO GASTA TEMPO ENVIANDO
-        # Isso elimina o delay de 5-10s quando o robô só está 'olhando' sem fazer nada
+        # Se dados iguais, não envia
         if data_hash == last_hash:
             if nome_aba == "Historico": st.session_state['precisa_salvar'] = False
             return True 
 
-        # 4. Se mudou, SALVA DE VERDADE (Bloqueante e Seguro)
+        # Se mudou, salva síncrono
         conn.update(worksheet=nome_aba, data=df_para_salvar)
-        
-        # Atualiza o hash de controle para a próxima vez
         st.session_state[chave_hash] = data_hash
         if nome_aba == "Historico": st.session_state['precisa_salvar'] = False
         return True
@@ -446,8 +436,6 @@ def salvar_bigdata(jogo_api, stats):
     if not db_firestore: return
     try:
         fid = str(jogo_api['fixture']['id'])
-        # PROTEÇÃO CONTRA DUPLICIDADE: Só salva se não estiver na memória.
-        # Mantém a operação SÍNCRONA para garantir que salvou.
         if fid in st.session_state['jogos_salvos_bigdata']: return 
 
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
@@ -702,6 +690,10 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
 # ==============================================================================
 
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
+    """
+    CORREÇÃO LÓGICA APLICADA: 
+    Verifica se a estratégia é UNDER (Morno) e inverte o objetivo da análise.
+    """
     if not IA_ATIVADA: return "", "N/A"
     try:
         # Extração de dados crus
@@ -723,44 +715,60 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     posse_casa = str(gv(s1, 'Ball Possession')).replace('%', '')
     dados_ricos = extrair_dados_completos(stats_raw)
     
-    # --- NOVO PROMPT: MATEMÁTICA PURA E SEM MEDO ---
-    prompt = f"""
-    Atue como um ANALISTA DE DADOS ESTATÍSTICOS (Mentalidade: EV+ MATEMÁTICO).
-    Esqueça gestão de banca, esqueça medo de red. Seu único objetivo é validar se a estatística suporta a entrada.
+    # --- LÓGICA CONDICIONAL: UNDER vs OVER ---
+    eh_under = "Morno" in estrategia or "Under" in estrategia
+    
+    objetivo = "O OBJETIVO É QUE NÃO SAIA GOL (UNDER)." if eh_under else "O OBJETIVO É QUE SAIA GOL (OVER)."
+    
+    criterio_aprovacao = ""
+    if eh_under:
+        criterio_aprovacao = """
+        CRITÉRIO PARA UNDER (JOGO MORNO):
+        - APROVADO se: Jogo travado, poucos chutes na área, ataques inofensivos, histórico de Under.
+        - ARRISCADO se: Jogo aberto, lá e cá, pressão forte ou histórico de muitos gols.
+        """
+    else:
+        criterio_aprovacao = """
+        CRITÉRIO PARA OVER (GOLS):
+        - APROVADO se: Pressão forte, chutes na área, goleiro trabalhando, histórico de Over.
+        - ARRISCADO se: Jogo lento, posse de bola inútil no meio campo, sem finalizações.
+        """
 
+    # --- PROMPT ADAPTATIVO ---
+    prompt = f"""
+    Atue como um TRADER ESPORTIVO SÊNIOR (Mentalidade: EV+ MATEMÁTICO).
+    Analise friamente os dados para validar a entrada.
+    
+    ESTRATÉGIA: {estrategia}
+    ⚠️ {objetivo}
+    
     DADOS DO JOGO:
     {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
-    Estratégia Indicada: {estrategia}
-    Time Favorável no Sinal: {time_favoravel}
     
-    ESTATÍSTICAS EM TEMPO REAL:
+    ESTATÍSTICAS AO VIVO:
     - Pressão (Momentum): Casa {rh} x {ra} Visitante
     - Chutes na Área (Perigo Real): Casa {chutes_area_casa} x {chutes_area_fora} Visitante
     - Escanteios: {escanteios}
     - Posse: Casa {posse_casa}%
     
-    CONTEXTO HISTÓRICO E ODDS (Obrigatório considerar):
+    CONTEXTO:
     {extra_context}
     {dados_ricos}
 
-    SUA ANÁLISE DEVE SER FRIA:
-    1. CRUZAMENTO DE DADOS: O time indicado na estratégia está criando chances REAIS agora (Chutes na área/Pressão)?
-    2. VALIDAÇÃO DE PADRÃO: Se o histórico (Contexto) diz que é time de Over, e o jogo está movimentado, APROVE.
-    3. IGNORAR POSSE ESTÉRIL: Posse sem chute é irrelevante. Chute na área é ouro.
+    {criterio_aprovacao}
 
-    DECISÃO BINÁRIA (Sem ficar em cima do muro):
-    - Se a probabilidade matemática do evento ocorrer for > 60% baseado nos chutes/pressão: APROVADO.
-    - Se o jogo estiver parado/morto sem chutes: ARRISCADO.
-
-    FORMATO DE RESPOSTA (Rigoroso):
-    Aprovado/Arriscado - [Análise técnica direta e curta, sem "eu acho", apenas fatos]
-    PROB: [Número 0-100]%
+    DECISÃO BINÁRIA (Seja direto):
+    - Baseado APENAS nos dados acima, a entrada tem valor esperado positivo?
+    
+    FORMATO DE RESPOSTA:
+    Aprovado/Arriscado - [Explicação curta de 1 linha focada no objetivo da aposta]
+    PROB: [0-100]%
     """
 
     try:
         response = model_ia.generate_content(
             prompt, 
-            generation_config=genai.types.GenerationConfig(temperature=0.2), # Temperatura baixa para ser consistente
+            generation_config=genai.types.GenerationConfig(temperature=0.2),
             request_options={"timeout": 10}
         )
         st.session_state['gemini_usage']['used'] += 1
@@ -773,7 +781,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
             
         texto_limpo = re.sub(r'PROB:\s*\d+%', '', texto_completo).strip()
         
-        # Lógica para forçar o aprovado se a IA não usar a palavra exata no começo
         veredicto = "Arriscado" 
         if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
               
@@ -1430,7 +1437,7 @@ with st.sidebar:
 
     with st.expander("💰 Gestão de Banca", expanded=False):
         stake_padrao = st.number_input("Valor da Aposta (Stake):", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
-        banca_inicial = st.number_input("Banca Inicial (R$)", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
+        banca_inicial = st.number_input("Banca Inicial:", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
         st.session_state['stake_padrao'] = stake_padrao; st.session_state['banca_inicial'] = banca_inicial
         
     with st.expander("📶 Consumo API", expanded=False):
@@ -1444,7 +1451,6 @@ with st.sidebar:
         perc_ia = min(u_ia['used'] / u_ia['limit'], 1.0)
         st.progress(perc_ia)
         st.caption(f"Reqs Hoje: **{u_ia['used']}** / {u_ia['limit']} (**{perc_ia*100:.1f}%**)")
-        # BILLING REMOVIDO
         if st.button("🔓 Destravar IA Agora"):
             st.session_state['ia_bloqueada_ate'] = None; st.toast("✅ IA Destravada!")
 
@@ -1483,7 +1489,6 @@ with st.sidebar:
 
 if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
-        # --- CONTAINER DE STATUS (COM FEEDBACK VISUAL PASSO A PASSO) ---
         status_main = st.status("🚀 Iniciando processamento...", expanded=True)
         
         status_main.update(label="📂 Carregando caches e planilhas...", state="running")
@@ -1692,7 +1697,6 @@ if st.session_state.ROBO_LIGADO:
                                     f"{prob_final_display}"
                                     f"{opiniao_txt}" 
                                 )
-                                # --- FILTRO: SÓ ENVIA PARA O TELEGRAM SE APROVADO ---
                                 if opiniao_db == "Aprovado":
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     st.toast(f"✅ Sinal Aprovado Enviado: {s['tag']}")
@@ -1725,7 +1729,6 @@ if st.session_state.ROBO_LIGADO:
         
         status_main.write("✅ Análise Ao Vivo Concluída") 
 
-        # AQUI O SALVAMENTO JÁ FOI OTIMIZADO (SÓ SALVA SE HOUVE MUDANÇA VIA HASH)
         status_main.update(label="💾 Sincronizando dados...", state="running")
         if st.session_state.get('precisa_salvar'):
             if 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
@@ -1735,7 +1738,6 @@ if st.session_state.ROBO_LIGADO:
         if api_error: st.markdown('<div class="status-error">🚨 API LIMITADA - AGUARDE</div>', unsafe_allow_html=True)
         else: st.markdown('<div class="status-active">🟢 MONITORAMENTO ATIVO</div>', unsafe_allow_html=True)
         
-        # Fecha a caixa de status
         status_main.update(label="✅ Ciclo Finalizado!", state="complete", expanded=False)
         
         hist_hj = pd.DataFrame(st.session_state['historico_sinais'])
@@ -1942,23 +1944,19 @@ if st.session_state.ROBO_LIGADO:
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos (Isso consome leituras da cota).")
             else: st.warning("⚠️ Firebase não conectado.")
 
-        # --- TIMER OTIMIZADO APENAS NO RODAPÉ ---
-        
+        # --- TIMER OTIMIZADO E VISUAL ---
         placeholder_timer = st.empty()
-        
         if 'last_run' not in st.session_state: st.session_state['last_run'] = time.time()
         tempo_passado = time.time() - st.session_state['last_run']
         tempo_restante = INTERVALO - tempo_passado
         
         if tempo_restante > 0:
-            # Mostra o timer decrementando (APENAS NO RODAPÉ, SEM CAIXA AZUL NO MEIO)
             for i in range(int(tempo_restante), 0, -1):
                 placeholder_timer.markdown(
                     f'<div class="footer-timer">⏳ Próxima varredura em {i}s</div>', 
                     unsafe_allow_html=True
                 )
                 time.sleep(1)
-            
             st.session_state['last_run'] = time.time()
             st.rerun()
         else:
