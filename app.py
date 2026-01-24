@@ -217,7 +217,7 @@ def carregar_aba(nome_aba, colunas_esperadas):
     elif nome_aba == "Obs": chave_memoria = 'df_vip'
     elif nome_aba == "Blacklist": chave_memoria = 'df_black'
     try:
-        # MELHORIA DE PERFORMANCE: Cache de 600 segundos (10 minutos)
+        # PERFORMANCE: Cache de 10 minutos para evitar chamadas excessivas
         df = conn.read(worksheet=nome_aba, ttl=600)
         if not df.empty:
             for col in colunas_esperadas:
@@ -696,7 +696,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     posse_casa = str(gv(s1, 'Ball Possession')).replace('%', '')
     dados_ricos = extrair_dados_completos(stats_raw)
     
-    # --- LÓGICA DINÂMICA (CORREÇÃO PEDIDA) ---
+    # --- LÓGICA DINÂMICA (IA SABE SE É OVER OU UNDER) ---
     estrategias_under = ["Morno", "Under", "Vovô", "Segurar"]
     eh_under = any(x in estrategia for x in estrategias_under)
     
@@ -800,6 +800,36 @@ def criar_estrategia_nova_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e: return f"Erro Big Data: {e}"
+
+def otimizar_estrategias_existentes_ia():
+    if not IA_ATIVADA: return "IA Desconectada."
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return "Sem histórico suficiente."
+    stats_strats = {}
+    try:
+        for strat in df['Estrategia'].unique():
+            d_s = df[df['Estrategia'] == strat]
+            greens = len(d_s[d_s['Resultado'].str.contains('GREEN', na=False)])
+            reds = len(d_s[d_s['Resultado'].str.contains('RED', na=False)])
+            total = greens + reds
+            if total > 0:
+                winrate = (greens / total) * 100
+                stats_strats[strat] = f"{winrate:.1f}% ({greens}G-{reds}R)"
+    except: pass
+    bigdata_context = ""
+    if db_firestore:
+        try:
+            docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
+            amostra = [d.to_dict() for d in docs]
+            for jogo in amostra[:10]:
+                 bigdata_context += f"- {jogo['jogo']} ({jogo['placar_final']}): {jogo.get('estatisticas', {}).get('chutes_total', 0)} chutes\n"
+        except: bigdata_context = "BigData Offline"
+    prompt = f"Atue como Engenheiro de Estratégias. Performance Atual: {json.dumps(stats_strats, indent=2, ensure_ascii=False)}. Mercado Recente: {bigdata_context}. Analise e sugira UMA otimização técnica para a pior estratégia."
+    try:
+        response = model_ia.generate_content(prompt)
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text
+    except Exception as e: return f"Erro na Análise: {e}"
 
 def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline."
@@ -1244,6 +1274,16 @@ with st.sidebar:
                 with st.spinner("🤖 Analisando padrões globais no Big Data..."):
                     sugestao = criar_estrategia_nova_ia(); st.markdown("### 💡 Sugestão da IA"); st.success(sugestao)
             else: st.error("IA Desconectada.")
+        
+        # --- BOTÃO RESTAURADO ---
+        if st.button("🔧 Otimizar Estratégias (Histórico + BigData)"):
+            if IA_ATIVADA:
+                with st.spinner("🤖 Cruzando performance real com Big Data..."):
+                    sugestao_otimizacao = otimizar_estrategias_existentes_ia()
+                    st.markdown("### 🛠️ Plano de Melhoria")
+                    st.info(sugestao_otimizacao)
+            else: st.error("IA Desconectada.")
+        
         if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
             with st.spinner("Buscando na API todos os jogos finalizados hoje..."):
                 hoje_real = get_time_br().strftime('%Y-%m-%d')
@@ -1275,7 +1315,7 @@ with st.sidebar:
     with st.expander("📶 Consumo API", expanded=False):
         verificar_reset_diario()
         u = st.session_state['api_usage']; perc = min(u['used'] / u['limit'], 1.0) if u['limit'] > 0 else 0
-        st.progress(perc); st.caption(f"Utilizado: **{u['used']}** / {u['limit']}")
+        st.progress(perc); st.caption(f"Utilizado: **{u['used']}** / {u['limit']} ({perc*100:.1f}%)")
     
     with st.expander("🤖 Consumo IA (Gemini)", expanded=False):
         u_ia = st.session_state['gemini_usage']; u_ia['limit'] = 10000 
@@ -1543,7 +1583,8 @@ if st.session_state.ROBO_LIGADO:
         c1, c2, c3 = st.columns(3)
         c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
-        # --- UI TWEAK: MUDANÇA PARA ASSERTIVIDADE NO 3º CARD ---
+        
+        # --- UI ATUALIZADA: Métrica de Assertividade ---
         cor_winrate = "#00FF00" if w >= 50 else "#FFFF00"
         c3.markdown(f'<div class="metric-box"><div class="metric-title">Assertividade Dia</div><div class="metric-value" style="color:{cor_winrate};">{w:.1f}%</div><div class="metric-sub">Winrate Diário</div></div>', unsafe_allow_html=True)
         
