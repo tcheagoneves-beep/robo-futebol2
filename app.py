@@ -436,7 +436,6 @@ def atualizar_historico_ram(lista_atualizada_hoje):
         return row
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
-
 def salvar_bigdata(jogo_api, stats):
     if not db_firestore: return
     try:
@@ -719,23 +718,36 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     
     if eh_under:
         objetivo_ia = "OBJETIVO: Validar entrada em UNDER (MENOS GOLS) ou BACK FAVORITO SEGURANDO JOGO. CRITÉRIO DE SUCESSO: Jogo travado, lento, sem chances claras."
-        instrucao_decisao = "- Se o jogo estiver MORNO, SEM CHUTES PERIGOSOS e TRAVADO: APROVADO.\n- Se houver pressão intensa: ARRISCADO."
     else:
         objetivo_ia = "OBJETIVO: Validar entrada em OVER GOLS (MAIS GOLS). CRITÉRIO DE SUCESSO: Jogo frenético, pressão, chutes na área."
-        instrucao_decisao = "- Se a probabilidade matemática do gol for alta baseada na pressão: APROVADO.\n- Se o jogo estiver parado: ARRISCADO."
 
+    # --- NOVO PROMPT SNIPER (EFICIÊNCIA) ---
     prompt = f"""
-    Atue como um ANALISTA DE DADOS ESTATÍSTICOS (Mentalidade: EV+ MATEMÁTICO).
+    Atue como um ANALISTA DE ELITE (Foco: Eficiência vs Volume).
     {objetivo_ia}
+
     DADOS DO JOGO: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
-    Estratégia Indicada: {estrategia} | Time Favorável: {time_favoravel}
-    ESTATÍSTICAS EM TEMPO REAL:
-    - Pressão (Momentum): Casa {rh} x {ra} Visitante
+    Estratégia: {estrategia} | Time Favorável: {time_favoravel}
+
+    ESTATÍSTICAS REAIS:
+    - Pressão: Casa {rh} x {ra} Visitante
+    - Chutes no Gol (SOG): Casa {gv(s1, 'Shots on Goal')} x {gv(s2, 'Shots on Goal')} Visitante
     - Chutes na Área: Casa {chutes_area_casa} x {chutes_area_fora} Visitante
-    - Escanteios: {escanteios} | Posse Casa: {posse_casa}%
-    CONTEXTO: {extra_context} {dados_ricos}
-    DECISÃO BINÁRIA: {instrucao_decisao}
-    FORMATO DE RESPOSTA: Aprovado/Arriscado - [Motivo curto]
+    - Escanteios: {escanteios}
+    - Posse: {posse_casa}%
+
+    CONTEXTO: {extra_context}
+
+    ⚠️ REGRAS DE DECISÃO (CALIBRAGEM FINA):
+    1. APROVADO (PADRÃO OURO): Pressão alta + Muitas finalizações + Goleiro trabalhando.
+    2. APROVADO (SNIPER): Se o time tem POUCOS ataques, mas MUITOS chutes no gol (Ex: 4 chutes, 3 no gol), APROVE! Isso é eficiência, não risco.
+    3. ARRISCADO (FALSO DOMÍNIO): Muita posse, muitos ataques perigosos, mas ZERO chutes no gol ou chutes para fora. (O famoso "Arame Liso").
+    4. ARRISCADO (JOGO MORTO): Ninguém chuta, ninguém ataca.
+
+    RESUMO: Não tenha medo de aprovar jogos com poucos chutes se a pontaria estiver alta.
+
+    FORMATO:
+    Aprovado/Arriscado - [Motivo focado na eficiência]
     PROB: [0-100]%
     """
 
@@ -750,37 +762,22 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         
         # --- CORREÇÃO DE FORMATAÇÃO DA PROBABILIDADE ---
         prob_str = "N/A"
-        
-        # Regex mais robusto: captura números com ponto ou virgula, com ou sem %
         match_prob = re.search(r'PROB:\s*(\d+[\.,]?\d*)', texto_completo)
         
         if match_prob: 
             try:
-                # Normaliza trocando vírgula por ponto para converter float
                 val_raw = float(match_prob.group(1).replace(',', '.'))
-                
-                # Se a IA respondeu em decimal (ex: 0.85), converte para 85
-                if val_raw <= 1.0 and val_raw > 0:
-                    val_raw = val_raw * 100
-                
-                # Garante que é um inteiro e adiciona o %
+                if val_raw <= 1.0 and val_raw > 0: val_raw = val_raw * 100
                 prob_str = f"{int(val_raw)}%"
-            except:
-                prob_str = "N/A"
+            except: prob_str = "N/A"
 
-        # Remove a probabilidade do texto do motivo para não duplicar
         texto_limpo = re.sub(r'PROB:\s*[\d\.,]+%?', '', texto_completo).strip()
-        
         veredicto = "Arriscado" 
         if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
         
-        # --- LIMPEZA DO MOTIVO ---
         motivo_sujo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
         primeira_frase = motivo_sujo.split('.')[0] + "."
-        
-        if len(primeira_frase) > 120:
-            primeira_frase = primeira_frase[:117] + "..."
-            
+        if len(primeira_frase) > 120: primeira_frase = primeira_frase[:117] + "..."
         motivo = primeira_frase.strip()
 
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
@@ -921,7 +918,6 @@ def gerar_insights_matinais_ia(api_key):
         st.session_state['gemini_usage']['used'] += 1
         return resp.text
     except Exception as e: return f"Erro Matinal: {e}"
-
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
     if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []}
@@ -970,8 +966,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             pressao_fora = (ra >= 3 and sog_a >= 4) and not arame_liso_fora
             if (pressao_casa and sh_h > sh_a) or (pressao_fora and sh_a > sh_h):
                  if total_gols >= 1 or total_chutes >= 18:
-                      SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra, "favorito": "GOLS"})
-                      golden_bet_ativada = True
+                       SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra, "favorito": "GOLS"})
+                       golden_bet_ativada = True
 
         if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1:
             if total_chutes >= 22 and (not arame_liso_casa and not arame_liso_fora): 
@@ -1004,7 +1000,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if 15 <= tempo <= 25 and total_chutes >= 6 and (sog_h + sog_a) >= 3:
              SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": "Muitos Chutes", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
-        # --- NOVA ESTRATÉGIA: O CATALISADOR (Sugestão IA) ---
+        # --- ESTRATÉGIA O CATALISADOR (Mantida e Validada) ---
         if 20 <= tempo <= 35 and gh == 0 and ga == 0:
             total_sog_catalisador = sog_h + sog_a
             if total_sog_catalisador >= 6:
@@ -1026,6 +1022,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
 
         return SINAIS
     except: return []
+
 # ==============================================================================
 # 4. TELEGRAM, RESULTADOS, RELATÓRIOS E UI (FINAL)
 # ==============================================================================
@@ -1172,8 +1169,6 @@ def conferir_resultados_sniper(jogos_live, api_key):
         
         res_final = '❌ RED'
         try:
-             # Correção do Sniper: Verifica se foi Over 1.5 (regra padrão)
-             # Se tiver mais que 1 gol no total, é Green.
              if tg >= 2: res_final = '✅ GREEN'
              else: res_final = '❌ RED'
         except: pass
@@ -1284,7 +1279,6 @@ def enviar_relatorio_bi(token, chat_ids):
         txt_detalhe = ""
         df_closed = d_hoje[d_hoje['Resultado'].isin(['✅ GREEN', '❌ RED'])]
         
-        # --- NOVAS MÉTRICAS (V4) ---
         txt_melhor_liga = "N/A"
         txt_pior_liga = "N/A"
         txt_high_conf = "N/A"
@@ -1352,7 +1346,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             msg_final = f"🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n\n{insights}"
             for cid in ids: enviar_telegram(token, cid, msg_final)
             st.session_state['matinal_enviado'] = True
-
 # --- 4.2 UI E LOOP DE EXECUÇÃO ---
 
 with st.sidebar:
@@ -1382,7 +1375,6 @@ with st.sidebar:
                     sugestao = criar_estrategia_nova_ia(); st.markdown("### 💡 Sugestão da IA"); st.success(sugestao)
             else: st.error("IA Desconectada.")
         
-        # --- BOTÃO OTIMIZAR RESTAURADO ---
         if st.button("🔧 Otimizar Estratégias (Histórico + BigData)"):
             if IA_ATIVADA:
                 with st.spinner("🤖 Cruzando performance real com Big Data..."):
@@ -1524,8 +1516,8 @@ if st.session_state.ROBO_LIGADO:
             if jogos_para_atualizar:
                 novas_stats = atualizar_stats_em_paralelo(jogos_para_atualizar, safe_api)
                 for fid_up, stats_up in novas_stats.items():
-                     st.session_state['controle_stats'][fid_up] = datetime.now()
-                     st.session_state[f"st_{fid_up}"] = stats_up
+                      st.session_state['controle_stats'][fid_up] = datetime.now()
+                      st.session_state[f"st_{fid_up}"] = stats_up
 
             prox = buscar_agenda_cached(safe_api, hoje_real); agora = get_time_br()
             ft_para_salvar = []
@@ -1560,7 +1552,7 @@ if st.session_state.ROBO_LIGADO:
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"; gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 if st_short == 'FT': continue 
                 
-                # Leitura da memória RAM (Rápida, pois já atualizamos acima)
+                # Leitura da memória RAM
                 stats = st.session_state.get(f"st_{fid}", [])
                 status_vis = "👁️" if stats else "💤"
                 
@@ -1634,7 +1626,6 @@ if st.session_state.ROBO_LIGADO:
                                 else: opiniao_db = "Neutro"
                             except: pass
                         
-                        # --- MODIFICADO V4: Adicionada Probabilidade no Item ---
                         item = {
                             "FID": str(fid), 
                             "Data": get_time_br().strftime('%Y-%m-%d'), 
@@ -1649,9 +1640,8 @@ if st.session_state.ROBO_LIGADO:
                             "Odd": odd_atual_str, 
                             "Odd_Atualizada": "", 
                             "Opiniao_IA": opiniao_db,
-                            "Probabilidade": prob_txt # <--- NOVO CAMPO
+                            "Probabilidade": prob_txt 
                         }
-                        # --------------------------------------------------------
                         
                         if adicionar_historico(item):
                             try:
@@ -1707,12 +1697,11 @@ if st.session_state.ROBO_LIGADO:
         c1, c2, c3 = st.columns(3)
         c1.markdown(f'<div class="metric-box"><div class="metric-title">Sinais Hoje</div><div class="metric-value">{t}</div><div class="metric-sub">{g} Green | {r} Red</div></div>', unsafe_allow_html=True)
         c2.markdown(f'<div class="metric-box"><div class="metric-title">Jogos Live</div><div class="metric-value">{len(radar)}</div><div class="metric-sub">Monitorando</div></div>', unsafe_allow_html=True)
-        # --- UI TWEAK: ASSERTIVIDADE DIA ---
         cor_winrate = "#00FF00" if w >= 50 else "#FFFF00"
         c3.markdown(f'<div class="metric-box"><div class="metric-title">Assertividade Dia</div><div class="metric-value" style="color:{cor_winrate};">{w:.1f}%</div><div class="metric-sub">Winrate Diário</div></div>', unsafe_allow_html=True)
         
         st.write("")
-        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})", "💾 Big Data (Firebase)"])
+        abas = st.tabs([f"📡 Radar ({len(radar)})", f"📅 Agenda ({len(agenda)})", f"💰 Financeiro", f"📜 Histórico ({len(hist_hj)})", "📈 BI & Analytics", f"🚫 Blacklist ({len(st.session_state['df_black'])})", f"🛡️ Seguras ({count_safe})", f"⚠️ Obs ({count_obs})", "💾 Big Data", "💬 Chat IA"])
         
         with abas[0]: 
             if radar: st.dataframe(pd.DataFrame(radar)[['Liga', 'Jogo', 'Tempo', 'Status']].astype(str), use_container_width=True, hide_index=True)
@@ -1793,7 +1782,6 @@ if st.session_state.ROBO_LIGADO:
                     else: df_show = df_bi 
                     
                     if not df_show.empty:
-                        # --- SLIDER DE FILTRO DE PROBABILIDADE (NOVO) ---
                         if 'Probabilidade' in df_show.columns:
                             prob_min = st.slider("🎯 Filtrar Probabilidade Mínima IA (%)", 0, 100, 0)
                             if prob_min > 0:
@@ -1801,7 +1789,6 @@ if st.session_state.ROBO_LIGADO:
                                     try: return int(str(x).replace('%', ''))
                                     except: return 0
                                 df_show = df_show[df_show['Probabilidade'].apply(limpar_prob) >= prob_min]
-                        # ------------------------------------------------
 
                         gr = df_show['Resultado'].str.contains('GREEN').sum(); rd = df_show['Resultado'].str.contains('RED').sum(); tt = len(df_show); ww = (gr/tt*100) if tt>0 else 0
                         m1, m2, m3, m4 = st.columns(4)
@@ -1814,7 +1801,6 @@ if st.session_state.ROBO_LIGADO:
                             stats_ligas = df_finished.groupby('Liga')['Resultado'].apply(lambda x: pd.Series({'Winrate': (x.str.contains('GREEN').sum() / len(x) * 100), 'Total': len(x), 'Reds': x.str.contains('RED').sum(), 'Greens': x.str.contains('GREEN').sum()})).unstack()
                             stats_ligas = stats_ligas[stats_ligas['Total'] >= 2]
                             
-                            # --- FUNÇÃO DRILL-DOWN ---
                             def get_top_strat(liga):
                                 d_l = df_finished[df_finished['Liga'] == liga]
                                 if d_l.empty: return "-"
@@ -1826,7 +1812,6 @@ if st.session_state.ROBO_LIGADO:
                                 if d_l.empty: return "Nenhuma"
                                 s = d_l['Estrategia'].value_counts()
                                 return f"{s.index[0]} ({s.iloc[0]} Reds)"
-                            # -------------------------
 
                             col_top, col_worst = st.columns(2)
                             with col_top:
@@ -1876,7 +1861,7 @@ if st.session_state.ROBO_LIGADO:
                 st.dataframe(df_vip_show[['País', 'Liga', 'Data_Erro', 'Strikes']], use_container_width=True, hide_index=True)
             else: st.info("Nenhuma observação no momento.")
 
-        with abas[8]:
+        with abas[8]: # Big Data Tab
             st.markdown(f"### 💾 Banco de Dados de Partidas (Firebase)")
             st.caption("A IA usa esses dados para criar novas estratégias. Os dados são salvos na nuvem.")
             if db_firestore:
@@ -1902,6 +1887,60 @@ if st.session_state.ROBO_LIGADO:
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos.")
             else: st.warning("⚠️ Firebase não conectado.")
 
+        with abas[9]: # Chat IA Turbinada
+            st.markdown("### 💬 Chat Intelligence (Radar + Histórico + Big Data)")
+            if "messages" not in st.session_state:
+                st.session_state["messages"] = [{"role": "assistant", "content": "Olá! Estou conectado ao seu Big Data e ao Radar em tempo real. Pode perguntar!"}]
+            for msg in st.session_state.messages: st.chat_message(msg["role"]).write(msg["content"])
+            
+            if prompt := st.chat_input("Ex: Cruzando o Big Data com o Radar, qual a melhor oportunidade agora?"):
+                if not IA_ATIVADA: st.error("IA Desconectada. Verifique a API Key.")
+                else:
+                    st.session_state.messages.append({"role": "user", "content": prompt})
+                    st.chat_message("user").write(prompt)
+
+                    txt_radar = "O RADAR ESTÁ VAZIO NO MOMENTO."
+                    if radar:
+                        df_radar = pd.DataFrame(radar)
+                        txt_radar = df_radar.to_string(index=False)
+
+                    txt_hoje = "SEM SINAIS HOJE AINDA."
+                    if 'historico_sinais' in st.session_state and st.session_state['historico_sinais']:
+                        df_hj = pd.DataFrame(st.session_state['historico_sinais'])
+                        cols_uteis = ['Hora', 'Liga', 'Jogo', 'Estrategia', 'Resultado', 'Opiniao_IA']
+                        cols_existentes = [c for c in cols_uteis if c in df_hj.columns]
+                        txt_hoje = df_hj[cols_existentes].head(20).to_string(index=False)
+
+                    txt_bigdata = "BIG DATA NÃO CARREGADO NA MEMÓRIA (Vá na aba Big Data e clique em Carregar)."
+                    dados_bd = st.session_state.get('cache_firebase_view', [])
+                    if dados_bd:
+                        try:
+                            df_bd = pd.DataFrame(dados_bd)
+                            qtd_jogos = len(df_bd)
+                            amostra_recente = df_bd[['data_hora', 'liga', 'jogo', 'placar_final']].head(5).to_string(index=False)
+                            txt_bigdata = f"ESTATÍSTICAS GERAIS DO BIG DATA ({qtd_jogos} jogos analisados):\n- Amostra dos 5 últimos jogos salvos:\n{amostra_recente}\n(Instrução: Use esse histórico para validar se o jogo atual do Radar se parece com padrões passados)."
+                        except Exception as e: txt_bigdata = f"Erro ao processar Big Data: {e}"
+
+                    contexto_chat = f"""
+                    Você é o Cérebro do "Neves Analytics". Você tem acesso a 3 camadas de tempo:
+                    1. O PASSADO (Big Data - Padrões de Longo Prazo): {txt_bigdata}
+                    2. O PRESENTE (Histórico de Hoje - Tendência do Dia): {txt_hoje}
+                    3. O AGORA (Radar Ao Vivo - Oportunidades): {txt_radar}
+                    PERGUNTA DO USUÁRIO: "{prompt}"
+                    INSTRUÇÃO AVANÇADA: 
+                    - Se o usuário perguntar de um jogo do Radar, cruze com o Big Data.
+                    - Se o dia estiver ruim (muitos Reds hoje), seja mais conservador.
+                    """
+
+                    try:
+                        with st.spinner("Consultando Bases de Dados Cruzadas..."):
+                            response = model_ia.generate_content(contexto_chat)
+                            st.session_state['gemini_usage']['used'] += 1
+                            msg_ia = response.text
+                        st.session_state.messages.append({"role": "assistant", "content": msg_ia})
+                        st.chat_message("assistant").write(msg_ia)
+                    except Exception as e: st.error(f"Erro na IA: {e}")
+
         for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
             time.sleep(1)
@@ -1909,4 +1948,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")
+        st.info("💡 Robô em espera. Configure na lateral.")            
