@@ -1887,53 +1887,72 @@ if st.session_state.ROBO_LIGADO:
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos.")
             else: st.warning("⚠️ Firebase não conectado.")
 
-        with abas[9]: # Chat IA Turbinada
-            st.markdown("### 💬 Chat Intelligence (Radar + Histórico + Big Data)")
+        with abas[9]: # Chat IA Turbinada (Modo Engenheiro)
+            st.markdown("### 💬 Chat Intelligence (Auditor de Algoritmo)")
             if "messages" not in st.session_state:
-                st.session_state["messages"] = [{"role": "assistant", "content": "Olá! Estou conectado ao seu Big Data e ao Radar em tempo real. Pode perguntar!"}]
+                st.session_state["messages"] = [{"role": "assistant", "content": "Olá! Estou analisando seus dados. Se houver Reds, posso sugerir ajustes diretos no código para blindar a estratégia. O que deseja?"}]
             for msg in st.session_state.messages: st.chat_message(msg["role"]).write(msg["content"])
             
-            if prompt := st.chat_input("Ex: Cruzando o Big Data com o Radar, qual a melhor oportunidade agora?"):
+            if prompt := st.chat_input("Ex: Analise os Reds de hoje e me dê uma solução de código."):
                 if not IA_ATIVADA: st.error("IA Desconectada. Verifique a API Key.")
                 else:
                     st.session_state.messages.append({"role": "user", "content": prompt})
                     st.chat_message("user").write(prompt)
 
-                    txt_radar = "O RADAR ESTÁ VAZIO NO MOMENTO."
-                    if radar:
-                        df_radar = pd.DataFrame(radar)
-                        txt_radar = df_radar.to_string(index=False)
+                    # --- PREPARAÇÃO DOS DADOS ---
+                    txt_radar = "RADAR VAZIO."
+                    if radar: txt_radar = pd.DataFrame(radar).to_string(index=False)
 
-                    txt_hoje = "SEM SINAIS HOJE AINDA."
+                    txt_hoje = "SEM DADOS HOJE."
                     if 'historico_sinais' in st.session_state and st.session_state['historico_sinais']:
                         df_hj = pd.DataFrame(st.session_state['historico_sinais'])
-                        cols_uteis = ['Hora', 'Liga', 'Jogo', 'Estrategia', 'Resultado', 'Opiniao_IA']
-                        cols_existentes = [c for c in cols_uteis if c in df_hj.columns]
-                        txt_hoje = df_hj[cols_existentes].head(20).to_string(index=False)
+                        cols = ['Liga', 'Jogo', 'Estrategia', 'Resultado', 'Placar_Sinal', 'Opiniao_IA']
+                        cols_exist = [c for c in cols if c in df_hj.columns]
+                        txt_hoje = df_hj[cols_exist].head(25).to_string(index=False)
 
-                    txt_bigdata = "BIG DATA NÃO CARREGADO NA MEMÓRIA (Vá na aba Big Data e clique em Carregar)."
+                    txt_bigdata = "BIG DATA OFFLINE."
                     dados_bd = st.session_state.get('cache_firebase_view', [])
                     if dados_bd:
                         try:
+                            # Resumo estatístico para a IA entender o padrão de sucesso/fracasso
                             df_bd = pd.DataFrame(dados_bd)
-                            qtd_jogos = len(df_bd)
-                            amostra_recente = df_bd[['data_hora', 'liga', 'jogo', 'placar_final']].head(5).to_string(index=False)
-                            txt_bigdata = f"ESTATÍSTICAS GERAIS DO BIG DATA ({qtd_jogos} jogos analisados):\n- Amostra dos 5 últimos jogos salvos:\n{amostra_recente}\n(Instrução: Use esse histórico para validar se o jogo atual do Radar se parece com padrões passados)."
-                        except Exception as e: txt_bigdata = f"Erro ao processar Big Data: {e}"
+                            txt_bigdata = f"Total Jogos no Banco: {len(df_bd)}\n"
+                            if 'estatisticas' in df_bd.columns:
+                                # Pegar um exemplo de stats de um jogo recente para contexto
+                                txt_bigdata += f"Exemplo de Stats Salvas: {df_bd.iloc[0]['estatisticas']}"
+                        except: pass
 
+                    # --- PROMPT "ENGENHEIRO DE ALGORITMOS" ---
                     contexto_chat = f"""
-                    Você é o Cérebro do "Neves Analytics". Você tem acesso a 3 camadas de tempo:
-                    1. O PASSADO (Big Data - Padrões de Longo Prazo): {txt_bigdata}
-                    2. O PRESENTE (Histórico de Hoje - Tendência do Dia): {txt_hoje}
-                    3. O AGORA (Radar Ao Vivo - Oportunidades): {txt_radar}
+                    ATUE COMO: Engenheiro de Software e Estrategista Quantitativo do "Neves Analytics".
+                    
+                    SEU OBJETIVO: OTIMIZAR O CÓDIGO E AUMENTAR O WINRATE (GREEN).
+                    
+                    DADOS DO SISTEMA:
+                    1. PERFORMANCE HOJE (Onde estamos errando?): 
+                    {txt_hoje}
+                    
+                    2. PADRÕES DE LONGO PRAZO (Big Data): 
+                    {txt_bigdata}
+                    
+                    3. MONITORAMENTO ATUAL (Radar): 
+                    {txt_radar}
+                    
                     PERGUNTA DO USUÁRIO: "{prompt}"
-                    INSTRUÇÃO AVANÇADA: 
-                    - Se o usuário perguntar de um jogo do Radar, cruze com o Big Data.
-                    - Se o dia estiver ruim (muitos Reds hoje), seja mais conservador.
+                    
+                    ⚠️ PROTOCOLO DE RESPOSTA (RIGOROSO):
+                    1. NÃO SEJA GENÉRICO. Não diga "precisamos analisar".
+                    2. SE HOUVER REDS: Identifique a falha estatística (ex: o time tinha posse mas não chutava).
+                    3. TRAGA A SOLUÇÃO EM CÓDIGO/LÓGICA:
+                       - Diga: "Sugiro alterar a linha de corte de chutes de 10 para 14."
+                       - Diga: "Adicione um filtro: if sog_h < 4: return False"
+                       - Diga: "A estratégia 'Golden Bet' está falhando em Ligas Under, remova a liga X da lista."
+                    
+                    4. SEJA TÉCNICO E DIRETO. Fale a linguagem do desenvolvedor.
                     """
 
                     try:
-                        with st.spinner("Consultando Bases de Dados Cruzadas..."):
+                        with st.spinner("Compilando solução baseada em dados..."):
                             response = model_ia.generate_content(contexto_chat)
                             st.session_state['gemini_usage']['used'] += 1
                             msg_ia = response.text
@@ -1949,3 +1968,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")            
+
