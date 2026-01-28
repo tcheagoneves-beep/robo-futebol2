@@ -1887,13 +1887,22 @@ if st.session_state.ROBO_LIGADO:
                 else: st.info("ℹ️ Clique no botão acima para visualizar os dados salvos.")
             else: st.warning("⚠️ Firebase não conectado.")
 
-        with abas[9]: # Chat IA Turbinada (Modo Engenheiro)
+        with abas[9]: # Chat IA Turbinada (Modo Engenheiro + Limpeza de Memória)
             st.markdown("### 💬 Chat Intelligence (Auditor de Algoritmo)")
-            if "messages" not in st.session_state:
-                st.session_state["messages"] = [{"role": "assistant", "content": "Olá! Estou analisando seus dados. Se houver Reds, posso sugerir ajustes diretos no código para blindar a estratégia. O que deseja?"}]
-            for msg in st.session_state.messages: st.chat_message(msg["role"]).write(msg["content"])
             
-            if prompt := st.chat_input("Ex: Analise os Reds de hoje e me dê uma solução de código."):
+            # --- 1. GERENCIAMENTO DE MEMÓRIA (NOVO) ---
+            if "messages" not in st.session_state:
+                st.session_state["messages"] = [{"role": "assistant", "content": "Olá! Estou pronto para auditar seu código. Se houver Reds, me avise que eu gero a correção."}]
+            
+            # Mantém apenas as últimas 6 interações (3 pares) para não travar a tela
+            if len(st.session_state["messages"]) > 6:
+                st.session_state["messages"] = st.session_state["messages"][-6:]
+
+            # Exibe mensagens
+            for msg in st.session_state.messages: 
+                st.chat_message(msg["role"]).write(msg["content"])
+            
+            if prompt := st.chat_input("Ex: Crie um filtro para evitar o Red de hoje."):
                 if not IA_ATIVADA: st.error("IA Desconectada. Verifique a API Key.")
                 else:
                     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -1908,56 +1917,50 @@ if st.session_state.ROBO_LIGADO:
                         df_hj = pd.DataFrame(st.session_state['historico_sinais'])
                         cols = ['Liga', 'Jogo', 'Estrategia', 'Resultado', 'Placar_Sinal', 'Opiniao_IA']
                         cols_exist = [c for c in cols if c in df_hj.columns]
-                        txt_hoje = df_hj[cols_exist].head(25).to_string(index=False)
+                        txt_hoje = df_hj[cols_exist].head(20).to_string(index=False) # Limitado a 20 linhas
 
                     txt_bigdata = "BIG DATA OFFLINE."
                     dados_bd = st.session_state.get('cache_firebase_view', [])
                     if dados_bd:
                         try:
-                            # Resumo estatístico para a IA entender o padrão de sucesso/fracasso
                             df_bd = pd.DataFrame(dados_bd)
                             txt_bigdata = f"Total Jogos no Banco: {len(df_bd)}\n"
                             if 'estatisticas' in df_bd.columns:
-                                # Pegar um exemplo de stats de um jogo recente para contexto
-                                txt_bigdata += f"Exemplo de Stats Salvas: {df_bd.iloc[0]['estatisticas']}"
+                                txt_bigdata += f"Exemplo Stats: {df_bd.iloc[0]['estatisticas']}"
                         except: pass
 
-                    # --- PROMPT "ENGENHEIRO DE ALGORITMOS" ---
+                    # --- PROMPT ENGENHEIRO ---
                     contexto_chat = f"""
-                    ATUE COMO: Engenheiro de Software e Estrategista Quantitativo do "Neves Analytics".
+                    ATUE COMO: Engenheiro Sênior Python do "Neves Analytics".
                     
-                    SEU OBJETIVO: OTIMIZAR O CÓDIGO E AUMENTAR O WINRATE (GREEN).
+                    CONTEXTO:
+                    1. PERFORMANCE HOJE: {txt_hoje}
+                    2. BIG DATA: {txt_bigdata}
+                    3. RADAR: {txt_radar}
                     
-                    DADOS DO SISTEMA:
-                    1. PERFORMANCE HOJE (Onde estamos errando?): 
-                    {txt_hoje}
+                    USUÁRIO: "{prompt}"
                     
-                    2. PADRÕES DE LONGO PRAZO (Big Data): 
-                    {txt_bigdata}
-                    
-                    3. MONITORAMENTO ATUAL (Radar): 
-                    {txt_radar}
-                    
-                    PERGUNTA DO USUÁRIO: "{prompt}"
-                    
-                    ⚠️ PROTOCOLO DE RESPOSTA (RIGOROSO):
-                    1. NÃO SEJA GENÉRICO. Não diga "precisamos analisar".
-                    2. SE HOUVER REDS: Identifique a falha estatística (ex: o time tinha posse mas não chutava).
-                    3. TRAGA A SOLUÇÃO EM CÓDIGO/LÓGICA:
-                       - Diga: "Sugiro alterar a linha de corte de chutes de 10 para 14."
-                       - Diga: "Adicione um filtro: if sog_h < 4: return False"
-                       - Diga: "A estratégia 'Golden Bet' está falhando em Ligas Under, remova a liga X da lista."
-                    
-                    4. SEJA TÉCNICO E DIRETO. Fale a linguagem do desenvolvedor.
+                    REGRAS:
+                    1. SEJA BREVE. Não repita o que já foi dito.
+                    2. FOCO NO CÓDIGO. Se o usuário pedir correção, entregue a FUNÇÃO PYTHON pronta para copiar.
+                    3. NÃO ALUCINE. Use as variáveis reais do código (sog_h, sog_a, sh_h, rh, ra).
+                    4. Se for sugerir filtro, escreva o bloco `if` exato.
                     """
 
                     try:
-                        with st.spinner("Compilando solução baseada em dados..."):
+                        with st.spinner("Gerando solução de código..."):
                             response = model_ia.generate_content(contexto_chat)
                             st.session_state['gemini_usage']['used'] += 1
                             msg_ia = response.text
+                        
                         st.session_state.messages.append({"role": "assistant", "content": msg_ia})
                         st.chat_message("assistant").write(msg_ia)
+                        
+                        # Força atualização para limpar mensagens antigas na próxima rodada
+                        if len(st.session_state["messages"]) > 6:
+                            time.sleep(0.5)
+                            st.rerun()
+                            
                     except Exception as e: st.error(f"Erro na IA: {e}")
 
         for i in range(INTERVALO, 0, -1):
