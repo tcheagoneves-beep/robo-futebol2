@@ -216,8 +216,19 @@ def carregar_aba(nome_aba, colunas_esperadas):
     elif nome_aba == "Seguras": chave_memoria = 'df_safe'
     elif nome_aba == "Obs": chave_memoria = 'df_vip'
     elif nome_aba == "Blacklist": chave_memoria = 'df_black'
+    
     try:
-        df = conn.read(worksheet=nome_aba, ttl=600)
+        # Tenta ler do Google Sheets com TTL curto
+        df = conn.read(worksheet=nome_aba, ttl=10)
+        
+        # --- FIX: TRAVA DE SEGURANÇA BLACKLIST/HISTÓRICO ---
+        # Se o Sheets retornar vazio por erro de API, mas tivermos memória local, usamos a memória.
+        if df.empty and chave_memoria in st.session_state:
+            df_ram = st.session_state[chave_memoria]
+            if not df_ram.empty:
+                st.toast(f"⚠️ Erro leitura {nome_aba}. Usando Cache.", icon="🛡️")
+                return df_ram
+
         if not df.empty:
             for col in colunas_esperadas:
                 if col not in df.columns:
@@ -496,7 +507,6 @@ def salvar_bigdata(jogo_api, stats):
         db_firestore.collection("BigData_Futebol").document(fid).set(item_bigdata)
         st.session_state['jogos_salvos_bigdata'].add(fid)
     except: pass
-
 def extrair_dados_completos(stats_api):
     if not stats_api: return "Dados indisponíveis."
     try:
@@ -865,10 +875,14 @@ def criar_estrategia_nova_ia():
 
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "IA Desconectada."
+    
+    # 1. Preparar dados do Google Sheets (Histórico Real)
     df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Sem histórico suficiente."
-    stats_strats = {}
+    if df.empty: return "Sem histórico suficiente no Sheets."
+    
+    resumo_strategies = ""
     try:
+        # Agrupa por estratégia e calcula Winrate real
         for strat in df['Estrategia'].unique():
             d_s = df[df['Estrategia'] == strat]
             greens = len(d_s[d_s['Resultado'].str.contains('GREEN', na=False)])
@@ -876,17 +890,63 @@ def otimizar_estrategias_existentes_ia():
             total = greens + reds
             if total > 0:
                 winrate = (greens / total) * 100
-                stats_strats[strat] = f"{winrate:.1f}% ({greens}G-{reds}R)"
+                resumo_strategies += f"- {strat}: {winrate:.1f}% (G:{greens}/R:{reds})\n"
     except: pass
+
+    # 2. Preparar dados do Big Data (Firebase) - Estatísticas Gerais
     bigdata_context = ""
+    total_jogos_bd = st.session_state.get('total_bigdata_count', 0)
+    
     if db_firestore:
         try:
-            docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
+            # Pegamos uma amostra maior para a IA ter contexto estatístico
+            docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(100).stream()
             amostra = [d.to_dict() for d in docs]
-            for jogo in amostra[:10]:
-                 bigdata_context += f"- {jogo['jogo']} ({jogo['placar_final']}): {jogo.get('estatisticas', {}).get('chutes_total', 0)} chutes\n"
+            
+            # Calculamos médias rápidas da amostra para dar base à IA
+            soma_chutes = 0
+            soma_cantos = 0
+            jogos_com_gol = 0
+            for j in amostra:
+                stats = j.get('estatisticas', {})
+                soma_chutes += stats.get('chutes_total', 0)
+                soma_cantos += stats.get('escanteios_total', 0)
+                if 'x0' not in j['placar_final'] and '0x' not in j['placar_final']: 
+                    jogos_com_gol += 1
+            
+            media_chutes = soma_chutes / len(amostra) if amostra else 0
+            media_cantos = soma_cantos / len(amostra) if amostra else 0
+            taxa_gols_bd = (jogos_com_gol / len(amostra) * 100) if amostra else 0
+            
+            bigdata_context = (f"Total BD: {total_jogos_bd} jogos. "
+                               f"Médias da Amostra (100j): {media_chutes:.1f} Chutes/jogo, {media_cantos:.1f} Cantos/jogo. "
+                               f"Taxa de Gols (Jogos não 0x0): {taxa_gols_bd:.1f}%.")
         except: bigdata_context = "BigData Offline"
-    prompt = f"Atue como Engenheiro de Estratégias. Performance Atual: {json.dumps(stats_strats, indent=2, ensure_ascii=False)}. Mercado Recente: {bigdata_context}. Analise e sugira UMA otimização técnica para a pior estratégia."
+
+    # 3. Prompt Agressivo/Assertivo
+    prompt = f"""
+    ATUE COMO: Auditor Sênior de Algoritmos de Apostas (Sem polidez, direto ao ponto).
+    
+    MEUS DADOS REAIS (Google Sheets):
+    {resumo_strategies}
+    
+    MEU BIG DATA (Contexto Geral):
+    {bigdata_context}
+    
+    TAREFA: Analise TODAS as estratégias listadas acima.
+    Para cada estratégia, compare o desempenho atual com a média do mercado e identifique ONDE ESTÁ O ERRO.
+    
+    SAÍDA OBRIGATÓRIA (Para cada estratégia):
+    1. Nome da Estratégia
+    2. O Veredito: (Ex: "Está horrível", "Está excelente", "Instável")
+    3. A CORREÇÃO TÉCNICA (O que devo mudar no código?):
+       - Ex: "Aumente o filtro de chutes de 10 para 14."
+       - Ex: "Pare de apostar se o time da casa estiver perdendo."
+       - Ex: "Esta estratégia ignora a média de cantos do Big Data, adicione filtro de cantos >= 5."
+    
+    Não dê conselhos genéricos como "tenha gestão de banca". Quero ajustes de PARÂMETROS baseados nos erros (Reds) e acertos (Greens).
+    """
+    
     try:
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
@@ -901,19 +961,47 @@ def gerar_insights_matinais_ia(api_key):
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
-        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
-        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP]
-        if not jogos_top: return "Sem jogos Elite hoje."
-        jogos_selecionados = jogos_top[:3]
+        
+        # Filtrar apenas ligas boas para gols
+        LIGAS_TOP_GOLS = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
+        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_TOP_GOLS]
+        
+        if not jogos_top: return "Sem jogos Elite para Sniper hoje."
+        
+        jogos_selecionados = jogos_top[:4] # Pega 4 jogos
         dados_para_ia = ""
+        
         for j in jogos_selecionados:
-            home_nm = j['teams']['home']['name']; away_nm = j['teams']['away']['name']
-            hid = j['teams']['home']['id']; aid = j['teams']['away']['id']
+            home_nm = j['teams']['home']['name']
+            away_nm = j['teams']['away']['name']
+            hid = j['teams']['home']['id']
+            aid = j['teams']['away']['id']
+            
+            # Busca histórico
             stats_hist = analisar_tendencia_50_jogos(api_key, hid, aid)
-            rating_h = buscar_rating_inteligente(api_key, hid)
-            rating_a = buscar_rating_inteligente(api_key, aid)
-            dados_para_ia += f"JOGO: {home_nm} x {away_nm}\nDados Históricos (Over 1.5): {home_nm}: {stats_hist['home']['over15_ft']}% | {away_nm}: {stats_hist['away']['over15_ft']}%\nRatings: {home_nm}: {rating_h} | {away_nm}: {rating_a}\n"
-        prompt = f"Atue como o SNIPER MATINAL. Analise:\n{dados_para_ia}\nCrie 3 palpites curtos e diretos no formato: ⚽ Jogo | 🎯 Palpite"
+            dados_para_ia += (f"JOGO: {home_nm} x {away_nm} | "
+                              f"Histórico HT (Over 0.5 HT): Casa {stats_hist['home']['over05_ht']}% / Fora {stats_hist['away']['over05_ht']}% | "
+                              f"Histórico FT (Over 1.5): Casa {stats_hist['home']['over15_ft']}% / Fora {stats_hist['away']['over15_ft']}%\n")
+
+        prompt = f"""
+        Atue como SNIPER DE GOLS (Especialista em Over 0.5 HT/FT).
+        
+        DADOS DOS JOGOS DE HOJE:
+        {dados_para_ia}
+        
+        TAREFA: Selecione as 3 melhores oportunidades para GOL (Apenas GOL).
+        
+        REGRAS RÍGIDAS:
+        1. MERCADO ALVO: Foco total em **Over 0.5 Gols (HT ou FT)**.
+        2. NÃO indique Over 1.5 ou 2.5 como aposta principal. Queremos segurança (Green fácil).
+        3. JUSTIFICATIVA: Explique POR QUE vai sair gol (Ex: "Os dois times têm 80% de gols no HT").
+        
+        FORMATO DE SAÍDA:
+        ⚽ **Jogo:** Time A x Time B
+        🎯 **Palpite:** Over 0.5 Gols [HT ou FT]
+        📝 **Por quê?** [Explicação baseada nos % fornecidos]
+        """
+        
         resp = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         return resp.text
@@ -966,8 +1054,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             pressao_fora = (ra >= 3 and sog_a >= 4) and not arame_liso_fora
             if (pressao_casa and sh_h > sh_a) or (pressao_fora and sh_a > sh_h):
                  if total_gols >= 1 or total_chutes >= 18:
-                       SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra, "favorito": "GOLS"})
-                       golden_bet_ativada = True
+                        SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito + Finalizações", "rh": rh, "ra": ra, "favorito": "GOLS"})
+                        golden_bet_ativada = True
 
         if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1:
             if total_chutes >= 22 and (not arame_liso_casa and not arame_liso_fora): 
@@ -1655,11 +1743,28 @@ if st.session_state.ROBO_LIGADO:
                                     texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
                                 msg = (f"<b>🚨 SINAL {s['tag'].upper()}</b>\n\n🏆 <b>{liga_safe}</b>\n⚽ {home_safe} 🆚 {away_safe}\n⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n{s['ordem']}\n{destaque_odd}\n📊 <i>Dados: {s['stats']}</i>\n⚽ Médias (10j): Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}\n{prob_final_display}{opiniao_txt}")
                                 
+                                # === LÓGICA DE ENVIO AJUSTADA (DATA DRIVEN) ===
+                                sent_status = False
+                                
+                                # 1. Envia APROVADOS (Sinal Verde)
                                 if opiniao_db == "Aprovado":
+                                    msg = f"✅ <b>SINAL APROVADO (Confiança Alta)</b>\n" + msg
                                     enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"✅ Sinal Aprovado Enviado: {s['tag']}")
+                                    sent_status = True
+                                    st.toast(f"✅ Sinal Enviado: {s['tag']}")
+
+                                # 2. Envia ARRISCADOS (Sinal Amarelo) - Aproveitando os 66% de Winrate
+                                elif opiniao_db == "Arriscado":
+                                    msg = f"⚠️ <b>SINAL MODERADO (Oportunidade)</b>\n" + msg
+                                    msg += "\n<i>💡 Obs: A IA detectou risco, entre com cautela (Stake Reduzida).</i>"
+                                    enviar_telegram(safe_token, safe_chat, msg)
+                                    sent_status = True
+                                    st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
+
+                                # 3. Retém REPROVADOS
                                 else:
-                                    st.toast(f"⚠️ Sinal Retido (IA: {opiniao_db}): {s['tag']}")
+                                    st.toast(f"🛑 Sinal Retido (IA: {opiniao_db}): {s['tag']}")
+
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
@@ -1919,32 +2024,44 @@ if st.session_state.ROBO_LIGADO:
                         cols_exist = [c for c in cols if c in df_hj.columns]
                         txt_hoje = df_hj[cols_exist].head(20).to_string(index=False) # Limitado a 20 linhas
 
+                    # --- CORREÇÃO: CONTEXTO BIG DATA (Volume Real) ---
                     txt_bigdata = "BIG DATA OFFLINE."
+                    total_bd = st.session_state.get('total_bigdata_count', 0)
                     dados_bd = st.session_state.get('cache_firebase_view', [])
-                    if dados_bd:
-                        try:
-                            df_bd = pd.DataFrame(dados_bd)
-                            txt_bigdata = f"Total Jogos no Banco: {len(df_bd)}\n"
-                            if 'estatisticas' in df_bd.columns:
-                                txt_bigdata += f"Exemplo Stats: {df_bd.iloc[0]['estatisticas']}"
-                        except: pass
+                    
+                    if dados_bd or total_bd > 0:
+                         txt_bigdata = f"TOTAL REAL DE JOGOS NO BANCO: {total_bd} JOGOS.\n"
+                         txt_bigdata += "Amostra visual (últimos 50): \n"
+                         try:
+                             df_bd = pd.DataFrame(dados_bd)
+                             if 'estatisticas' in df_bd.columns:
+                                 txt_bigdata += f"Exemplo de Estrutura de Dados: {df_bd.iloc[0]['estatisticas']}"
+                         except: pass
 
-                    # --- PROMPT ENGENHEIRO ---
+                    # --- PROMPT ENGENHEIRO (Atualizado) ---
                     contexto_chat = f"""
-                    ATUE COMO: Engenheiro Sênior Python do "Neves Analytics".
+                    ATUE COMO: Engenheiro Sênior Python e Cientista de Dados do "Neves Analytics".
                     
-                    CONTEXTO:
-                    1. PERFORMANCE HOJE: {txt_hoje}
-                    2. BIG DATA: {txt_bigdata}
-                    3. RADAR: {txt_radar}
+                    IMPORTANTE:
+                    - O usuário possui um Big Data com {total_bd} jogos armazenados (eu estou vendo apenas uma amostra, mas considere o volume total como verdade).
+                    - Não diga que a amostra é pequena se o total for alto.
                     
-                    USUÁRIO: "{prompt}"
+                    CONTEXTO ATUAL:
+                    1. PERFORMANCE HOJE (Google Sheets): 
+                    {txt_hoje}
                     
-                    REGRAS:
-                    1. SEJA BREVE. Não repita o que já foi dito.
-                    2. FOCO NO CÓDIGO. Se o usuário pedir correção, entregue a FUNÇÃO PYTHON pronta para copiar.
-                    3. NÃO ALUCINE. Use as variáveis reais do código (sog_h, sog_a, sh_h, rh, ra).
-                    4. Se for sugerir filtro, escreva o bloco `if` exato.
+                    2. BIG DATA (Firebase): 
+                    {txt_bigdata}
+                    
+                    3. RADAR (Ao Vivo): 
+                    {txt_radar}
+                    
+                    USUÁRIO PERGUNTOU: "{prompt}"
+                    
+                    DIRETRIZES DE RESPOSTA:
+                    1. SEJA ASSERTIVO. Não use palavras como "talvez". Diga "O erro é X, faça Y".
+                    2. CÓDIGO: Se for para corrigir, entregue o bloco de código Python pronto.
+                    3. ANÁLISE: Use os dados do Histórico de Hoje para validar se algo está dando errado agora.
                     """
 
                     try:
@@ -1971,4 +2088,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")            
-
