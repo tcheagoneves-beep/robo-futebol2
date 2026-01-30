@@ -218,11 +218,10 @@ def carregar_aba(nome_aba, colunas_esperadas):
     elif nome_aba == "Blacklist": chave_memoria = 'df_black'
     
     try:
-        # Tenta ler do Google Sheets com TTL curto
+        # Tenta ler do Google Sheets
         df = conn.read(worksheet=nome_aba, ttl=10)
         
-        # --- FIX: TRAVA DE SEGURANÇA BLACKLIST/HISTÓRICO ---
-        # Se o Sheets retornar vazio por erro de API, mas tivermos memória local, usamos a memória.
+        # FIX: TRAVA DE SEGURANÇA PARA NÃO ZERAR SE DER ERRO
         if df.empty and chave_memoria in st.session_state:
             df_ram = st.session_state[chave_memoria]
             if not df_ram.empty:
@@ -378,8 +377,6 @@ def carregar_tudo(force=False):
         st.session_state['last_static_update'] = now
     if 'historico_full' not in st.session_state or force:
         df = carregar_aba("Historico", COLS_HIST)
-        
-        # --- FIX LEGADO: Padronização de Probabilidade ---
         if not df.empty and 'Probabilidade' in df.columns:
             def normalizar_legado_prob(val):
                 s_val = str(val).strip().replace(',', '.')
@@ -389,12 +386,8 @@ def carregar_tudo(force=False):
                     float_val = float(s_val)
                     if float_val <= 1.0: float_val *= 100
                     return f"{int(float_val)}%"
-                except:
-                    return s_val
-            
+                except: return s_val
             df['Probabilidade'] = df['Probabilidade'].apply(normalizar_legado_prob)
-        # -------------------------------------------------
-
         if df.empty and 'historico_full' in st.session_state and not st.session_state['historico_full'].empty:
             df = st.session_state['historico_full'] 
         if not df.empty and 'Data' in df.columns:
@@ -452,11 +445,9 @@ def salvar_bigdata(jogo_api, stats):
     try:
         fid = str(jogo_api['fixture']['id'])
         if fid in st.session_state['jogos_salvos_bigdata']: return 
-
         s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         def sanitize(val): return str(val) if val is not None else "0"
-        
         rate_h = 0; rate_a = 0
         if 'API_KEY' in st.session_state:
             try:
@@ -476,7 +467,6 @@ def salvar_bigdata(jogo_api, stats):
                             if is_h: rate_h = media
                             else: rate_a = media
             except: pass
-
         item_bigdata = {
             'fid': fid,
             'data_hora': get_time_br().strftime('%Y-%m-%d %H:%M'),
@@ -720,44 +710,29 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     chutes_area_fora = gv(s2, 'Shots insidebox')
     escanteios = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
     posse_casa = str(gv(s1, 'Ball Possession')).replace('%', '')
-    dados_ricos = extrair_dados_completos(stats_raw)
     
-    # --- LÓGICA DINÂMICA (IA SABE SE É OVER OU UNDER) ---
-    estrategias_under = ["Morno", "Under", "Vovô", "Segurar"]
-    eh_under = any(x in estrategia for x in estrategias_under)
-    
-    if eh_under:
-        objetivo_ia = "OBJETIVO: Validar entrada em UNDER (MENOS GOLS) ou BACK FAVORITO SEGURANDO JOGO. CRITÉRIO DE SUCESSO: Jogo travado, lento, sem chances claras."
-    else:
-        objetivo_ia = "OBJETIVO: Validar entrada em OVER GOLS (MAIS GOLS). CRITÉRIO DE SUCESSO: Jogo frenético, pressão, chutes na área."
-
-    # --- NOVO PROMPT SNIPER (EFICIÊNCIA) ---
+    # --- PROMPT ATUALIZADO (TÉCNICO E DIRETO) ---
     prompt = f"""
-    Atue como um ANALISTA DE ELITE (Foco: Eficiência vs Volume).
-    {objetivo_ia}
-
+    Atue como um ANALISTA SÊNIOR DE FUTEBOL. Seja direto, técnico e assertivo.
+    
     DADOS DO JOGO: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
     Estratégia: {estrategia} | Time Favorável: {time_favoravel}
 
-    ESTATÍSTICAS REAIS:
-    - Pressão: Casa {rh} x {ra} Visitante
-    - Chutes no Gol (SOG): Casa {gv(s1, 'Shots on Goal')} x {gv(s2, 'Shots on Goal')} Visitante
+    ESTATÍSTICAS AO VIVO:
+    - Pressão (Momentum): Casa {rh} x {ra} Visitante
+    - Chutes no Gol: Casa {gv(s1, 'Shots on Goal')} x {gv(s2, 'Shots on Goal')} Visitante
     - Chutes na Área: Casa {chutes_area_casa} x {chutes_area_fora} Visitante
-    - Escanteios: {escanteios}
-    - Posse: {posse_casa}%
+    - Escanteios Totais: {escanteios}
+    
+    CONTEXTO HISTÓRICO: {extra_context}
 
-    CONTEXTO: {extra_context}
+    TAREFA:
+    1. Decida se aprova a entrada.
+    2. Se APROVAR, dê uma explicação TÉCNICA de 1 linha sobre POR QUE vai bater. (Ex: "Defesa do time da casa está exposta e o visitante está com 80% de precisão nos chutes").
+    3. Se reprovar (Arriscado), diga o motivo do risco (Ex: "Muita posse de bola inútil, sem chutes reais").
 
-    ⚠️ REGRAS DE DECISÃO (CALIBRAGEM FINA):
-    1. APROVADO (PADRÃO OURO): Pressão alta + Muitas finalizações + Goleiro trabalhando.
-    2. APROVADO (SNIPER): Se o time tem POUCOS ataques, mas MUITOS chutes no gol (Ex: 4 chutes, 3 no gol), APROVE! Isso é eficiência, não risco.
-    3. ARRISCADO (FALSO DOMÍNIO): Muita posse, muitos ataques perigosos, mas ZERO chutes no gol ou chutes para fora. (O famoso "Arame Liso").
-    4. ARRISCADO (JOGO MORTO): Ninguém chuta, ninguém ataca.
-
-    RESUMO: Não tenha medo de aprovar jogos com poucos chutes se a pontaria estiver alta.
-
-    FORMATO:
-    Aprovado/Arriscado - [Motivo focado na eficiência]
+    FORMATO DE SAÍDA:
+    Aprovado/Arriscado - [Explicação Técnica e Assertiva]
     PROB: [0-100]%
     """
 
@@ -770,7 +745,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         st.session_state['gemini_usage']['used'] += 1
         texto_completo = response.text.strip().replace("**", "").replace("*", "")
         
-        # --- CORREÇÃO DE FORMATAÇÃO DA PROBABILIDADE ---
         prob_str = "N/A"
         match_prob = re.search(r'PROB:\s*(\d+[\.,]?\d*)', texto_completo)
         
@@ -786,12 +760,11 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
         
         motivo_sujo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
-        primeira_frase = motivo_sujo.split('.')[0] + "."
-        if len(primeira_frase) > 120: primeira_frase = primeira_frase[:117] + "..."
-        motivo = primeira_frase.strip()
+        motivo = motivo_sujo.split('.')[0] + "." # Pega primeira frase
 
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
-        return f"\n🤖 <b>ANÁLISE QUÂNTICA:</b>\n{emoji} <b>{veredicto.upper()}</b> - <i>{motivo}</i>", prob_str
+        # RETORNO FORMATADO E LIMPO
+        return f"\n🤖 <b>ANÁLISE TÉCNICA:</b>\n{emoji} <b>{veredicto.upper()}</b>\n📝 <i>{motivo}</i>", prob_str
     
     except Exception as e: return "", "N/A"
 
@@ -923,7 +896,7 @@ def otimizar_estrategias_existentes_ia():
                                f"Taxa de Gols (Jogos não 0x0): {taxa_gols_bd:.1f}%.")
         except: bigdata_context = "BigData Offline"
 
-    # 3. Prompt Agressivo/Assertivo
+    # 3. Prompt Agressivo/Assertivo (Analisa TODAS as estratégias)
     prompt = f"""
     ATUE COMO: Auditor Sênior de Algoritmos de Apostas (Sem polidez, direto ao ponto).
     
@@ -983,28 +956,22 @@ def gerar_insights_matinais_ia(api_key):
                               f"Histórico HT (Over 0.5 HT): Casa {stats_hist['home']['over05_ht']}% / Fora {stats_hist['away']['over05_ht']}% | "
                               f"Histórico FT (Over 1.5): Casa {stats_hist['home']['over15_ft']}% / Fora {stats_hist['away']['over15_ft']}%\n")
 
+        # --- PROMPT ATUALIZADO (SEM POLUIÇÃO VISUAL) ---
         prompt = f"""
-        Atue como SNIPER DE GOLS (Especialista em Over 0.5 HT/FT).
-        
-        DADOS DOS JOGOS DE HOJE:
-        {dados_para_ia}
-        
-        TAREFA: Selecione as 3 melhores oportunidades para GOL (Apenas GOL).
-        
-        REGRAS RÍGIDAS:
-        1. MERCADO ALVO: Foco total em **Over 0.5 Gols (HT ou FT)**.
-        2. NÃO indique Over 1.5 ou 2.5 como aposta principal. Queremos segurança (Green fácil).
-        3. JUSTIFICATIVA: Explique POR QUE vai sair gol (Ex: "Os dois times têm 80% de gols no HT").
-        
-        FORMATO DE SAÍDA:
-        ⚽ **Jogo:** Time A x Time B
-        🎯 **Palpite:** Over 0.5 Gols [HT ou FT]
-        📝 **Por quê?** [Explicação baseada nos % fornecidos]
+        Atue como SNIPER DE GOLS.
+        DADOS: {dados_para_ia}
+        TAREFA: 3 melhores oportunidades Over 0.5 Gols.
+        FORMATO (SEM USAR ASTERISCOS OU NEGRITO, USE EMOJIS):
+        ⚽ Jogo: Time A x Time B
+        🎯 Palpite: Over 0.5 Gols [HT ou FT]
+        📝 Motivo: [Explicação curta e técnica]
         """
-        
         resp = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
-        return resp.text
+        
+        # LIMPEZA FORÇADA DE MARKDOWN
+        texto_limpo = resp.text.replace("**", "").replace("*", "").replace("##", "")
+        return texto_limpo
     except Exception as e: return f"Erro Matinal: {e}"
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
@@ -1257,7 +1224,7 @@ def conferir_resultados_sniper(jogos_live, api_key):
         
         res_final = '❌ RED'
         try:
-             if tg >= 2: res_final = '✅ GREEN'
+             if tg >= 1: res_final = '✅ GREEN' # Ajustado para Over 0.5 (Sniper Matinal)
              else: res_final = '❌ RED'
         except: pass
             
@@ -1733,6 +1700,22 @@ if st.session_state.ROBO_LIGADO:
                         
                         if adicionar_historico(item):
                             try:
+                                # === CÁLCULO DE ASSERTIVIDADE HISTÓRICA ===
+                                txt_winrate_historico = ""
+                                try:
+                                    df_hist_calc = st.session_state.get('historico_full', pd.DataFrame())
+                                    if not df_hist_calc.empty:
+                                        df_strat = df_hist_calc[df_hist_calc['Estrategia'] == s['tag']]
+                                        df_strat_closed = df_strat[df_strat['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+                                        total_s = len(df_strat_closed)
+                                        if total_s > 0:
+                                            greens_s = len(df_strat_closed[df_strat_closed['Resultado'].str.contains('GREEN')])
+                                            winrate_s = (greens_s / total_s) * 100
+                                            cor_w = "🟢" if winrate_s >= 70 else "🟡" if winrate_s >= 50 else "🔴"
+                                            txt_winrate_historico = f" | {cor_w} <b>Histórico: {winrate_s:.0f}%</b>"
+                                except: pass
+                                # ==========================================
+
                                 if prob_txt != "..." and prob_txt != "N/A": prob_final_display = f"\n🔮 <b>Probabilidade IA: {prob_txt}</b>"
                                 else: prob_final_display = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
                                 
@@ -1741,27 +1724,22 @@ if st.session_state.ROBO_LIGADO:
                                     h_stats = dados_50['home']; a_stats = dados_50['away']
                                     foco = "Freq. Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
                                     texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
-                                msg = (f"<b>🚨 SINAL {s['tag'].upper()}</b>\n\n🏆 <b>{liga_safe}</b>\n⚽ {home_safe} 🆚 {away_safe}\n⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n{s['ordem']}\n{destaque_odd}\n📊 <i>Dados: {s['stats']}</i>\n⚽ Médias (10j): Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}\n{prob_final_display}{opiniao_txt}")
+                                msg = (f"<b>🚨 SINAL {s['tag'].upper()}</b>{txt_winrate_historico}\n\n🏆 <b>{liga_safe}</b>\n⚽ {home_safe} 🆚 {away_safe}\n⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n{s['ordem']}\n{destaque_odd}\n📊 <i>Dados: {s['stats']}</i>\n⚽ Médias (10j): Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}\n{prob_final_display}{opiniao_txt}")
                                 
-                                # === LÓGICA DE ENVIO AJUSTADA (DATA DRIVEN) ===
+                                # === LÓGICA DE ENVIO ===
                                 sent_status = False
-                                
-                                # 1. Envia APROVADOS (Sinal Verde)
                                 if opiniao_db == "Aprovado":
                                     msg = f"✅ <b>SINAL APROVADO (Confiança Alta)</b>\n" + msg
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
                                     st.toast(f"✅ Sinal Enviado: {s['tag']}")
 
-                                # 2. Envia ARRISCADOS (Sinal Amarelo) - Aproveitando os 66% de Winrate
                                 elif opiniao_db == "Arriscado":
                                     msg = f"⚠️ <b>SINAL MODERADO (Oportunidade)</b>\n" + msg
                                     msg += "\n<i>💡 Obs: A IA detectou risco, entre com cautela (Stake Reduzida).</i>"
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
                                     st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
-
-                                # 3. Retém REPROVADOS
                                 else:
                                     st.toast(f"🛑 Sinal Retido (IA: {opiniao_db}): {s['tag']}")
 
