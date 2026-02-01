@@ -1249,15 +1249,27 @@ def enviar_alerta_alternativos(token, chat_ids, api_key):
             msg += "\n⚠️ <i>Regra: Aposte no 'Goleiro do Time', não no nome do jogador.</i>"
         enviar_telegram(token, chat_ids, msg)
         
-        # Salva no histórico para BI
+        # Extrai a linha (ex: 4.5) para referência futura
+        linha_alvo = "0"
+        try:
+            linha_alvo = re.findall(r"[-+]?\d*\.\d+|\d+", s['indicacao'])[0]
+        except: pass
+
+        # Salva no histórico para BI (COM ÍCONES AGORA)
         item_alt = {
-            "FID": f"ALT_{s['fid']}", "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": "08:05",
-            "Liga": "Mercado Alternativo", "Jogo": s['jogo'], "Placar_Sinal": "0x0",
-            "Estrategia": s['titulo'].replace("🟨 ", "").replace("🧤 ", ""),
-            "Resultado": "Pendente", "Opiniao_IA": "Aprovado"
+            "FID": f"ALT_{s['fid']}", 
+            "Data": get_time_br().strftime('%Y-%m-%d'), 
+            "Hora": "08:05",
+            "Liga": "Mercado Alternativo", 
+            "Jogo": s['jogo'], 
+            "Placar_Sinal": f"Meta: {linha_alvo}", # Salva a meta (ex: 4.5) em vez de 0x0
+            "Estrategia": s['titulo'], # CORREÇÃO: Mantém o ícone (🟨 ou 🧤)
+            "Resultado": "Pendente", # Continua pendente até criarmos o "Verificador de Cartões"
+            "Opiniao_IA": "Aprovado",
+            "Probabilidade": "Alta"
         }
         adicionar_historico(item_alt)
-        time.sleep(2) # Pausa entre mensagens
+        time.sleep(2) 
 
     st.session_state['alternativos_enviado'] = True
 
@@ -1290,6 +1302,86 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
         multipla_obj = {"id_unico": id_dupla, "tipo": "LIVE", "fids": ids_save, "nomes": nomes_save, "gols_ref": gols_ref_save, "status": "Pendente", "data": get_time_br().strftime('%Y-%m-%d')}
         if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
         st.session_state['multiplas_pendentes'].append(multipla_obj)
+
+def verificar_mercados_alternativos(api_key):
+    """
+    Função Auto-Auditável: Confere se os sinais de Cartões e Goleiros bateram.
+    """
+    # 1. Filtra apenas os pendentes alternativos
+    hist = st.session_state.get('historico_sinais', [])
+    pendentes = [s for s in hist if s['Liga'] == 'Mercado Alternativo' and s['Resultado'] == 'Pendente']
+    
+    if not pendentes: return
+    
+    updates_buffer = []
+    
+    for s in pendentes:
+        try:
+            # Recupera o ID real (Remove o "ALT_")
+            fid_real = str(s['FID']).replace("ALT_", "")
+            
+            # Tenta extrair a meta (Ex: "Meta: 4.5" -> 4.5)
+            meta = 0.0
+            try:
+                meta = float(str(s['Placar_Sinal']).split(':')[1].strip())
+            except: continue # Se não tiver meta legível, pula
+
+            # Consulta API para ver se o jogo acabou
+            url = "https://v3.football.api-sports.io/fixtures"
+            r = requests.get(url, headers={"x-apisports-key": api_key}, params={"id": fid_real}).json()
+            
+            if not r.get('response'): continue
+            jogo = r['response'][0]
+            status = jogo['fixture']['status']['short']
+            
+            # Só conferimos se o jogo terminou (FT, AET, PEN) para economizar requisições
+            if status not in ['FT', 'AET', 'PEN']: continue
+            
+            # Busca Estatísticas Detalhadas
+            url_stats = "https://v3.football.api-sports.io/fixtures/statistics"
+            r_stats = requests.get(url_stats, headers={"x-apisports-key": api_key}, params={"fixture": fid_real}).json()
+            
+            if not r_stats.get('response'): continue
+            
+            # Processa Estatísticas
+            stats_home = r_stats['response'][0]['statistics']
+            stats_away = r_stats['response'][1]['statistics']
+            
+            def gv(lista, tipo): return next((x['value'] or 0 for x in lista if x['type'] == tipo), 0)
+
+            resultado_final = "❌ RED" # Assume Red até provar contrário
+
+            # --- LÓGICA PARA CARTÕES ---
+            if "CARTÕES" in s['Estrategia'] or "SNIPER" in s['Estrategia']:
+                cards_h = gv(stats_home, "Yellow Cards") + gv(stats_home, "Red Cards")
+                cards_a = gv(stats_away, "Yellow Cards") + gv(stats_away, "Red Cards")
+                total_cards = cards_h + cards_a
+                
+                if total_cards > meta: resultado_final = "✅ GREEN"
+                # Atualiza o placar visual para mostrar quantos saíram
+                s['Placar_Sinal'] = f"Meta: {meta} | Saiu: {total_cards}"
+
+            # --- LÓGICA PARA GOLEIROS (DEFESAS) ---
+            elif "DEFESAS" in s['Estrategia'] or "MURALHA" in s['Estrategia']:
+                saves_h = gv(stats_home, "Goalkeeper Saves")
+                saves_a = gv(stats_away, "Goalkeeper Saves")
+                
+                # Como a estratégia é "Aposte no Goleiro do time X", se QUALQUER UM dos dois goleiros
+                # bateu a meta (geralmente o do time pressionado), consideramos Green.
+                max_saves = max(saves_h, saves_a)
+                
+                if max_saves >= meta: resultado_final = "✅ GREEN"
+                s['Placar_Sinal'] = f"Meta: {meta} | Defesas: {max_saves}"
+
+            # Aplica o resultado
+            s['Resultado'] = resultado_final
+            updates_buffer.append(s)
+            
+        except Exception as e:
+            print(f"Erro ao validar alternativo {s['FID']}: {e}")
+
+    # Salva tudo no banco de dados se houve mudança
+    if updates_buffer: atualizar_historico_ram(updates_buffer)
 
 def validar_multiplas_pendentes(jogos_live, api_key, token, chat_ids):
     if 'multiplas_pendentes' not in st.session_state or not st.session_state['multiplas_pendentes']: return
@@ -1765,9 +1857,12 @@ if st.session_state.ROBO_LIGADO:
             conferir_resultados_sniper(jogos_live, safe_api) 
             verificar_var_rollback(jogos_live, safe_token, safe_chat)
             
-            # 2. NOVAS ROTINAS (IA + MÚLTIPLAS + JUIZ)
+            # 2. NOVAS ROTINAS
             verificar_multipla_quebra_empate(jogos_live, safe_token, safe_chat)
             validar_multiplas_pendentes(jogos_live, safe_api, safe_token, safe_chat)
+            
+            # [ADICIONE ESTA LINHA AQUI]:
+            verificar_mercados_alternativos(safe_api)
 
         radar = []; agenda = []; candidatos_multipla = []; ids_no_radar = []
         if not api_error:
