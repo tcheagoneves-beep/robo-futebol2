@@ -1401,8 +1401,86 @@ def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
     enviar_telegram(token, chat_ids, msg)
 
 def enviar_relatorio_bi(token, chat_ids):
-    insight_text = analisar_bi_com_ia()
-    enviar_telegram(token, chat_ids, f"📈 <b>RELATÓRIO BI AVANÇADO</b>\n\n🧠 <b>INSIGHT IA:</b>\n{insight_text}")
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return
+
+    try:
+        # 1. PREPARAÇÃO DOS DADOS
+        df = df.copy()
+        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
+        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
+        # Remove duplicatas de sinal repetido, mantendo o último status
+        df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
+        
+        agora = get_time_br().date()
+        hoje = pd.to_datetime(agora)
+        
+        # Filtros de Data
+        d_hoje = df[df['Data_DT'] == hoje]
+        d_semana = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
+        d_mes = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
+        
+        # Função auxiliar de formatação "10G - 2R (83%)"
+        def get_placar_str(d_slice):
+            if d_slice.empty: return "Sem dados"
+            finalizados = d_slice[d_slice['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+            g = finalizados['Resultado'].str.contains('GREEN').sum()
+            r = finalizados['Resultado'].str.contains('RED').sum()
+            t = g + r
+            wr = (g/t*100) if t > 0 else 0
+            return f"<b>{g}G - {r}R</b> ({wr:.1f}%)"
+
+        # 2. ESTATÍSTICAS DA IA (APROVADAS)
+        def get_ia_stats(d_slice):
+            if 'Opiniao_IA' not in d_slice.columns: return "N/A"
+            aprovadas = d_slice[d_slice['Opiniao_IA'] == 'Aprovado']
+            return get_placar_str(aprovadas)
+
+        # 3. TOP 5 ESTRATÉGIAS (HISTÓRICO GERAL)
+        top_strats_txt = ""
+        try:
+            df_closed = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
+            if not df_closed.empty:
+                ranking = df_closed.groupby('Estrategia')['Resultado'].apply(
+                    lambda x: (x.str.contains('GREEN').sum() / len(x) * 100)
+                ).sort_values(ascending=False).head(5)
+                
+                lista_top = []
+                for strat, wr in ranking.items():
+                    qtd = len(df_closed[df_closed['Estrategia'] == strat])
+                    lista_top.append(f"▪️ {strat}: {wr:.0f}% ({qtd}j)")
+                top_strats_txt = "\n".join(lista_top)
+        except: top_strats_txt = "Dados insuficientes"
+
+        # 4. TEXTO INTELIGENTE DA IA (O que ela achou do dia)
+        insight_text = analisar_bi_com_ia()
+
+        # 5. MONTAGEM DO RELATÓRIO FINAL
+        msg = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>
+
+📆 <b>DIÁRIO (HOJE):</b>
+• Geral: {get_placar_str(d_hoje)}
+• 🤖 IA Aprovados: {get_ia_stats(d_hoje)}
+
+🗓 <b>SEMANAL (7 Dias):</b>
+• Geral: {get_placar_str(d_semana)}
+• 🤖 IA Aprovados: {get_ia_stats(d_semana)}
+
+📅 <b>MENSAL (30 Dias):</b>
+• Geral: {get_placar_str(d_mes)}
+
+🏆 <b>TOP 5 ESTRATÉGIAS (Série Histórica):</b>
+{top_strats_txt}
+
+🧠 <b>INSIGHT IA (Análise do Dia):</b>
+{insight_text}
+"""
+        enviar_telegram(token, chat_ids, msg)
+        
+    except Exception as e:
+        print(f"Erro BI: {e}")
+        # Fallback caso dê erro no cálculo, manda pelo menos o texto
+        enviar_telegram(token, chat_ids, f"📈 RELATÓRIO BI (Simplificado)\n\n{analisar_bi_com_ia()}")
 
 def verificar_automacao_bi(token, chat_ids, stake_padrao):
     agora = get_time_br()
@@ -2066,3 +2144,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
