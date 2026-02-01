@@ -1021,7 +1021,9 @@ def otimizar_estrategias_existentes_ia():
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
-    except Exception as e: return f"Erro IA: {e}"def gerar_insights_matinais_ia(api_key):
+    except Exception as e: return f"Erro IA: {e}"
+
+def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
