@@ -960,61 +960,60 @@ def criar_estrategia_nova_ia():
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     
-    # 1. Carrega dados
+    # 1. Carrega dados reais do usuário
     df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Sem histórico suficiente para tuning."
+    if df.empty: return "Sem histórico suficiente para análise quantitativa."
     
     try:
-        # Prepara colunas
+        # Prepara dados para a IA ler
         df['Is_Green'] = df['Resultado'].str.contains('GREEN', na=False)
         df['Is_Red'] = df['Resultado'].str.contains('RED', na=False)
         df_closed = df[df['Is_Green'] | df['Is_Red']].copy()
         
         if df_closed.empty: return "Sem dados finalizados."
 
-        # 2. SELEÇÃO DA "ZONA DE OTIMIZAÇÃO"
-        # Agrupa por Estratégia (ignorando liga por enquanto para ver a lógica geral)
+        # Agrupa estatísticas reais
         rank = df_closed.groupby(['Estrategia']).agg(
-            Total=('FID', 'count'),
+            Jogos=('FID', 'count'),
             Reds=('Is_Red', 'sum'),
             Greens=('Is_Green', 'sum')
         ).reset_index()
         
-        rank['Winrate'] = (rank['Greens'] / rank['Total']) * 100
+        rank['Winrate'] = (rank['Greens'] / rank['Jogos']) * 100
         
-        # FILTRO INTELIGENTE:
-        # Queremos estratégias com VOLUME (>=5 jogos) e que não sejam perfeitas nem horríveis (50% < Winrate < 80%)
-        # É aqui que mora a oportunidade de "Apertar o parafuso"
-        oportunidades = rank[(rank['Total'] >= 5) & (rank['Winrate'] >= 40) & (rank['Winrate'] <= 85)].sort_values('Total', ascending=False).head(4)
+        # Filtra estratégias que tem jogo suficiente para analisar (mínimo 5 jogos)
+        alvos = rank[rank['Jogos'] >= 5].sort_values('Reds', ascending=False).head(4)
         
-        if oportunidades.empty: return "Suas estratégias estão ou perfeitas ou muito ruins. Nenhuma na zona de 'ajuste fino' encontrada."
+        if alvos.empty: return "Volume de dados insuficiente para gerar estatística precisa (Mínimo 5 jogos por estratégia)."
         
-        dados_txt = oportunidades.to_string(index=False)
+        dados_reais = alvos.to_string(index=False)
         
-    except Exception as e: return f"Erro dados: {e}"
+    except Exception as e: return f"Erro processamento dados: {e}"
 
-    # 3. O PROMPT DE ENGENHARIA REVERSA
+    # 3. O PROMPT "DIRETOR DE DADOS" (Comando Agressivo)
     prompt = f"""
-    ATUE COMO ENGENHEIRO DE ALGORITMOS (QUANT TRADER).
-    O Diretor quer refinar as estratégias que estão "OK", mas poderiam ser EXCELENTES.
+    ATUE COMO DATA SCIENTIST SÊNIOR (Focado em Futebol).
     
-    DADOS DE PERFORMANCE (Estratégias com muita atividade, mas com ruído/Reds):
-    {dados_txt}
+    DADOS REAIS DA PERFORMANCE DO USUÁRIO:
+    {dados_reais}
     
-    TAREFA:
-    Para cada estratégia listada, sugira uma MUDANÇA DE PARÂMETRO (Tuning) para filtrar os sinais ruins e aumentar a assertividade.
+    O Diretor exige números exatos. Nada de teoria.
     
-    Você deve usar a lógica do futebol. Exemplo:
-    - Se a estratégia é de "Gols", sugira aumentar a exigência de Chutes no Gol.
-    - Se é "Canto", sugira exigir mais Pressão (Appm).
-    - Se é "Zebra", sugira esperar a Odd subir mais.
+    REGRAS ESTRITAS PARA A RESPOSTA:
+    1. PROIBIDO usar "X", "Y" ou variáveis abstratas. Use NÚMEROS.
+    2. Se você não tem o dado exato do chute, ESTIME com base na média da liga/estratégia (Big Data Global).
+    3. Para cada estratégia listada acima, me dê:
+       - O Diagnóstico (Winrate atual).
+       - A AÇÃO EXATA: "Mude o filtro de Chutes de [Número Atual Estimado] para [Novo Número]."
+       - A PROJEÇÃO: "Com base no Big Data, isso deve subir a assertividade para aprox. [N]%."
     
-    FORMATO DA RESPOSTA (Para cada estratégia):
-    1. 📊 **Análise**: "A estratégia X tem 60% de acerto. Está entrando em jogos muito 'mornos'."
-    2. 🔧 **Ajuste de Variável (De X para Y)**: "Atualmente entramos com X chutes. Sugiro aumentar a régua para Y chutes ou exigir Z ataques perigosos."
-    3. 💡 **Por que isso melhora?**: "Isso vai eliminar os jogos onde os times estão chutando de longe sem perigo real."
+    Exemplo de como eu quero:
+    "Estratégia: Janela de Ouro.
+    Problema: Winrate 55%.
+    Ação: Aumente o filtro de Ataques Perigosos de 0.5 para 1.0 por minuto.
+    Motivo: O Big Data mostra que 80% dos gols saem quando a pressão é acima de 1.0."
     
-    Seja técnico e proponha números.
+    Seja direto.
     """
     
     try:
