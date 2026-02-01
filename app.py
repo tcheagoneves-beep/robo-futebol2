@@ -571,7 +571,10 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
 def carregar_contexto_global_firebase():
     if not db_firestore: return "Firebase Offline."
     try:
-        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(500).stream()
+        # --- AJUSTE REALIZADO: LIMIT 20.000 ---
+        # A IA agora analisará uma base massiva de dados
+        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(20000).stream()
+        
         stats_gerais = {"total": 0, "over05": 0, "gols_total": 0}
         for d in docs:
             dd = d.to_dict()
@@ -582,12 +585,14 @@ def carregar_contexto_global_firebase():
                 if (gh + ga) > 0: stats_gerais["over05"] += 1
                 stats_gerais["gols_total"] += (gh + ga)
             except: pass
+            
         if stats_gerais["total"] == 0: return "Sem dados no Firebase."
+        
         media_gols = stats_gerais["gols_total"] / stats_gerais["total"]
         pct_over05 = (stats_gerais["over05"] / stats_gerais["total"]) * 100
-        return f"BIG DATA (Base {stats_gerais['total']} jogos): Média de Gols {media_gols:.2f} | Taxa Over 0.5 Global: {pct_over05:.1f}%."
+        
+        return f"BIG DATA (Base Massiva {stats_gerais['total']} jogos): Média de Gols {media_gols:.2f} | Taxa Over 0.5 Global: {pct_over05:.1f}%."
     except Exception as e: return f"Erro Firebase: {e}"
-
 def gerar_multipla_matinal_ia(api_key):
     if not IA_ATIVADA: return None, []
     hoje = get_time_br().strftime('%Y-%m-%d')
