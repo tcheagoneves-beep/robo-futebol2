@@ -960,35 +960,58 @@ def criar_estrategia_nova_ia():
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     
-    # 1. Carrega dados de performance
+    # 1. Carrega dados
     df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Sem histórico para otimizar."
+    if df.empty: return "Sem histórico suficiente para auditoria técnica."
     
-    # 2. Prepara resumo de erros (Reds)
+    # 2. PREPARAÇÃO DOS DADOS (O "Trabalho Sujo" de Análise)
     try:
-        df_reds = df[df['Resultado'].str.contains('RED', na=False)]
-        if df_reds.empty: return "Sem REDs suficientes para análise de correções."
+        # Cria colunas auxiliares
+        df['Is_Green'] = df['Resultado'].str.contains('GREEN', na=False)
+        df['Is_Red'] = df['Resultado'].str.contains('RED', na=False)
         
-        # Agrupa onde estamos errando mais
-        piores_ligas = df_reds['Liga'].value_counts().head(3).to_dict()
-        piores_strats = df_reds['Estrategia'].value_counts().head(3).to_dict()
-        exemplo_red = df_reds.iloc[0][['Liga', 'Jogo', 'Estrategia', 'Placar_Sinal']].to_dict()
+        # Filtra apenas finalizados
+        df_closed = df[df['Is_Green'] | df['Is_Red']].copy()
         
-        resumo_erros = f"Top Ligas com Red: {piores_ligas} | Piores Estratégias: {piores_strats} | Exemplo real de Red: {exemplo_red}"
-    except:
-        return "Erro ao processar dados para otimização."
+        if df_closed.empty: return "Sem jogos finalizados para auditar."
 
+        # Identifica o "Calcanhar de Aquiles" (Combinação Estratégia + Liga com pior desempenho)
+        # Agrupa por Estratégia e Liga -> Calcula Winrate e Prejuízo (Reds)
+        rank = df_closed.groupby(['Estrategia', 'Liga']).agg(
+            Total=('FID', 'count'),
+            Reds=('Is_Red', 'sum'),
+            Greens=('Is_Green', 'sum')
+        ).reset_index()
+        
+        # Calcula Winrate
+        rank['Winrate'] = (rank['Greens'] / rank['Total']) * 100
+        
+        # Filtra apenas onde temos volume (pelo menos 3 jogos) e Winrate ruim (< 50%)
+        gargalos = rank[(rank['Total'] >= 3) & (rank['Winrate'] < 50)].sort_values('Winrate', ascending=True).head(5)
+        
+        if gargalos.empty: return "O sistema está estável. Nenhuma correção crítica detectada nos dados atuais."
+        
+        dados_formatados = gargalos.to_string(index=False)
+        
+    except Exception as e:
+        return f"Erro ao processar dados: {e}"
+
+    # 3. O PROMPT DE DIRETORIA (Direto ao ponto)
     prompt = f"""
-    ATUE COMO GESTOR DE RISCO E PERFORMANCE.
+    ATUE COMO CTO (CHIEF TECHNOLOGY OFFICER) DO NEVES ANALYTICS.
+    Sua função não é dar conselhos, é DAR A SOLUÇÃO TÉCNICA PRONTA.
     
-    SITUAÇÃO ATUAL (Onde estamos errando):
-    {resumo_erros}
+    DADOS DE PREJUÍZO (Gargalos detectados no banco de dados):
+    {dados_formatados}
     
-    TAREFA:
-    Crie um "Plano de Melhoria" imediato.
-    1. Quais ligas devemos banir ou colocar em observação?
-    2. Qual ajuste fino fazer na estratégia que mais está dando Red?
-    3. Sugira um novo filtro de segurança.
+    O Diretor exige uma ação imediata para estancar esse sangramento.
+    
+    SUA RESPOSTA DEVE CONTER APENAS:
+    1. 🚫 **AÇÃO DE BLOQUEIO**: Diga explicitamente qual Liga deve ser removida de qual Estratégia.
+    2. 📉 **MOTIVO TÉCNICO**: "Essa combinação causou X Reds em Y jogos (Winrate Z%). Matemeticamente insustentável."
+    3. 💻 **CÓDIGO SUGERIDO**: Forneça o trecho exato de código Python (if/else) para eu colar no meu filtro de estratégias para bloquear isso automaticamente.
+    
+    Seja breve, técnico e resolutivo.
     """
     
     try:
@@ -996,8 +1019,7 @@ def otimizar_estrategias_existentes_ia():
         st.session_state['gemini_usage']['used'] += 1
         return response.text
     except Exception as e:
-        return f"Erro na otimização: {e}"
-
+        return f"Erro na IA: {e}"
 def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
