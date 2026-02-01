@@ -259,7 +259,6 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: 
         st.session_state['precisa_salvar'] = True
         return False
-
 def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
     id_norm = normalizar_id(id_liga)
@@ -733,7 +732,6 @@ def buscar_rating_inteligente(api_key, team_id):
                 if notas: return f"{(sum(notas)/len(notas)):.2f}"
         return "N/A"
     except: return "N/A"
-
 @st.cache_data(ttl=120) 
 def buscar_agenda_cached(api_key, date_str):
     try:
@@ -776,7 +774,7 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0, tempo_
         elif "Golden" in strategy_name and total_gols_atual == 1:
             target_markets = ["match goals", "goals over/under"]; target_line = 1.5
         else:
-            ht_strategies = ["Relâmpago", "Massacre", "Choque", "Briga", "Morno"]
+            ht_strategies = ["Relâmpago", "Massacre", "Choque", "Briga", "Morno", "HT Valor"]
             is_ht = any(x in strategy_name for x in ht_strategies)
             target_markets = ["1st half", "first half"] if is_ht else ["match goals", "goals over/under"]
             target_line = total_gols_atual + 0.5
@@ -981,6 +979,25 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         SINAIS = []
         golden_bet_ativada = False
 
+        # -----------------------------------------------------------
+        # ESTRATÉGIA: HT VALOR (MÉTODO GUILHERME - 70% + LIVE)
+        # -----------------------------------------------------------
+        if 12 <= tempo <= 25 and gh == 0 and ga == 0:
+            # Filtro de Atividade e Jogo Vivo
+            tem_atividade = (sog_h + sog_a >= 1 or (sh_h + sh_a) >= 3) and (ck_h + ck_a >= 2)
+            jogo_vivo = (rh >= 1 or ra >= 1) 
+
+            if tem_atividade and jogo_vivo:
+                SINAIS.append({
+                    "tag": "💎 HT Valor",
+                    "ordem": "👉 <b>FAZER:</b> Over 0.5 HT (Buscar Odd > 1.78)\n✅ <b>Critério:</b> 0x0 + Volume Ofensivo + Histórico 70%",
+                    "stats": f"🔥 {sh_h+sh_a} Chutes | ⛳ {ck_h+ck_a} Cantos",
+                    "rh": rh, 
+                    "ra": ra, 
+                    "favorito": "GOLS"
+                })
+        # -----------------------------------------------------------
+
         if 65 <= tempo <= 75:
             if ((rh >= 3 and sog_h >= 4) or (ra >= 3 and sog_a >= 4)) and (total_gols >= 1 or total_chutes >= 18):
                 SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito", "rh": rh, "ra": ra, "favorito": "GOLS"})
@@ -1021,7 +1038,6 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
 
         return SINAIS
     except: return []
-
 # ==============================================================================
 # 4. TELEGRAM, RESULTADOS, RELATÓRIOS E UI (FINAL)
 # ==============================================================================
@@ -1733,6 +1749,16 @@ if st.session_state.ROBO_LIGADO:
                                     h_stats = dados_50['home']; a_stats = dados_50['away']
                                     foco = "Freq. Over 1.5"; pct_h = h_stats.get('over15_ft', 0); pct_a = a_stats.get('over15_ft', 0)
                                     texto_validacao = f"\n\n🔎 <b>Raio-X (50 Jogos):</b>\n{foco}: Casa <b>{pct_h}%</b> | Fora <b>{pct_a}%</b>"
+                                    
+                                    # VISUAL DO HT VALOR 70%
+                                    if s['tag'] == "💎 HT Valor":
+                                        p_h_ht = h_stats.get('over05_ht', 0)
+                                        p_a_ht = a_stats.get('over05_ht', 0)
+                                        if p_h_ht >= 70 and p_a_ht >= 70:
+                                            texto_validacao += "\n🌟 <b>MÉTODO 70% VALIDADO! (TOP)</b>"
+                                        elif p_h_ht >= 70 or p_a_ht >= 70:
+                                            texto_validacao += "\n⭐ <b>MÉTODO 70% PARCIAL</b>"
+
                                 msg = (f"<b>🚨 SINAL {s['tag'].upper()}</b>{txt_winrate_historico}\n\n🏆 <b>{liga_safe}</b>\n⚽ {home_safe} 🆚 {away_safe}\n⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n{s['ordem']}\n{destaque_odd}\n📊 <i>Dados: {s['stats']}</i>\n⚽ Médias (10j): Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_validacao}\n{prob_final_display}{opiniao_txt}")
                                 
                                 sent_status = False
@@ -2054,4 +2080,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")
+        st.info("💡 Robô em espera. Configure na lateral.")        
