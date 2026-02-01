@@ -1165,6 +1165,24 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if 60 <= tempo <= 88 and abs(gh - ga) >= 3 and (total_chutes >= 14):
              SINAIS.append({"tag": "🔫 Lay Goleada", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "Goleada Viva", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
+        # 13. ⚡ Oportunidade Relâmpago (Criada pela IA)
+        # Lógica: Time estatisticamente pior (menos chutes) mas que ACORDOU (Momentum alto)
+        # Cenário: Jogo vira "Tudo ou Nada" -> Alta chance de gol ou contra-ataque fatal.
+        if 60 <= tempo <= 75:
+            diff_sog = sog_h - sog_a
+            # Cenário 1: Casa é o "pior" (tem 3 chutes a menos) mas tá pressionando (RH alto)
+            condicao_casa_reage = (diff_sog <= -3) and (rh >= 5) and (gh <= ga)
+            # Cenário 2: Visitante é o "pior" (tem 3 chutes a menos) mas tá pressionando (RA alto)
+            condicao_fora_reage = (diff_sog >= 3) and (ra >= 5) and (ga <= gh)
+
+            if condicao_casa_reage or condicao_fora_reage:
+                SINAIS.append({
+                    "tag": "⚡ Oportunidade Relâmpago",
+                    "ordem": gerar_ordem_gol(total_gols, "Limite"),
+                    "stats": "Caos Tático: Pressão do Azarão",
+                    "rh": rh, "ra": ra, "favorito": "GOLS"
+                })
+
         return SINAIS
     except: return []
 
