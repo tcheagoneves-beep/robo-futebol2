@@ -1056,19 +1056,40 @@ def momentum(fid, sog_h, sog_a):
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
+        # --- 1. EXTRAÇÃO DE DADOS (COM NOVOS INDICADORES DO BIG DATA) ---
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
         def get_v(l, t): v = next((x['value'] for x in l if x['type']==t), 0); return v if v is not None else 0
+
+        # Dados Básicos
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
+        
+        # Dados Avançados (Solicitados pelo Relatório de Otimização)
+        blk_h = get_v(stats_h, 'Blocked Shots'); blk_a = get_v(stats_a, 'Blocked Shots')
+        post_h = get_v(stats_h, 'Shots against goalbar') # Bola na trave
+
+        # Cálculos Derivados
+        total_chutes = sh_h + sh_a
+        total_chutes_gol = sog_h + sog_a
+        total_bloqueados = blk_h + blk_a
+        
+        # Cálculo de Chutes pra Fora (Total - Gol - Bloqueado)
+        chutes_fora_h = max(0, sh_h - sog_h - blk_h)
+        chutes_fora_a = max(0, sh_a - sog_a - blk_a)
+        total_fora = chutes_fora_h + chutes_fora_a
+
+        # Posse e Momentum
         posse_h = 50
         try: posse_h = int(str(next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")).replace('%', ''))
         except: pass
         posse_a = 100 - posse_h
+        
         rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
         gh = j['goals']['home']; ga = j['goals']['away']
-        total_gols = gh + ga; total_chutes = sh_h + sh_a
-        
+        total_gols = gh + ga
+
+        # Função auxiliar de texto
         def gerar_ordem_gol(gols_atuais, tipo="Over"):
             linha = gols_atuais + 0.5
             if tipo == "Over": return f"👉 <b>FAZER:</b> Entrar em GOLS (Over)\n✅ Aposta: <b>Mais de {linha} Gols</b>"
@@ -1079,41 +1100,63 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         SINAIS = []
         golden_bet_ativada = False
 
+        # --- ESTRATÉGIAS OTIMIZADAS PELO RELATÓRIO ---
+
+        # 1. 💎 GOLDEN BET (Otimizada)
+        # Ajuste: Exige zaga sofrendo (Bloqueios >= 5) para confirmar pressão real
         if 65 <= tempo <= 75:
             if ((rh >= 3 and sog_h >= 4) or (ra >= 3 and sog_a >= 4)) and (total_gols >= 1 or total_chutes >= 18):
-                SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "🔥 Pressão Favorito", "rh": rh, "ra": ra, "favorito": "GOLS"})
-                golden_bet_ativada = True
+                if total_bloqueados >= 5: # FILTRO NOVO
+                    SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🛡️ {total_bloqueados} Bloqueios (Pressão Real)", "rh": rh, "ra": ra, "favorito": "GOLS"})
+                    golden_bet_ativada = True
 
-        if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1 and total_chutes >= 22:
-            SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🔥 {total_chutes} Chutes Totais", "rh": rh, "ra": ra, "favorito": "GOLS"})
+        # 2. 💰 Janela de Ouro (Otimizada)
+        # Ajuste: Trocou 'Total de Chutes' por 'Chutes no Gol' (Qualidade > Quantidade)
+        if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1:
+            if total_chutes_gol >= 4: # FILTRO NOVO (Era total >= 22)
+                SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🔥 {total_chutes_gol} Chutes no Gol", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
+        # 3. ❄️ Jogo Morno (Mantida Original)
         if 55 <= tempo <= 75 and total_chutes <= 10 and (sog_h + sog_a) <= 2 and gh == ga:
             SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": f"👉 <b>FAZER:</b> Under Gols\n✅ Aposta: <b>Menos de {total_gols + 0.5} Gols</b>", "stats": "Jogo Travado", "rh": rh, "ra": ra, "favorito": "UNDER"})
 
+        # 4. 👴 Estratégia do Vovô (Mantida Original)
         if 70 <= tempo <= 80 and total_chutes < 18:
             diff = gh - ga
             if (diff == 1 and ra < 2 and posse_h >= 45) or (diff == -1 and rh < 2 and posse_a >= 45):
                  SINAIS.append({"tag": "👴 Estratégia do Vovô", "ordem": "👉 <b>FAZER:</b> Back Favorito (Segurar)\n✅ Aposta: <b>Vitória Seca</b>", "stats": "Controle Total", "rh": rh, "ra": ra, "favorito": "FAVORITO"})
 
+        # 5. 🟣 Porteira Aberta (Mantida Original)
         if tempo <= 30 and total_gols >= 2: 
             SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": "Jogo Aberto", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
+        # 6. ⚡ Gol Relâmpago (Mantida Original)
         if total_gols == 0 and (tempo <= 10 and total_chutes >= 3): 
             SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": gerar_ordem_gol(0, "HT"), "stats": "Início Intenso", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
+        # 7. 🟢 Blitz Casa / Visitante (Otimizada)
+        # Ajuste: Exige 'Zero bolas na trave' para evitar azar/variância negativa
         if tempo <= 60:
             if (gh <= ga and (rh >= 3 or sh_h >= 8)) or (ga <= gh and (ra >= 3 or sh_a >= 8)): 
-                SINAIS.append({"tag": "🟢 Blitz Casa" if gh <= ga else "🟢 Blitz Visitante", "ordem": gerar_ordem_gol(total_gols), "stats": "Pressão", "rh": rh, "ra": ra, "favorito": "GOLS"})
+                if post_h == 0: # FILTRO NOVO (Sem trave)
+                    tag_blitz = "🟢 Blitz Casa" if gh <= ga else "🟢 Blitz Visitante"
+                    SINAIS.append({"tag": tag_blitz, "ordem": gerar_ordem_gol(total_gols), "stats": "Pressão Limpa", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
+        # 8. 🏹 Tiroteio Elite (Mantida Original)
         if 15 <= tempo <= 25 and total_chutes >= 6 and (sog_h + sog_a) >= 3:
              SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": "Muitos Chutes", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
+        # 9. 🔥 O Catalisador (Mantida Original)
         if 20 <= tempo <= 35 and gh == 0 and ga == 0 and (sog_h + sog_a) >= 6:
             SINAIS.append({"tag": "🔥 O Catalisador (IA)", "ordem": "👉 <b>FAZER:</b> Over 0.5 HT\n✅ Aposta: <b>Mais de 0.5 Gols</b>", "stats": "Pontaria Alta", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-        if tempo >= 80 and abs(gh - ga) <= 1 and ((rh >= 4 and sh_h >= 14) or (ck_h + ck_a >= 10)):
-            SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pressão Final", "rh": rh, "ra": ra, "favorito": "GOLS"})
+        # 10. 💎 Sniper Final (Otimizada)
+        # Ajuste: Limita chutes pra fora (Max 6) para garantir pontaria
+        if tempo >= 80 and abs(gh - ga) <= 1:
+            if total_fora <= 6 and ((rh >= 4) or (total_chutes_gol >= 5)): # FILTRO NOVO
+                SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
+        # 11. 🔫 Lay Goleada (Mantida Original)
         if 60 <= tempo <= 88 and abs(gh - ga) >= 3 and (total_chutes >= 14):
              SINAIS.append({"tag": "🔫 Lay Goleada", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "Goleada Viva", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
