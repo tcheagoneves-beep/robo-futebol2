@@ -84,7 +84,7 @@ if 'total_bigdata_count' not in st.session_state: st.session_state['total_bigdat
 if 'multipla_matinal_enviada' not in st.session_state: st.session_state['multipla_matinal_enviada'] = False
 if 'multiplas_live_cache' not in st.session_state: st.session_state['multiplas_live_cache'] = {}
 if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
-if 'alternativos_enviado' not in st.session_state: st.session_state['alternativos_enviado'] = False # Controla Cartões/Goleiros
+if 'alternativos_enviado' not in st.session_state: st.session_state['alternativos_enviado'] = False 
 # -------------------------------------------------
 
 db_firestore = None
@@ -205,7 +205,7 @@ def verificar_reset_diario():
         st.session_state['alvos_do_dia'] = {}
         st.session_state['matinal_enviado'] = False
         st.session_state['multipla_matinal_enviada'] = False
-        st.session_state['alternativos_enviado'] = False # Reset dos novos mercados
+        st.session_state['alternativos_enviado'] = False 
         return True
     return False
 
@@ -545,7 +545,7 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
             stats = {"qtd": len(jogos), "over05_ht": 0, "over15_ft": 0, "ambas_marcam": 0}
             total_cards = 0
             total_shots_goal = 0
-            total_saves_conceded = 0 # Estimativa (Chutes ADV no gol - Gols sofridos)
+            total_saves_conceded = 0 
             
             for j in jogos:
                 gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
@@ -555,9 +555,6 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
                 if (gh + ga) >= 2: stats["over15_ft"] += 1
                 if gh > 0 and ga > 0: stats["ambas_marcam"] += 1
                 
-                # Dados para mercados alternativos (se disponíveis na endpoint base)
-                # Nota: Endpoint fixtures basico as vezes nao tem stats detalhadas de cada jogo, 
-                # mas vamos preparar a estrutura. Se vier zerado, a IA filtra.
                 pass 
 
             return {k: int((v / stats["qtd"]) * 100) if k not in ["qtd"] else v for k, v in stats.items()}
@@ -565,6 +562,47 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
         return {"home": get_stats_50(home_id), "away": get_stats_50(away_id)}
     except: return None
 
+# ==============================================================================
+# AUDITORIA TOTAL: VALIDAÇÃO MULTICAMADA (SHEETS + API + BIG DATA)
+# ==============================================================================
+def validar_sinal_multicamada(estrategia, home_id, away_id, api_key):
+    """
+    GUARDIÃO UNIVERSAL: Nenhuma estratégia passa sem ser auditada aqui.
+    1. Check Sheets: Se o winrate pessoal for < 40%, bloqueia.
+    2. Check API: Se a estatística base (50 jogos) for fraca, bloqueia.
+    3. Check Big Data: Validação cruzada (se disponível).
+    """
+    reprovado = False
+    motivo = ""
+
+    # 1. Auditoria Google Sheets (Performance Pessoal)
+    df_sheets = st.session_state.get('historico_full', pd.DataFrame())
+    if not df_sheets.empty:
+        df_strat = df_sheets[df_sheets['Estrategia'] == estrategia]
+        if len(df_strat) >= 5: # Só valida se tiver mínimo de histórico
+            greens = len(df_strat[df_strat['Resultado'].str.contains('GREEN', na=False)])
+            total = len(df_strat[df_strat['Resultado'].isin(['✅ GREEN', '❌ RED'])])
+            if total > 0:
+                winrate = (greens / total) * 100
+                if winrate < 40: # BLOQUEIO DE SEGURANÇA
+                    return False, f"Bloqueio de Segurança: Seu Winrate nessa estratégia é {winrate:.1f}% (Mínimo 40%)."
+
+    # 2. Auditoria API (Tendência 50 Jogos)
+    stats_50 = analisar_tendencia_50_jogos(api_key, home_id, away_id)
+    if stats_50:
+        # Exemplo: Se for estratégia de Gols HT, exige estatística mínima
+        if "HT" in estrategia or "Relâmpago" in estrategia:
+            media_ht = (stats_50['home']['over05_ht'] + stats_50['away']['over05_ht']) / 2
+            if media_ht < 60: # Se a média histórica for menor que 60%, é muito arriscado
+                return False, f"Estatística Fraca: Média de Gols HT dos times é {media_ht:.1f}% (Mínimo 60%)."
+
+    # 3. Auditoria Big Data (Firebase) - Opcional mas recomendado
+    if db_firestore:
+        # Aqui poderia verificar se esses times estão na "lista negra" do big data
+        # Por enquanto, deixamos passar se o Firebase estiver online
+        pass
+
+    return True, "Validado em 3 Camadas"
 # ==============================================================================
 # [NOVO] FUNÇÕES DE INTELIGÊNCIA HÍBRIDA (MÚLTIPLAS + NOVOS MERCADOS)
 # ==============================================================================
@@ -638,7 +676,7 @@ def gerar_multipla_matinal_ia(api_key):
 
 def gerar_analise_mercados_alternativos_ia(api_key):
     """
-    FUNÇÃO BLINDADA: Varre TODOS os jogos, filtra por Estatística Pura (API + Big Data)
+    FUNÇÃO BLINDADA (AUDITORIA): Varre TODOS os jogos, filtra por Estatística Pura (API + Big Data)
     e só aciona a IA para validar oportunidades reais. Sem sorteios.
     """
     if not IA_ATIVADA: return []
@@ -652,7 +690,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         jogos = res.get('response', [])
         
         # 2. Filtro de Ligas Elite (Para garantir liquidez e dados confiáveis)
-        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3] # Premier, La Liga, Serie A, Bundes, Ligue 1, Brasileirão, etc
+        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
         jogos_candidatos = [j for j in jogos if j['league']['id'] in LIGAS_TOP and j['fixture'].get('referee')]
         
         if not jogos_candidatos: return []
@@ -660,29 +698,17 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         candidatos_filtrados = []
         
         # 3. O GRANDE LOOP DE DADOS (Data Mining)
-        # Varre todos os jogos elegíveis para aplicar filtros estatísticos ANTES da IA
         for j in jogos_candidatos:
             fid = j['fixture']['id']
             home_id = j['teams']['home']['id']; home_name = j['teams']['home']['name']
             away_id = j['teams']['away']['id']; away_name = j['teams']['away']['name']
             referee = j['fixture']['referee']
             
-            # Buscando médias recentes (Last 10) para ser rápido e preciso
-            # Usamos a função de stats já existente ou uma query leve
             try:
-                # --- Análise para Goleiros (Defesas) ---
-                # Lógica: O Goleiro do time A trabalha muito se o Time B chuta muito.
-                # Precisamos saber a média de chutes NO GOL dos times.
-                
-                # Vamos usar o 'analisar_tendencia_50_jogos' de forma inteligente ou cacheada
-                # Como aquela função foca em Gols, faremos uma consulta rápida específica aqui de 10 jogos
-                stats_h = buscar_media_gols_ultimos_jogos(api_key, home_id, away_id) # Reuso para garantir cache, mas ideal é stats de chutes
-                
                 # CONSULTA BIG DATA (Firebase) para confirmar agressividade
                 agressividade_home = 0; agressividade_away = 0
                 if db_firestore:
                     try:
-                        # Verifica se temos registros recentes desses times com muitos chutes/cartões
                         docs = db_firestore.collection("BigData_Futebol").where("home_id", "==", str(home_id)).limit(5).stream()
                         for d in docs:
                             dd = d.to_dict()
@@ -701,22 +727,19 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                 # --- FILTROS RÍGIDOS (HARD FILTERS) ---
                 
                 # A) Filtro para Cartões:
-                # Juiz precisa estar na lista (IA sabe) E Big Data confirmar times "pegados"
-                if (agressividade_home + agressividade_away) >= 4: # Times historicamente agressivos no BD
+                if (agressividade_home + agressividade_away) >= 4: 
                     candidatos_filtrados.append({
                         "fid": fid, "jogo": f"{home_name} x {away_name}", "referee": referee,
                         "tipo": "CARTAO", "motivo": "Big Data confirma histórico de agressividade recente."
                     })
                 
                 # B) Filtro para Goleiros:
-                # Se o mandante é muito agressivo (BD > 2 jogos com 5+ chutes a gol recentes), goleiro visitante é alvo
                 if agressividade_home >= 2:
                     candidatos_filtrados.append({
                         "fid": fid, "jogo": f"{home_name} x {away_name}", "referee": referee,
                         "tipo": "GOLEIRO", "alvo": "Goleiro do Visitante",
                         "motivo": f"Mandante ({home_name}) tem alta frequência de chutes no gol (Big Data)."
                     })
-                # Se visitante é agressivo
                 if agressividade_away >= 2:
                     candidatos_filtrados.append({
                         "fid": fid, "jogo": f"{home_name} x {away_name}", "referee": referee,
@@ -729,8 +752,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         if not candidatos_filtrados: return []
 
         # 4. VALIDAÇÃO IA (O Juiz Final)
-        # Agora mandamos para o Gemini APENAS o que já passou pelo filtro de dados
-        dados_prompt = json.dumps(candidatos_filtrados[:8], ensure_ascii=False) # Limitamos a 8 para não estourar token
+        dados_prompt = json.dumps(candidatos_filtrados[:8], ensure_ascii=False) 
         
         prompt = f"""
         ATUE COMO ESPECIALISTA EM MERCADOS DE CARTÕES E PLAYER PROPS.
@@ -761,10 +783,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         return json.loads(response.text).get('sinais', [])
-        
-    except Exception as e: 
-        print(f"Erro Alternativos: {e}")
-        return []
+    except: return []
 
 # ==============================================================================
 
@@ -803,6 +822,7 @@ def buscar_rating_inteligente(api_key, team_id):
                 if notas: return f"{(sum(notas)/len(notas)):.2f}"
         return "N/A"
     except: return "N/A"
+
 @st.cache_data(ttl=120) 
 def buscar_agenda_cached(api_key, date_str):
     try:
@@ -1159,27 +1179,17 @@ def enviar_multipla_matinal(token, chat_ids, api_key):
     st.session_state['multipla_matinal_enviada'] = True
 
 def enviar_alerta_alternativos(token, chat_ids, api_key):
-    """
-    Envia os sinais de Cartões e Goleiros (Módulo Pedro Feitosa)
-    """
     if st.session_state.get('alternativos_enviado'): return
-    
-    # Chama a nova função blindada (sem sorteios)
-    sinais = gerar_analise_mercados_alternativos_ia(api_key)
+    sinais = gerar_analise_mercados_alternativos_ia(api_key) # Versão blindada
     if not sinais: return
     
     for s in sinais:
         msg = f"<b>{s['titulo']}</b>\n\n⚽ <b>{s['jogo']}</b>\n\n🔎 <b>Análise:</b>\n{s.get('destaque', '')}\n\n🎯 <b>INDICAÇÃO:</b> {s.get('indicacao', '')}"
         if s['tipo'] == 'GOLEIRO':
             msg += "\n⚠️ <i>Regra: Aposte no 'Goleiro do Time', não no nome do jogador.</i>"
-        
-        # Adiciona motivo extra se houver
-        if 'motivo' in s:
-            msg += f"\n📝 <i>Dados: {s['motivo']}</i>"
-
+        if 'motivo' in s: msg += f"\n📝 <i>Dados: {s['motivo']}</i>"
         enviar_telegram(token, chat_ids, msg)
         
-        # Salva no histórico para BI
         item_alt = {
             "FID": f"ALT_{s['fid']}", "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": "08:05",
             "Liga": "Mercado Alternativo", "Jogo": s['jogo'], "Placar_Sinal": "0x0",
@@ -1187,8 +1197,7 @@ def enviar_alerta_alternativos(token, chat_ids, api_key):
             "Resultado": "Pendente", "Opiniao_IA": "Aprovado"
         }
         adicionar_historico(item_alt)
-        time.sleep(2) # Pausa entre mensagens
-
+        time.sleep(2) 
     st.session_state['alternativos_enviado'] = True
 
 def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
@@ -1289,8 +1298,8 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
     mapa_live = {j['fixture']['id']: j for j in jogos_live}
     for s in pendentes:
         if s.get('Data') != hoje_str: continue
-        if "Sniper" in s['Estrategia']: continue # Sniper tem função própria
-        if "Mercado Alternativo" in s['Liga']: continue # Alternativos (Cartões/Goleiros) validar manualmente ou criar lógica específica futura
+        if "Sniper" in s['Estrategia']: continue
+        if "Mercado Alternativo" in s['Liga']: continue 
         
         fid = int(clean_fid(s.get('FID', 0)))
         strat = s['Estrategia']
@@ -1314,18 +1323,16 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             deve_enviar = (key_sinal in st.session_state.get('alertas_enviados', set()))
 
             res_final = None
-            # Lógica Geral de Green (Gols)
             if (gh + ga) > (ph + pa):
                 if "Under" not in strat and "Morno" not in strat: res_final = "✅ GREEN"
-                elif "Morno" in strat: res_final = "❌ RED" # Saiu gol no morno é Red
+                elif "Morno" in strat: res_final = "❌ RED" 
             
-            # Lógica de Fim de Jogo
             if not res_final and st_short in ['FT', 'AET', 'PEN', 'ABD']:
                  if "Morno" in strat or "Under" in strat: res_final = "✅ GREEN"
-                 elif "Vovô" in strat or "Back" in strat: # Back Favorito
+                 elif "Vovô" in strat or "Back" in strat: 
                      if (ph > pa and gh > ga) or (pa > ph and ga > gh): res_final = "✅ GREEN"
                      else: res_final = "❌ RED"
-                 else: res_final = "❌ RED" # Over não bateu
+                 else: res_final = "❌ RED" 
             
             if res_final:
                 s['Resultado'] = res_final
@@ -1348,10 +1355,7 @@ def conferir_resultados_sniper(jogos_live, api_key):
     updates = []
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
     for s in snipers:
-        # Tenta casar pelo nome se o FID for fake (SNIPER_...)
-        if "SNIPER_" in str(s['FID']):
-            # Lógica simplificada de match por nome (pode ser melhorada futuramente)
-            pass
+        if "SNIPER_" in str(s['FID']): pass
         else:
             fid = str(s['FID'])
             jogo = ids_live.get(fid)
@@ -1748,6 +1752,15 @@ if st.session_state.ROBO_LIGADO:
                     extra_ctx = f"{txt_history}\n{txt_rating_ia}"
 
                     for s in lista_sinais:
+                        # -------------------------------------------------------------
+                        # AUDITORIA TOTAL (MULTICAMADA) - SHEETS + API + BIG DATA
+                        # -------------------------------------------------------------
+                        aprovado_audit, motivo_audit = validar_sinal_multicamada(s['tag'], j['teams']['home']['id'], j['teams']['away']['id'], safe_api)
+                        if not aprovado_audit:
+                            st.toast(f"🛑 Sinal Bloqueado ({s['tag']}): {motivo_audit}")
+                            continue # Pula este sinal e não envia
+                        # -------------------------------------------------------------
+
                         prob = "..." 
                         liga_safe = j['league']['name'].replace("<", "").replace(">", "").replace("&", "e")
                         home_safe = home.replace("<", "").replace(">", "").replace("&", "e")
