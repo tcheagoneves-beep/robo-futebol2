@@ -962,65 +962,66 @@ def otimizar_estrategias_existentes_ia():
     
     # 1. Carrega dados
     df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Sem histórico suficiente para auditoria técnica."
+    if df.empty: return "Sem histórico suficiente para tuning."
     
-    # 2. PREPARAÇÃO DOS DADOS (O "Trabalho Sujo" de Análise)
     try:
-        # Cria colunas auxiliares
+        # Prepara colunas
         df['Is_Green'] = df['Resultado'].str.contains('GREEN', na=False)
         df['Is_Red'] = df['Resultado'].str.contains('RED', na=False)
-        
-        # Filtra apenas finalizados
         df_closed = df[df['Is_Green'] | df['Is_Red']].copy()
         
-        if df_closed.empty: return "Sem jogos finalizados para auditar."
+        if df_closed.empty: return "Sem dados finalizados."
 
-        # Identifica o "Calcanhar de Aquiles" (Combinação Estratégia + Liga com pior desempenho)
-        # Agrupa por Estratégia e Liga -> Calcula Winrate e Prejuízo (Reds)
-        rank = df_closed.groupby(['Estrategia', 'Liga']).agg(
+        # 2. SELEÇÃO DA "ZONA DE OTIMIZAÇÃO"
+        # Agrupa por Estratégia (ignorando liga por enquanto para ver a lógica geral)
+        rank = df_closed.groupby(['Estrategia']).agg(
             Total=('FID', 'count'),
             Reds=('Is_Red', 'sum'),
             Greens=('Is_Green', 'sum')
         ).reset_index()
         
-        # Calcula Winrate
         rank['Winrate'] = (rank['Greens'] / rank['Total']) * 100
         
-        # Filtra apenas onde temos volume (pelo menos 3 jogos) e Winrate ruim (< 50%)
-        gargalos = rank[(rank['Total'] >= 3) & (rank['Winrate'] < 50)].sort_values('Winrate', ascending=True).head(5)
+        # FILTRO INTELIGENTE:
+        # Queremos estratégias com VOLUME (>=5 jogos) e que não sejam perfeitas nem horríveis (50% < Winrate < 80%)
+        # É aqui que mora a oportunidade de "Apertar o parafuso"
+        oportunidades = rank[(rank['Total'] >= 5) & (rank['Winrate'] >= 40) & (rank['Winrate'] <= 85)].sort_values('Total', ascending=False).head(4)
         
-        if gargalos.empty: return "O sistema está estável. Nenhuma correção crítica detectada nos dados atuais."
+        if oportunidades.empty: return "Suas estratégias estão ou perfeitas ou muito ruins. Nenhuma na zona de 'ajuste fino' encontrada."
         
-        dados_formatados = gargalos.to_string(index=False)
+        dados_txt = oportunidades.to_string(index=False)
         
-    except Exception as e:
-        return f"Erro ao processar dados: {e}"
+    except Exception as e: return f"Erro dados: {e}"
 
-    # 3. O PROMPT DE DIRETORIA (Direto ao ponto)
+    # 3. O PROMPT DE ENGENHARIA REVERSA
     prompt = f"""
-    ATUE COMO CTO (CHIEF TECHNOLOGY OFFICER) DO NEVES ANALYTICS.
-    Sua função não é dar conselhos, é DAR A SOLUÇÃO TÉCNICA PRONTA.
+    ATUE COMO ENGENHEIRO DE ALGORITMOS (QUANT TRADER).
+    O Diretor quer refinar as estratégias que estão "OK", mas poderiam ser EXCELENTES.
     
-    DADOS DE PREJUÍZO (Gargalos detectados no banco de dados):
-    {dados_formatados}
+    DADOS DE PERFORMANCE (Estratégias com muita atividade, mas com ruído/Reds):
+    {dados_txt}
     
-    O Diretor exige uma ação imediata para estancar esse sangramento.
+    TAREFA:
+    Para cada estratégia listada, sugira uma MUDANÇA DE PARÂMETRO (Tuning) para filtrar os sinais ruins e aumentar a assertividade.
     
-    SUA RESPOSTA DEVE CONTER APENAS:
-    1. 🚫 **AÇÃO DE BLOQUEIO**: Diga explicitamente qual Liga deve ser removida de qual Estratégia.
-    2. 📉 **MOTIVO TÉCNICO**: "Essa combinação causou X Reds em Y jogos (Winrate Z%). Matemeticamente insustentável."
-    3. 💻 **CÓDIGO SUGERIDO**: Forneça o trecho exato de código Python (if/else) para eu colar no meu filtro de estratégias para bloquear isso automaticamente.
+    Você deve usar a lógica do futebol. Exemplo:
+    - Se a estratégia é de "Gols", sugira aumentar a exigência de Chutes no Gol.
+    - Se é "Canto", sugira exigir mais Pressão (Appm).
+    - Se é "Zebra", sugira esperar a Odd subir mais.
     
-    Seja breve, técnico e resolutivo.
+    FORMATO DA RESPOSTA (Para cada estratégia):
+    1. 📊 **Análise**: "A estratégia X tem 60% de acerto. Está entrando em jogos muito 'mornos'."
+    2. 🔧 **Ajuste de Variável (De X para Y)**: "Atualmente entramos com X chutes. Sugiro aumentar a régua para Y chutes ou exigir Z ataques perigosos."
+    3. 💡 **Por que isso melhora?**: "Isso vai eliminar os jogos onde os times estão chutando de longe sem perigo real."
+    
+    Seja técnico e proponha números.
     """
     
     try:
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         return response.text
-    except Exception as e:
-        return f"Erro na IA: {e}"
-def gerar_insights_matinais_ia(api_key):
+    except Exception as e: return f"Erro IA: {e}"def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
