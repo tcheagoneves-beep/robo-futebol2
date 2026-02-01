@@ -966,7 +966,7 @@ def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     
     # 1. Carrega dados reais do usuário
-    df = st.session_state.get('historico_full', pd.DataFrame())
+    df = st.session_state.get('historico_full', pd.DataFrame()).copy()
     if df.empty: return "Sem histórico suficiente para análise quantitativa."
     
     try:
@@ -2061,7 +2061,10 @@ if st.session_state.ROBO_LIGADO:
             if not hist_hj.empty: 
                 df_show = hist_hj.copy()
                 if 'Jogo' in df_show.columns and 'Placar_Sinal' in df_show.columns: df_show['Jogo'] = df_show['Jogo'] + " (" + df_show['Placar_Sinal'].astype(str) + ")"
-                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada', 'Placar_Sinal']
+                
+                # AQUI ESTÁ A CORREÇÃO: Adicionei 'Is_Green' e 'Is_Red' para sumirem da tela
+                colunas_esconder = ['FID', 'HomeID', 'AwayID', 'Data_Str', 'Data_DT', 'Odd_Atualizada', 'Placar_Sinal', 'Is_Green', 'Is_Red']
+                
                 cols_view = [c for c in df_show.columns if c not in colunas_esconder]
                 st.dataframe(df_show[cols_view], use_container_width=True, hide_index=True)
             else: st.caption("Vazio.")
