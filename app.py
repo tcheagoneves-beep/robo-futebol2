@@ -1272,9 +1272,16 @@ def validar_multiplas_pendentes(jogos_live, api_key, token, chat_ids):
     if 'multiplas_pendentes' not in st.session_state or not st.session_state['multiplas_pendentes']: return
     pendentes = st.session_state['multiplas_pendentes']
     mapa_live = {str(j['fixture']['id']): j for j in jogos_live}
+    
     for m in pendentes:
-        if m['status'] != 'Pendente' or m['data'] != get_time_br().strftime('%Y-%m-%d'): continue
+        # Se não for pendente (já deu Green/Red antes), ignora para não duplicar
+        if m['status'] != 'Pendente': continue
+        
+        # Se for de outro dia, ignora (ou implementa lógica de limpeza)
+        if m['data'] != get_time_br().strftime('%Y-%m-%d'): continue
+
         resultados_jogos = []; placar_final_str = []
+        
         for fid in m['fids']:
             jogo = mapa_live.get(fid)
             if not jogo:
@@ -1282,20 +1289,64 @@ def validar_multiplas_pendentes(jogos_live, api_key, token, chat_ids):
                     res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
                     if res.get('response'): jogo = res['response'][0]
                 except: pass
-            if not jogo: resultados_jogos.append("PENDENTE"); continue
+            
+            if not jogo: 
+                resultados_jogos.append("PENDENTE")
+                continue
+            
             status_short = jogo['fixture']['status']['short']
             gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0; total_agora = gh + ga
+            
+            # Regra de Green (Matinal = +0.5 geral / Live = +0.5 sobre o gol de referência)
             condicao_green = (total_agora >= 1) if m['tipo'] == "MATINAL" else (total_agora > m['gols_ref'].get(fid, 0))
+            
             if condicao_green: resultados_jogos.append("GREEN")
             elif status_short in ['FT', 'AET', 'PEN', 'INT']: resultados_jogos.append("RED")
             else: resultados_jogos.append("PENDENTE")
+            
             placar_final_str.append(f"{gh}x{ga}")
+
+        # --- AQUI ESTÁ A CORREÇÃO: SALVAR NO HISTÓRICO ---
+        
         if "RED" in resultados_jogos:
             msg = f"❌ <b>RED MÚLTIPLA FINALIZADA</b>\nUma das seleções não bateu.\n📉 Placar Final: {' / '.join(placar_final_str)}"
-            enviar_telegram(token, chat_ids, msg); m['status'] = "RED"
+            enviar_telegram(token, chat_ids, msg)
+            m['status'] = "RED"
+            
+            # Grava no Banco para o BI ler
+            item_save = {
+                "FID": m['id_unico'],
+                "Data": get_time_br().strftime('%Y-%m-%d'),
+                "Hora": get_time_br().strftime('%H:%M'),
+                "Liga": "Múltiplas",
+                "Jogo": " + ".join(m['nomes']), # Mostra os jogos combinados
+                "Placar_Sinal": " / ".join(placar_final_str),
+                "Estrategia": f"Múltipla {m['tipo']}", # Aparecerá como "Múltipla MATINAL" ou "LIVE"
+                "Resultado": "❌ RED",
+                "HomeID": "", "AwayID": "", "Odd": "", "Odd_Atualizada": "",
+                "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"
+            }
+            adicionar_historico(item_save)
+
         elif "PENDENTE" not in resultados_jogos and all(x == "GREEN" for x in resultados_jogos):
             msg = f"✅ <b>GREEN MÚLTIPLA CONFIRMADO!</b>\nTodas as seleções bateram!\n📈 Placares: {' / '.join(placar_final_str)}"
-            enviar_telegram(token, chat_ids, msg); m['status'] = "GREEN"
+            enviar_telegram(token, chat_ids, msg)
+            m['status'] = "GREEN"
+            
+            # Grava no Banco para o BI ler
+            item_save = {
+                "FID": m['id_unico'],
+                "Data": get_time_br().strftime('%Y-%m-%d'),
+                "Hora": get_time_br().strftime('%H:%M'),
+                "Liga": "Múltiplas",
+                "Jogo": " + ".join(m['nomes']),
+                "Placar_Sinal": " / ".join(placar_final_str),
+                "Estrategia": f"Múltipla {m['tipo']}",
+                "Resultado": "✅ GREEN",
+                "HomeID": "", "AwayID": "", "Odd": "", "Odd_Atualizada": "",
+                "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"
+            }
+            adicionar_historico(item_save)
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
