@@ -134,7 +134,8 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "🔫 Lay Goleada": "Over Limite",
     "👴 Estratégia do Vovô": "Back Favorito (Segurança)",
     "🟨 Sniper de Cartões": "Over Cartões",
-    "🧤 Muralha (Defesas)": "Over Defesas"
+    "🧤 Muralha (Defesas)": "Over Defesas",
+    "💎 HT Valor": "Over HT"
 }
 
 MAPA_ODDS_TEORICAS = {
@@ -154,7 +155,8 @@ MAPA_ODDS_TEORICAS = {
     "🔫 Lay Goleada": {"min": 1.60, "max": 2.20},
     "👴 Estratégia do Vovô": {"min": 1.05, "max": 1.25},
     "🟨 Sniper de Cartões": {"min": 1.50, "max": 1.90},
-    "🧤 Muralha (Defesas)": {"min": 1.60, "max": 2.10}
+    "🧤 Muralha (Defesas)": {"min": 1.60, "max": 2.10},
+    "💎 HT Valor": {"min": 1.78, "max": 2.20}
 }
 # ==============================================================================
 # 2. FUNÇÕES AUXILIARES, DADOS E API
@@ -246,7 +248,6 @@ def carregar_aba(nome_aba, colunas_esperadas):
             if not df_ram.empty: return df_ram
         st.session_state['BLOQUEAR_SALVAMENTO'] = True
         return pd.DataFrame(columns=colunas_esperadas)
-
 def salvar_aba(nome_aba, df_para_salvar):
     if nome_aba in ["Historico", "Seguras", "Obs"] and df_para_salvar.empty: return False
     if st.session_state.get('BLOQUEAR_SALVAMENTO', False):
@@ -259,6 +260,7 @@ def salvar_aba(nome_aba, df_para_salvar):
     except: 
         st.session_state['precisa_salvar'] = True
         return False
+
 def salvar_blacklist(id_liga, pais, nome_liga, motivo_ban):
     df = st.session_state['df_black']
     id_norm = normalizar_id(id_liga)
@@ -636,56 +638,122 @@ def gerar_multipla_matinal_ia(api_key):
 
 def gerar_analise_mercados_alternativos_ia(api_key):
     """
-    NOVA FUNÇÃO: Busca oportunidades de Cartões e Goleiros usando a API para listar árbitros e stats.
+    FUNÇÃO BLINDADA: Varre TODOS os jogos, filtra por Estatística Pura (API + Big Data)
+    e só aciona a IA para validar oportunidades reais. Sem sorteios.
     """
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
+    
     try:
+        # 1. Busca Inicial
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # Filtra jogos com Árbitro definido em Ligas Principais
-        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3]
+        # 2. Filtro de Ligas Elite (Para garantir liquidez e dados confiáveis)
+        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3] # Premier, La Liga, Serie A, Bundes, Ligue 1, Brasileirão, etc
         jogos_candidatos = [j for j in jogos if j['league']['id'] in LIGAS_TOP and j['fixture'].get('referee')]
         
         if not jogos_candidatos: return []
+
+        candidatos_filtrados = []
         
-        # Seleciona aleatoriamente 5 jogos para analisar profundamente (para economizar tokens/tempo)
-        amostra = random.sample(jogos_candidatos, min(len(jogos_candidatos), 5))
-        
-        dados_analise = ""
-        for j in amostra:
+        # 3. O GRANDE LOOP DE DADOS (Data Mining)
+        # Varre todos os jogos elegíveis para aplicar filtros estatísticos ANTES da IA
+        for j in jogos_candidatos:
             fid = j['fixture']['id']
-            home = j['teams']['home']['name']
-            away = j['teams']['away']['name']
+            home_id = j['teams']['home']['id']; home_name = j['teams']['home']['name']
+            away_id = j['teams']['away']['id']; away_name = j['teams']['away']['name']
             referee = j['fixture']['referee']
             
-            # Aqui simulamos a busca de stats detalhadas (chutes/cartões) via IA pois a API basic não entrega tudo
-            # A IA usará seu conhecimento base sobre o árbitro e os times
-            dados_analise += f"- Jogo: {home} x {away} | Árbitro: {referee} | ID: {fid}\n"
+            # Buscando médias recentes (Last 10) para ser rápido e preciso
+            # Usamos a função de stats já existente ou uma query leve
+            try:
+                # --- Análise para Goleiros (Defesas) ---
+                # Lógica: O Goleiro do time A trabalha muito se o Time B chuta muito.
+                # Precisamos saber a média de chutes NO GOL dos times.
+                
+                # Vamos usar o 'analisar_tendencia_50_jogos' de forma inteligente ou cacheada
+                # Como aquela função foca em Gols, faremos uma consulta rápida específica aqui de 10 jogos
+                stats_h = buscar_media_gols_ultimos_jogos(api_key, home_id, away_id) # Reuso para garantir cache, mas ideal é stats de chutes
+                
+                # CONSULTA BIG DATA (Firebase) para confirmar agressividade
+                agressividade_home = 0; agressividade_away = 0
+                if db_firestore:
+                    try:
+                        # Verifica se temos registros recentes desses times com muitos chutes/cartões
+                        docs = db_firestore.collection("BigData_Futebol").where("home_id", "==", str(home_id)).limit(5).stream()
+                        for d in docs:
+                            dd = d.to_dict()
+                            stats = dd.get('estatisticas', {})
+                            if int(stats.get('chutes_gol', 0)) >= 5: agressividade_home += 1
+                            if int(stats.get('cartoes_amarelos', 0)) + int(stats.get('cartoes_vermelhos', 0)) >= 3: agressividade_home += 1
+                            
+                        docs_a = db_firestore.collection("BigData_Futebol").where("away_id", "==", str(away_id)).limit(5).stream()
+                        for d in docs_a:
+                            dd = d.to_dict()
+                            stats = dd.get('estatisticas', {})
+                            if int(stats.get('chutes_gol', 0)) >= 5: agressividade_away += 1
+                            if int(stats.get('cartoes_amarelos', 0)) + int(stats.get('cartoes_vermelhos', 0)) >= 3: agressividade_away += 1
+                    except: pass
 
+                # --- FILTROS RÍGIDOS (HARD FILTERS) ---
+                
+                # A) Filtro para Cartões:
+                # Juiz precisa estar na lista (IA sabe) E Big Data confirmar times "pegados"
+                if (agressividade_home + agressividade_away) >= 4: # Times historicamente agressivos no BD
+                    candidatos_filtrados.append({
+                        "fid": fid, "jogo": f"{home_name} x {away_name}", "referee": referee,
+                        "tipo": "CARTAO", "motivo": "Big Data confirma histórico de agressividade recente."
+                    })
+                
+                # B) Filtro para Goleiros:
+                # Se o mandante é muito agressivo (BD > 2 jogos com 5+ chutes a gol recentes), goleiro visitante é alvo
+                if agressividade_home >= 2:
+                    candidatos_filtrados.append({
+                        "fid": fid, "jogo": f"{home_name} x {away_name}", "referee": referee,
+                        "tipo": "GOLEIRO", "alvo": "Goleiro do Visitante",
+                        "motivo": f"Mandante ({home_name}) tem alta frequência de chutes no gol (Big Data)."
+                    })
+                # Se visitante é agressivo
+                if agressividade_away >= 2:
+                    candidatos_filtrados.append({
+                        "fid": fid, "jogo": f"{home_name} x {away_name}", "referee": referee,
+                        "tipo": "GOLEIRO", "alvo": "Goleiro do Casa",
+                        "motivo": f"Visitante ({away_name}) tem alta frequência de chutes no gol (Big Data)."
+                    })
+                    
+            except: pass
+
+        if not candidatos_filtrados: return []
+
+        # 4. VALIDAÇÃO IA (O Juiz Final)
+        # Agora mandamos para o Gemini APENAS o que já passou pelo filtro de dados
+        dados_prompt = json.dumps(candidatos_filtrados[:8], ensure_ascii=False) # Limitamos a 8 para não estourar token
+        
         prompt = f"""
-        ATUE COMO ANALISTA DE MERCADOS ESPECIAIS (Cartões e Goleiros).
-        DADOS DE HOJE:
-        {dados_analise}
+        ATUE COMO ESPECIALISTA EM MERCADOS DE CARTÕES E PLAYER PROPS.
+        Eu filtrei estatisticamente estes jogos baseados em Big Data (agressividade dos times e chutes).
         
-        TAREFA:
-        1. Identifique se algum desses Árbitros é conhecido por ser "Rigoroso" (Over Cartões).
-        2. Identifique se algum desses confrontos sugere "Muitos Chutes" (Bom para Goleiro do time mais fraco).
+        LISTA DE CANDIDATOS:
+        {dados_prompt}
         
-        RETORNE APENAS AS OPORTUNIDADES CLARAS (Se houver).
+        SUA MISSÃO (Validar com seu conhecimento de Árbitros e Matchups):
+        1. Para 'CARTAO': O Árbitro citado é realmente rigoroso (Over Cartões)? Se for "Caseiro" ou "Leniente", DESCARTE.
+        2. Para 'GOLEIRO': O time que vai sofrer os chutes costuma ceder muitas defesas?
+        
+        RETORNE APENAS AS APOSTAS DE ALTO VALOR (FILTRO DE OURO). SE TIVER DÚVIDA, DESCARTE.
         FORMATO JSON:
         {{
             "sinais": [
                 {{
-                    "fid": "123",
+                    "fid": "...",
                     "tipo": "CARTAO" ou "GOLEIRO",
                     "titulo": "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA (DEFESAS)",
                     "jogo": "Time A x Time B",
-                    "destaque": "Juiz Fulano tem média 6.5 cartões",
-                    "indicacao": "Over 4.5 Cartões"
+                    "destaque": "Juiz [Nome] tem média alta + Times agressivos no Big Data",
+                    "indicacao": "Over X Cartões / Over X Defesas Goleiro [Time]"
                 }}
             ]
         }}
@@ -693,7 +761,10 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         return json.loads(response.text).get('sinais', [])
-    except: return []
+        
+    except Exception as e: 
+        print(f"Erro Alternativos: {e}")
+        return []
 
 # ==============================================================================
 
@@ -1092,13 +1163,20 @@ def enviar_alerta_alternativos(token, chat_ids, api_key):
     Envia os sinais de Cartões e Goleiros (Módulo Pedro Feitosa)
     """
     if st.session_state.get('alternativos_enviado'): return
+    
+    # Chama a nova função blindada (sem sorteios)
     sinais = gerar_analise_mercados_alternativos_ia(api_key)
     if not sinais: return
     
     for s in sinais:
-        msg = f"<b>{s['titulo']}</b>\n\n⚽ <b>{s['jogo']}</b>\n\n🔎 <b>Análise:</b>\n{s['destaque']}\n\n🎯 <b>INDICAÇÃO:</b> {s['indicacao']}"
+        msg = f"<b>{s['titulo']}</b>\n\n⚽ <b>{s['jogo']}</b>\n\n🔎 <b>Análise:</b>\n{s.get('destaque', '')}\n\n🎯 <b>INDICAÇÃO:</b> {s.get('indicacao', '')}"
         if s['tipo'] == 'GOLEIRO':
             msg += "\n⚠️ <i>Regra: Aposte no 'Goleiro do Time', não no nome do jogador.</i>"
+        
+        # Adiciona motivo extra se houver
+        if 'motivo' in s:
+            msg += f"\n📝 <i>Dados: {s['motivo']}</i>"
+
         enviar_telegram(token, chat_ids, msg)
         
         # Salva no histórico para BI
