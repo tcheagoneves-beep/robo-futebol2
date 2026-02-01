@@ -176,6 +176,9 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     elif tipo_sinal == "RED": return f"RES_RED_{chave}"
     return chave
 
+def gerar_barra_pressao(rh, ra):
+    return "" 
+
 def update_api_usage(headers):
     if not headers: return
     try:
@@ -218,7 +221,7 @@ def carregar_aba(nome_aba, colunas_esperadas):
         # Tenta ler do Google Sheets
         df = conn.read(worksheet=nome_aba, ttl=10)
         
-        # TRAVA DE SEGURANÇA BLACKLIST
+        # FIX: TRAVA DE SEGURANÇA PARA NÃO ZERAR SE DER ERRO
         if df.empty and chave_memoria in st.session_state:
             df_ram = st.session_state[chave_memoria]
             if not df_ram.empty:
@@ -708,7 +711,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     escanteios = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
     posse_casa = str(gv(s1, 'Ball Possession')).replace('%', '')
     
-    # --- PROMPT ATUALIZADO: PEDINDO DETALHES TÉCNICOS ---
+    # --- PROMPT ATUALIZADO (TÉCNICO E DIRETO) ---
     prompt = f"""
     Atue como um ANALISTA SÊNIOR DE FUTEBOL. Seja direto, técnico e assertivo.
     
@@ -725,11 +728,11 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
     TAREFA:
     1. Decida se aprova a entrada.
-    2. Se APROVAR, dê uma explicação TÉCNICA E DETALHADA. Cite os números (Ex: "Chutes no gol acima da média, pressão de 70%...").
+    2. Se APROVAR, dê uma explicação TÉCNICA de 1 linha sobre POR QUE vai bater. (Ex: "Defesa do time da casa está exposta e o visitante está com 80% de precisão nos chutes").
     3. Se reprovar (Arriscado), diga o motivo do risco (Ex: "Muita posse de bola inútil, sem chutes reais").
 
     FORMATO DE SAÍDA:
-    Aprovado/Arriscado - [Explicação Técnica Detalhada]
+    Aprovado/Arriscado - [Explicação Técnica e Assertiva]
     PROB: [0-100]%
     """
 
@@ -757,9 +760,10 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         if "aprovado" in texto_limpo.lower()[:20]: veredicto = "Aprovado"
         
         motivo_sujo = texto_limpo.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).strip()
-        motivo = motivo_sujo.split('.')[0] + "." # Primeira frase
+        motivo = motivo_sujo.split('.')[0] + "." # Pega primeira frase
 
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
+        # RETORNO FORMATADO E LIMPO
         return f"\n🤖 <b>ANÁLISE TÉCNICA:</b>\n{emoji} <b>{veredicto.upper()}</b>\n📝 <i>{motivo}</i>", prob_str
     
     except Exception as e: return "", "N/A"
@@ -892,7 +896,7 @@ def otimizar_estrategias_existentes_ia():
                                f"Taxa de Gols (Jogos não 0x0): {taxa_gols_bd:.1f}%.")
         except: bigdata_context = "BigData Offline"
 
-    # 3. Prompt Agressivo/Assertivo
+    # 3. Prompt Agressivo/Assertivo (Analisa TODAS as estratégias)
     prompt = f"""
     ATUE COMO: Auditor Sênior de Algoritmos de Apostas (Sem polidez, direto ao ponto).
     
@@ -939,173 +943,36 @@ def gerar_insights_matinais_ia(api_key):
         
         jogos_selecionados = jogos_top[:4] # Pega 4 jogos
         dados_para_ia = ""
-        ids_jogos = []
         
         for j in jogos_selecionados:
             home_nm = j['teams']['home']['name']
             away_nm = j['teams']['away']['name']
             hid = j['teams']['home']['id']
             aid = j['teams']['away']['id']
-            ids_jogos.append(str(j['fixture']['id']))
             
             # Busca histórico
             stats_hist = analisar_tendencia_50_jogos(api_key, hid, aid)
-            dados_para_ia += (f"ID: {j['fixture']['id']} | JOGO: {home_nm} x {away_nm} | "
+            dados_para_ia += (f"JOGO: {home_nm} x {away_nm} | "
                               f"Histórico HT (Over 0.5 HT): Casa {stats_hist['home']['over05_ht']}% / Fora {stats_hist['away']['over05_ht']}% | "
                               f"Histórico FT (Over 1.5): Casa {stats_hist['home']['over15_ft']}% / Fora {stats_hist['away']['over15_ft']}%\n")
 
-        # --- PROMPT ATUALIZADO (TEXTO LIMPO E NATURAL) ---
+        # --- PROMPT ATUALIZADO (SEM POLUIÇÃO VISUAL) ---
         prompt = f"""
         Atue como SNIPER DE GOLS.
         DADOS: {dados_para_ia}
         TAREFA: 3 melhores oportunidades Over 0.5 Gols.
-        
-        FORMATO OBRIGATÓRIO (Use emojis, SEM asteriscos, SEM siglas feias como HT/FT, use '1º Tempo' ou 'Jogo Completo', inclua o ID escondido):
+        FORMATO (SEM USAR ASTERISCOS OU NEGRITO, USE EMOJIS):
         ⚽ Jogo: Time A x Time B
-        🎯 Palpite: Over 0.5 Gols [1º Tempo ou Jogo Completo]
-        📝 Motivo: [Explicação técnica detalhada. CITE OS DADOS: Porcentagens, médias e retrospecto que justificam a aposta. Não resuma.]
-        🆔 {ids_jogos[0]} (Exemplo)
+        🎯 Palpite: Over 0.5 Gols [HT ou FT]
+        📝 Motivo: [Explicação curta e técnica]
         """
         resp = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
         
-        # Limpeza visual
+        # LIMPEZA FORÇADA DE MARKDOWN
         texto_limpo = resp.text.replace("**", "").replace("*", "").replace("##", "")
-        
-        # Lógica de Salvamento Automático dos Snipers
-        try:
-            linhas = texto_limpo.split('\n')
-            for i in range(len(linhas)):
-                if "⚽" in linhas[i]:
-                    jogo_nome = linhas[i].replace("⚽ Jogo:", "").strip()
-                    palpite = "Over 0.5 Gols" 
-                    if i+1 < len(linhas) and "🎯" in linhas[i+1]:
-                        palpite = linhas[i+1].replace("🎯 Palpite:", "").strip()
-                    
-                    fid_encontrado = ""
-                    for j in jogos_selecionados:
-                        if j['teams']['home']['name'] in jogo_nome or j['teams']['away']['name'] in jogo_nome:
-                            fid_encontrado = str(j['fixture']['id'])
-                            break
-                    
-                    if fid_encontrado:
-                        item_sniper = {
-                            "FID": fid_encontrado,
-                            "Data": get_time_br().strftime('%Y-%m-%d'),
-                            "Hora": "08:00",
-                            "Liga": "Sniper Matinal",
-                            "Jogo": jogo_nome,
-                            "Placar_Sinal": "0x0",
-                            "Estrategia": f"Sniper Matinal ({palpite})",
-                            "Resultado": "Pendente",
-                            "Odd": "1.50",
-                            "Opiniao_IA": "Sniper",
-                            "Probabilidade": "Alta"
-                        }
-                        adicionar_historico(item_sniper)
-        except: pass
-
         return texto_limpo
     except Exception as e: return f"Erro Matinal: {e}"
-
-def gerar_multiplas_matinais_ia(api_key):
-    if not IA_ATIVADA: return "IA Offline."
-    hoje = get_time_br().strftime('%Y-%m-%d')
-    
-    # 1. BUSCA DADOS EXTERNOS (API)
-    try:
-        url = "https://v3.football.api-sports.io/fixtures"
-        params = {"date": hoje, "timezone": "America/Sao_Paulo"}
-        res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
-        jogos = res.get('response', [])
-        
-        # Filtra Ligas Confiáveis para Múltiplas
-        LIGAS_SAFE = [39, 140, 78, 135, 61, 71, 72, 2, 3, 13, 34] 
-        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_SAFE]
-        
-        if len(jogos_top) < 2: return "Poucos jogos confiáveis para Múltipla hoje."
-        
-        # Pega uma amostra dos melhores jogos
-        jogos_candidatos = jogos_top[:6]
-        
-        # 2. PREPARA O CONTEXTO
-        dados_para_ia = "CANDIDATOS À MÚLTIPLA:\n"
-        
-        for j in jogos_candidatos:
-            home = j['teams']['home']['name']; away = j['teams']['away']['name']
-            lid = j['league']['name']
-            fid = j['fixture']['id']
-            stats_hist = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-            
-            txt_sheets = "Sem dados no Sheets."
-            try:
-                df_h = st.session_state.get('historico_full', pd.DataFrame())
-                if not df_h.empty:
-                    d_liga = df_h[df_h['Liga'] == lid]
-                    if not d_liga.empty:
-                        wr = (d_liga['Resultado'].str.contains('GREEN').sum() / len(d_liga)) * 100
-                        txt_sheets = f"Sua assertividade histórica nesta liga é {wr:.0f}%."
-            except: pass
-
-            dados_para_ia += (f"🔹 ID: {fid} | JOGO: {home} x {away} ({lid})\n"
-                              f"   - Estatística API (50j): {home} bateu Over 0.5 HT em {stats_hist['home']['over05_ht']}% dos jogos. {away} em {stats_hist['away']['over05_ht']}%.\n"
-                              f"   - Seu Histórico (Sheets): {txt_sheets}\n\n")
-
-        # 3. O PROMPT "SNIPER DE MÚLTIPLAS"
-        prompt = f"""
-        ATUE COMO: Gestor de Risco de Apostas Esportivas.
-        OBJETIVO: Criar UMA (1) Múltipla Matinal de Alta Segurança (Bilhete Pronto).
-        
-        DADOS DOS JOGOS DISPONÍVEIS:
-        {dados_para_ia}
-        
-        INSTRUÇÕES:
-        1. Escolha APENAS 2 ou 3 jogos que tenham a MAIOR probabilidade matemática de sair gol (Over 0.5 HT ou FT).
-        2. Ignore jogos onde o histórico do usuário (Sheets) na liga for ruim.
-        3. O foco é GREEN FÁCIL, não odd alta.
-        
-        FORMATO DE SAÍDA (IGUAL AO SNIPER, LIMPO, SEM ASTERISCOS, TEXTO NATURAL):
-        🚀 MÚLTIPLA DE SEGURANÇA (IA)
-        
-        1️⃣ Jogo: Time A x Time B
-        🎯 Seleção: Over 0.5 Gols
-        📝 Motivo: [Explicação DETALHADA. Cite as % de chance, histórico da liga e por que é seguro.]
-        🆔 ID: [ID do jogo]
-        
-        2️⃣ Jogo: ...
-        ...
-        
-        ⚠️ Conclusão: [Por que essa combinação é segura?]
-        """
-        
-        resp = model_ia.generate_content(prompt)
-        st.session_state['gemini_usage']['used'] += 1
-        texto_limpo = resp.text.replace("**", "").replace("##", "")
-        
-        # --- SALVAMENTO DA MÚLTIPLA NO BANCO ---
-        try:
-            ids_extraidos = re.findall(r'ID: (\d+)', texto_limpo)
-            if ids_extraidos:
-                ids_str = ",".join(ids_extraidos)
-                item_multipla = {
-                    "FID": ids_str, 
-                    "Data": get_time_br().strftime('%Y-%m-%d'),
-                    "Hora": "08:05",
-                    "Liga": "Múltipla IA",
-                    "Jogo": "Múltipla Matinal",
-                    "Placar_Sinal": "0x0",
-                    "Estrategia": "Múltipla Matinal",
-                    "Resultado": "Pendente",
-                    "Odd": "2.00", 
-                    "Opiniao_IA": "Aprovado",
-                    "Probabilidade": "Alta"
-                }
-                adicionar_historico(item_multipla)
-        except: pass
-        
-        return texto_limpo
-        
-    except Exception as e: return f"Erro Múltipla: {e}"
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
     if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []}
@@ -1188,6 +1055,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if 15 <= tempo <= 25 and total_chutes >= 6 and (sog_h + sog_a) >= 3:
              SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": "Muitos Chutes", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
+        # --- ESTRATÉGIA O CATALISADOR (Mantida e Validada) ---
         if 20 <= tempo <= 35 and gh == 0 and ga == 0:
             total_sog_catalisador = sog_h + sog_a
             if total_sog_catalisador >= 6:
@@ -1239,10 +1107,12 @@ def processar_resultado(sinal, jogo_api, token, chats):
     deve_enviar_msg = (key_sinal_orig in st.session_state.get('alertas_enviados', set()))
     if 'alertas_enviados' not in st.session_state: st.session_state['alertas_enviados'] = set()
     
+    # 1. Detecção de GOL
     if (gh + ga) > (ph + pa):
         STRATS_MATCH_ODDS = ["Vovô", "Back Favorito"]
         if any(x in strat for x in STRATS_MATCH_ODDS): return False
 
+        # --- CORREÇÃO: RED IMEDIATO NO UNDER ---
         if "Morno" in strat or "Under" in strat:
             sinal['Resultado'] = '❌ RED'
             if deve_enviar_msg and key_red not in st.session_state['alertas_enviados']:
@@ -1250,6 +1120,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
                 st.session_state['alertas_enviados'].add(key_red)
             st.session_state['precisa_salvar'] = True
             return True
+        # ---------------------------------------
         else:
             sinal['Resultado'] = '✅ GREEN'
             if deve_enviar_msg and key_green not in st.session_state['alertas_enviados']:
@@ -1258,6 +1129,7 @@ def processar_resultado(sinal, jogo_api, token, chats):
             st.session_state['precisa_salvar'] = True
             return True
 
+    # 2. HT / FT
     STRATS_HT_ONLY = ["Gol Relâmpago", "Massacre", "Choque", "Briga", "Catalisador"]
     eh_ht_strat = any(x in strat for x in STRATS_HT_ONLY)
     if eh_ht_strat and st_short in ['HT', '2H', 'FT', 'AET', 'PEN', 'ABD']:
@@ -1312,7 +1184,7 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
     mapa_live = {j['fixture']['id']: j for j in jogos_live}
     for s in pendentes:
         if s.get('Data') != hoje_str: continue
-        if "Sniper" in s['Estrategia'] or "Múltipla" in s['Estrategia']: continue
+        if "Sniper" in s['Estrategia']: continue
         fid = int(clean_fid(s.get('FID', 0)))
         strat = s['Estrategia']
         
@@ -1331,53 +1203,13 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
             if processar_resultado(s, jogo_encontrado, token, chats): updates_buffer.append(s)
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
-# === VALIDAÇÃO ESPECIAL: MÚLTIPLAS COMPOSTAS ===
-def validar_multipla_complexa(sinal, api_key):
-    fids = str(sinal['FID']).split(',')
-    todos_green = True
-    algum_red = False
-    jogos_pendentes = False
-    placar_final_str = []
-
-    for fid in fids:
-        res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
-        if not res.get('response'):
-            jogos_pendentes = True; continue
-
-        jogo = res['response'][0]
-        status = jogo['fixture']['status']['short']
-        gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0
-        bateu_perna = (gh + ga) >= 1
-        placar_final_str.append(f"{gh}x{ga}")
-
-        if status in ['FT', 'AET', 'PEN']:
-            if not bateu_perna: algum_red = True; break
-        else:
-            if not bateu_perna: jogos_pendentes = True
-
-    if algum_red: return '❌ RED', " / ".join(placar_final_str)
-    if not jogos_pendentes and not algum_red: return '✅ GREEN', " / ".join(placar_final_str)
-    return 'Pendente', ""
-
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
-    pendentes = [s for s in hist if ("Sniper" in s['Estrategia'] or "Múltipla" in s['Estrategia']) and s['Resultado'] == "Pendente"]
-    if not pendentes: return
+    snipers = [s for s in hist if "Sniper" in s['Estrategia'] and s['Resultado'] == "Pendente"]
+    if not snipers: return
     updates = []
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
-    
-    for s in pendentes:
-        # VALIDAÇÃO MÚLTIPLA
-        if "Múltipla" in s['Estrategia']:
-            res_m, placar_m = validar_multipla_complexa(s, api_key)
-            if res_m != 'Pendente':
-                s['Resultado'] = res_m; s['Placar_Sinal'] = placar_m
-                updates.append(s)
-                enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], f"{res_m} <b>MÚLTIPLA FINALIZADA</b>\n📊 Placar: {placar_m}")
-                st.session_state['precisa_salvar'] = True
-            continue
-
-        # VALIDAÇÃO SNIPER DINÂMICA
+    for s in snipers:
         fid = str(s['FID'])
         jogo = ids_live.get(fid)
         if not jogo:
@@ -1386,34 +1218,23 @@ def conferir_resultados_sniper(jogos_live, api_key):
                 if res.get('response'): jogo = res['response'][0]
             except: pass
         if not jogo: continue
-        
         status = jogo['fixture']['status']['short']
-        gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0
-        gh_ht = jogo['score']['halftime']['home'] or 0; ga_ht = jogo['score']['halftime']['away'] or 0
-        tg = gh + ga; tg_ht = gh_ht + ga_ht
-        strat_name = s['Estrategia']
+        if status not in ['FT', 'AET', 'PEN', 'INT']: continue
+        gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0; tg = gh + ga
         
-        is_ht_bet = "HT" in strat_name or "1º Tempo" in strat_name
-        target = 1.5 if "1.5" in strat_name else 2.5 if "2.5" in strat_name else 0.5
-        
-        green = False
-        if is_ht_bet:
-            if tg_ht > target: green = True
-            elif status in ['HT', 'FT', 'AET', 'PEN'] and tg_ht <= target: green = False
-            else: continue
-        else:
-            if tg > target: green = True
-            elif status in ['FT', 'AET', 'PEN'] and tg <= target: green = False
-            else: continue
+        res_final = '❌ RED'
+        try:
+             if tg >= 1: res_final = '✅ GREEN' # Ajustado para Over 0.5 (Sniper Matinal)
+             else: res_final = '❌ RED'
+        except: pass
             
-        res_final = '✅ GREEN' if green else '❌ RED'
         s['Resultado'] = res_final
         updates.append(s)
+        
         key_sinal = gerar_chave_universal(fid, s['Estrategia'], "SINAL")
         if key_sinal in st.session_state.get('alertas_enviados', set()):
-            enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], f"{res_final} <b>SNIPER FINALIZADO</b>\n⚽ {s['Jogo']}\n📉 Placar: {gh}x{ga}")
+            enviar_telegram(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], f"{res_final} <b>SNIPER FINALIZADO</b>\n⚽ {s['Jogo']}\n📉 Placar Final: {gh}x{ga}")
         st.session_state['precisa_salvar'] = True
-        
     if updates: atualizar_historico_ram(updates)
 
 def verificar_var_rollback(jogos_live, token, chats):
@@ -1437,9 +1258,11 @@ def verificar_var_rollback(jogos_live, token, chats):
                         continue 
                     s['Resultado'] = 'Pendente'; st.session_state['precisa_salvar'] = True
                     updates.append(s)
+                    
                     key_green = gerar_chave_universal(fid, s['Estrategia'], "GREEN")
                     if 'alertas_enviados' in st.session_state: st.session_state['alertas_enviados'].discard(key_green)
                     st.session_state['var_avisado_cache'].add(assinatura_var)
+                    
                     key_sinal = gerar_chave_universal(fid, s['Estrategia'], "SINAL")
                     if key_sinal in st.session_state.get('alertas_enviados', set()):
                         enviar_telegram(token, chats, f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n⚽ {s['Jogo']}\n📉 Placar voltou: <b>{gh}x{ga}</b>")
@@ -1577,13 +1400,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
             msg_final = f"🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n\n{insights}"
             for cid in ids: enviar_telegram(token, cid, msg_final)
-            
-            # --- ENVIO MÚLTIPLA ---
-            time.sleep(5)
-            multipla = gerar_multiplas_matinais_ia(api_key)
-            if multipla and "Erro" not in multipla:
-                for cid in ids: enviar_telegram(token, cid, multipla)
-            
             st.session_state['matinal_enviado'] = True
 # --- 4.2 UI E LOOP DE EXECUÇÃO ---
 
@@ -1601,11 +1417,7 @@ with st.sidebar:
         if st.button("🌅 Testar Sniper Matinal Agora"):
             if IA_ATIVADA:
                 with st.spinner("Gerando Sniper Matinal (Formatado)..."):
-                    insights = gerar_insights_matinais_ia(st.session_state['API_KEY'])
-                    st.markdown(insights)
-                    # Gera Múltipla também
-                    multi = gerar_multiplas_matinais_ia(st.session_state['API_KEY'])
-                    st.markdown(multi)
+                    insights = gerar_insights_matinais_ia(st.session_state['API_KEY']); st.markdown(insights)
             else: st.error("IA Offline")
         if st.button("🧠 Pedir Análise do BI"):
             if IA_ATIVADA:
@@ -1805,40 +1617,15 @@ if st.session_state.ROBO_LIGADO:
                     lista_sinais = processar(j, stats, tempo, placar, rank_h, rank_a)
                     salvar_safe_league_basic(lid, j['league']['country'], j['league']['name'], tem_tabela=(rank_h is not None))
                     resetar_erros(lid)
-                    
-                    # ==============================================================
-                    # 🆕 ESTRATÉGIA DE MÚLTIPLAS: "DUPLA QUEBRA-EMPATE"
-                    # ==============================================================
-                    # LÓGICA: Jogos empatados (0x0, 1x1...) com alta pressão.
-                    
-                    try:
-                        s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
-                        def gv_m(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
-                        
-                        chutes_totais_m = gv_m(s1, 'Total Shots') + gv_m(s2, 'Total Shots')
-                        chutes_gol_m = gv_m(s1, 'Shots on Goal') + gv_m(s2, 'Shots on Goal')
-                        
-                        # NOVAS REGRAS (AMPLIADAS):
-                        eh_empate = (gh == ga)
-                        janela_tempo = (30 <= tempo <= 80)
-                        
-                        # Filtro de Pressão (Exige mais se já tiver gols)
-                        min_chutes = 14 if (gh+ga) == 0 else 18 
-                        jogo_vivo = (chutes_totais_m >= min_chutes and chutes_gol_m >= 5)
-                        
-                        if eh_empate and janela_tempo and jogo_vivo:
-                            if fid not in st.session_state['multiplas_enviadas']:
-                                candidatos_multipla.append({
-                                    'fid': fid,
-                                    'jogo': f"{home} x {away}",
-                                    'tempo': tempo,
-                                    'stats': f"🔥 {chutes_totais_m} Chutes ({chutes_gol_m} no Gol)",
-                                    'placar': placar,
-                                    'liga': j['league']['name']
-                                })
-                    except: pass
-                    # ==============================================================
-
+                    if st_short == 'HT' and gh == 0 and ga == 0:
+                        try:
+                            s1 = stats[0]['statistics']; s2 = stats[1]['statistics']
+                            v1 = next((x['value'] for x in s1 if x['type']=='Total Shots'), 0) or 0
+                            v2 = next((x['value'] for x in s2 if x['type']=='Total Shots'), 0) or 0
+                            sg1 = next((x['value'] for x in s1 if x['type']=='Shots on Goal'), 0) or 0
+                            sg2 = next((x['value'] for x in s2 if x['type']=='Shots on Goal'), 0) or 0
+                            if (v1+v2) > 12 and (sg1+sg2) > 6: candidatos_multipla.append({'fid': fid, 'jogo': f"{home} x {away}", 'stats': f"{v1+v2} Chutes", 'indica': "Over 0.5 FT"})
+                        except: pass
                 else: gerenciar_erros(lid, j['league']['country'], j['league']['name'], fid)
 
                 if lista_sinais:
@@ -1963,30 +1750,12 @@ if st.session_state.ROBO_LIGADO:
                              enviar_telegram(safe_token, safe_chat, msg_super)
                 radar.append({"Liga": nome_liga_show, "Jogo": f"{home} {placar} {away}", "Tempo": f"{tempo}'", "Status": status_vis})
             
-            # === PROCESSADOR DE MÚLTIPLAS (MATCHMAKER V2) ===
-            if len(candidatos_multipla) >= 2:
-                # Ordena os candidatos pelos que tem mais chutes no gol (qualidade)
-                try:
-                    candidatos_multipla.sort(key=lambda x: int(re.search(r'\((\d+)', x['stats']).group(1)), reverse=True)
-                except: pass
-                
-                selecionados = candidatos_multipla[:3] # Top 3
-                ids_para_travar = [c['fid'] for c in selecionados]
-                
-                msg_multipla = "🚀 <b>ALERTA: DUPLA QUEBRA-EMPATE</b>\n"
-                msg_multipla += "<i>Jogos empatados com alta pressão para sair +1 gol.</i>\n"
-                
-                for c in selecionados:
-                    msg_multipla += f"\n⚽ <b>{c['jogo']}</b> ({c['placar']})\n⏰ {c['tempo']}' min | {c['stats']}\n🏆 {c['liga']}\n"
-                
-                msg_multipla += "\n🎯 <b>Indicação:</b> Múltipla Over +0.5 Gols na partida (Gol Limite)"
-                
-                enviar_telegram(safe_token, safe_chat, msg_multipla)
-                
-                for fid_env in ids_para_travar:
-                    st.session_state['multiplas_enviadas'].add(fid_env)
-                
-                st.toast(f"🚀 Múltipla enviada com {len(selecionados)} jogos!")
+            if candidatos_multipla:
+                novos = [c for c in candidatos_multipla if c['fid'] not in st.session_state['multiplas_enviadas']]
+                if novos:
+                    msg = "<b>🚀 OPORTUNIDADE DE MÚLTIPLA (HT) 🚀</b>\n" + "".join([f"\n⚽ {c['jogo']} ({c['stats']})\n⚠️ AÇÃO: {c['indica']}" for c in novos])
+                    for c in novos: st.session_state['multiplas_enviadas'].add(c['fid'])
+                    enviar_telegram(safe_token, safe_chat, msg)
             
             for p in prox:
                 try:
@@ -2297,3 +2066,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")            
+
