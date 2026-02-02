@@ -777,6 +777,76 @@ def gerar_multipla_matinal_ia(api_key):
         return json.loads(response.text), mapa_jogos
     except Exception as e: return None, []
 
+def gerar_insights_matinais_ia(api_key):
+    if not IA_ATIVADA: return "IA Offline."
+    hoje = get_time_br().strftime('%Y-%m-%d')
+    try:
+        # 1. Busca a grade completa do dia
+        url = "https://v3.football.api-sports.io/fixtures"
+        params = {"date": hoje, "timezone": "America/Sao_Paulo"}
+        res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
+        jogos = res.get('response', [])
+        
+        # 2. Filtra jogos Não Iniciados (NS) de QUALQUER liga
+        jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
+        
+        if not jogos_candidatos: return "Sem jogos para analisar hoje."
+        
+        # 3. Pré-seleção Estatística (Pente Fino)
+        # Vamos pegar até 50 jogos, mas só os que têm dados históricos na API
+        lista_para_ia = ""
+        count = 0
+        random.shuffle(jogos_candidatos) # Embaralha para variar as ligas
+        
+        for j in jogos_candidatos:
+            if count >= 40: break # Limite para não estourar o prompt
+            
+            fid = j['fixture']['id']
+            home = j['teams']['home']['name']
+            away = j['teams']['away']['name']
+            liga = j['league']['name']
+            
+            # Busca dados de 50 jogos (Cacheado)
+            stats = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
+            
+            if stats and stats['home']['qtd'] > 0:
+                # Critério de corte: Pelo menos um dos times tem que ser over
+                if stats['home']['over15_ft'] > 70 or stats['away']['over15_ft'] > 70:
+                    lista_para_ia += f"- Jogo: {home} x {away} ({liga}) | Over 1.5 FT: Casa {stats['home']['over15_ft']}% / Fora {stats['away']['over15_ft']}% | Over 0.5 HT: Casa {stats['home']['over05_ht']}% / Fora {stats['away']['over05_ht']}%\n"
+                    count += 1
+        
+        if not lista_para_ia: return "Nenhum jogo com tendência clara de gols hoje."
+
+        # 4. Prompt do "Sniper Matinal" (Formato da Imagem)
+        prompt = f"""
+        ATUE COMO UM ANALISTA SÊNIOR DE FUTEBOL (SNIPER).
+        
+        Eu tenho uma lista de jogos promissores para hoje com suas estatísticas de Gols.
+        Sua missão é escolher os **TOP 3 ou 4 MELHORES JOGOS** para operar.
+        
+        DADOS DOS JOGOS:
+        {lista_para_ia}
+        
+        CRITÉRIOS DE SELEÇÃO:
+        - Priorize jogos onde AMBOS os times têm alta frequência de gols (Soma das % > 150).
+        - Indique "Over 0.5 HT" se a média de HT for alta (>75%).
+        - Indique "Over 1.5 FT" ou "Over 0.5 FT" para jogos mais seguros.
+        
+        GERE O RELATÓRIO NO SEGUINTE FORMATO (Exatamente como abaixo):
+        
+        ⚽ Jogo: [Nome do Jogo]
+        🎯 Palpite: [Ex: Over 0.5 Gols HT]
+        📝 Motivo: [Explicação detalhada usando os números fornecidos. Ex: "O mandante tem 82% de over..."]
+        
+        (Repita para os 3 ou 4 jogos escolhidos)
+        """
+        
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text
+        
+    except Exception as e: return f"Erro na análise: {str(e)}"
+
 def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
