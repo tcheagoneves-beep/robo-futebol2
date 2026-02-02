@@ -1237,22 +1237,86 @@ def otimizar_estrategias_existentes_ia():
 def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
+    
     try:
+        # 1. Busca Jogos na API
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
-        LIGAS = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
-        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS]
-        if not jogos_top: return "Sem jogos Elite."
-        dados = ""
-        for j in jogos_top[:4]:
-            stats = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-            dados += f"JOGO: {j['teams']['home']['name']} x {j['teams']['away']['name']} | Histórico HT: {stats['home']['over05_ht']}%\n"
-        prompt = f"Atue como SNIPER DE GOLS. DADOS: {dados}. TAREFA: 3 melhores oportunidades Over 0.5 Gols."
-        return model_ia.generate_content(prompt).text.replace("**", "")
-    except: return "Erro Matinal."
+        
+        # Filtra Ligas Confiáveis
+        LIGAS_ELITE = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
+        jogos_top = [j for j in jogos if j['league']['id'] in LIGAS_ELITE]
+        
+        if not jogos_top: return "Sem jogos da Elite hoje para analisar."
+        
+        # Carrega Histórico do Usuário para Contexto
+        df_hist = st.session_state.get('historico_full', pd.DataFrame())
+        
+        dados_analise = ""
+        # Limita a 5 jogos para não estourar o token da IA, focando nos melhores horários
+        jogos_selecionados = sorted(jogos_top, key=lambda x: x['fixture']['date'])[:5]
 
+        for j in jogos_selecionados:
+            fid = j['fixture']['id']
+            home = j['teams']['home']['name']
+            away = j['teams']['away']['name']
+            home_id = j['teams']['home']['id']
+            away_id = j['teams']['away']['id']
+            liga = j['league']['name']
+            
+            # A. Dados da API (Tendência Recente)
+            stats_50 = analisar_tendencia_50_jogos(api_key, home_id, away_id)
+            
+            # B. Dados do Big Data (Firebase - 20k Jogos)
+            # Usamos a função auxiliar que já criamos para a Alavancagem
+            contexto_bd = consultar_bigdata_cenario_completo(home_id, away_id)
+            
+            # C. Histórico Pessoal (Sua Planilha)
+            txt_pessoal = "Sem histórico relevante."
+            if not df_hist.empty:
+                f_h = df_hist[df_hist['Jogo'].str.contains(home, na=False, case=False)]
+                if len(f_h) >= 3:
+                    greens = len(f_h[f_h['Resultado'].str.contains('GREEN', na=False)])
+                    wr = (greens/len(f_h))*100
+                    txt_pessoal = f"Meu Histórico com {home}: {wr:.0f}% de Winrate."
+
+            dados_analise += f"""
+            ---
+            ⚽ {home} x {away} ({liga})
+            📊 API (50j): Over 1.5 Casa {stats_50['home']['over15_ft']}% | Fora {stats_50['away']['over15_ft']}%
+            💾 BIG DATA: {contexto_bd}
+            👤 PESSOAL: {txt_pessoal}
+            """
+
+        # Prompt "General Rigoroso" para o Matinal
+        prompt = f"""
+        ATUE COMO UM GESTOR DE RISCO SÊNIOR (FUTEBOL).
+        SUA TAREFA É FILTRAR O "LIXO" E ENCONTRAR APENAS AS JÓIAS.
+        
+        DADOS DOS CANDIDATOS DE HOJE (Cruzamento API + Big Data + Histórico):
+        {dados_analise}
+        
+        REGRAS DE SELEÇÃO RIGOROSA:
+        1. Se o "Meu Histórico Pessoal" com o time for ruim (<50%), DESCARTE o jogo. O usuário perde dinheiro com esse time.
+        2. Se o Big Data mostrar chance baixa de gols (<70%), DESCARTE.
+        3. Só sugira se houver convergência positiva entre as 3 fontes de dados.
+        
+        SAÍDA:
+        Liste até 3 oportunidades de "Alta Confiança" (>80%).
+        Se nenhum jogo passar no crivo rigoroso, responda apenas: "🛡️ O Radar Matinal detectou apenas jogos de risco hoje. Melhor aguardar o Ao Vivo."
+        
+        FORMATO SE TIVER JOGO:
+        🎯 [Estratégia Sugerida: ex Over 1.5 ou Back Favorito] no jogo [Time A x Time B]
+        📝 Motivo: [Explique citando o Big Data e o Histórico Pessoal]
+        """
+        
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.1)) # Temperatura baixa para ser racional
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text.replace("**", "")
+        
+    except Exception as e: return f"Erro na Análise Matinal: {e}"
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
     if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []}
@@ -1635,7 +1699,11 @@ def validar_multiplas_pendentes(jogos_live, api_key, token, chat_ids):
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
+    
+    # Bloco Geral da Manhã (08:00 às 11:00)
     if 8 <= agora.hour < 11:
+        
+        # 1. Sniper Matinal (Insights Gerais) - Roda assim que o robô liga de manhã
         if not st.session_state['matinal_enviado']:
             insights = gerar_insights_matinais_ia(api_key)
             if insights and "Sem jogos" not in insights:
@@ -1645,21 +1713,32 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
                 salvar_snipers_do_texto(insights)
                 st.session_state['matinal_enviado'] = True
         
+        # 2. Múltipla Matinal (Delay de 5s após os insights)
         if st.session_state['matinal_enviado'] and not st.session_state.get('multipla_matinal_enviada', False):
             time.sleep(5) 
             enviar_multipla_matinal(token, chat_ids, api_key)
             
+        # 3. Mercados Alternativos (Cartões/Goleiros) (Delay de 5s após a múltipla)
         if st.session_state['matinal_enviado'] and st.session_state['multipla_matinal_enviada'] and not st.session_state.get('alternativos_enviado', False):
             time.sleep(5)
             enviar_alerta_alternativos(token, chat_ids, api_key)
 
+        # 4. [NOVO] ALAVANCAGEM SNIPER (Somente após as 10:00)
+        # O robô vai passar aqui a cada ciclo, mas só entra se for >= 10h
+        if agora.hour >= 10 and not st.session_state.get('alavancagem_enviada', False):
+            time.sleep(5)
+            # Chama a função que criamos na Parte 3
+            enviar_alavancagem(token, chat_ids, api_key)
+            # A flag 'alavancagem_enviada' é definida como True dentro da própria função enviar_alavancagem
+
+    # Reset Diário das Variáveis (Meia-noite ou mudança de dia)
     hoje_str = agora.strftime('%Y-%m-%d')
     if st.session_state.get('last_check_date') != hoje_str:
         st.session_state['matinal_enviado'] = False
         st.session_state['multipla_matinal_enviada'] = False
         st.session_state['alternativos_enviado'] = False
+        st.session_state['alavancagem_enviada'] = False # Reseta a alavancagem para o dia seguinte
         st.session_state['last_check_date'] = hoje_str
-
 # ==============================================================================
 # 4.1. FUNÇÕES DE SUPORTE (CONT.) E AUTOMAÇÃO
 # ==============================================================================
