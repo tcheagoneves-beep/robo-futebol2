@@ -2038,9 +2038,8 @@ if st.session_state.ROBO_LIGADO:
                                 txt_winrate_historico = ""
                                 if txt_pessoal != "Neutro": txt_winrate_historico = f" | 👤 {txt_pessoal}"
 
-                                # 1. Cabeçalho com Winrate (Prioridade: Estratégia > Pessoal > API)
+                                # 1. Cabeçalho com Winrate
                                 header_winrate = ""
-                                # Tenta pegar o Winrate da Estratégia (Global)
                                 df_h = st.session_state.get('historico_full', pd.DataFrame())
                                 if not df_h.empty:
                                     strat_f = df_h[df_h['Estrategia'] == s['tag']]
@@ -2055,8 +2054,7 @@ if st.session_state.ROBO_LIGADO:
                                 if not header_winrate and dados_50: 
                                     header_winrate = f" | 📊 <b>API: {dados_50['home']['over15_ft']}%</b>"
 
-                                # --- INICIO DA SUBSTITUIÇÃO ---
-                                
+                                # --- DADOS DE MOMENTO E TEXTOS EXTRAS (AQUI ESTÁ A CORREÇÃO) ---
                                 texto_momento = "Morno 🧊"
                                 if rh > ra: texto_momento = "Pressão Casa 🔥"
                                 elif ra > rh: texto_momento = "Pressão Visitante 🔥"
@@ -2065,10 +2063,9 @@ if st.session_state.ROBO_LIGADO:
                                 linha_bd = ""
                                 if "MANDANTE" in txt_bigdata: linha_bd = f"• 💾 <b>Big Data:</b> Tendência confirmada.\n"
 
-                                # --- BLOCO DE CONSTRUÇÃO DE TEXTO RECUPERADO ---
                                 txt_stats_extras = ""
                                 try:
-                                    # Recuperando visual da Imagem 2 (Dados + Momento)
+                                    # Recuperando visual: Dados + Médias + Raio-X
                                     txt_stats_extras += f"\n📊 <b>Dados:</b> <i>{texto_momento}</i>"
                                     
                                     if medias_gols:
@@ -2079,6 +2076,7 @@ if st.session_state.ROBO_LIGADO:
                                 except: pass
                                 # ------------------------------------------------
 
+                                # MONTAGEM DA MENSAGEM
                                 msg = f"🚨 <b>SINAL {s['tag'].upper()}</b>{header_winrate}\n"
                                 msg += f"🏆 {liga_safe}\n"
                                 msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
@@ -2086,20 +2084,18 @@ if st.session_state.ROBO_LIGADO:
                                 msg += f"{s['ordem']}\n"
                                 if destaque_odd: msg += f"{destaque_odd}\n"
                                 
-                                # INSERINDO OS DADOS RECUPERADOS AQUI
+                                # INSERINDO OS DADOS RECUPERADOS
                                 msg += f"{txt_stats_extras}\n" 
                                 msg += "──────────────\n" 
                                 
                                 msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
                                 msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
-                                # msg += f"• 🌡️ Ritmo: {texto_momento}\n" # Removido daqui pois coloquei lá em cima no "Dados"
                                 msg += linha_bd
                                 msg += "\n" 
                                 msg += f"{opiniao_txt}" 
                                 
                                 sent_status = False
                                 
-                                # --- FIM DA SUBSTITUIÇÃO ---
                                 if opiniao_db == "Aprovado":
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
@@ -2441,3 +2437,5 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
+
