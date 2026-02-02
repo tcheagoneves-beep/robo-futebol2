@@ -1081,55 +1081,61 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
            
         SUA MISSÃO:
         Dê o veredicto focado na probabilidade do GREEN da estratégia específica.
+        Seja breve e tático na explicação.
         
         SAÍDA OBRIGATÓRIA (JSON implícito):
         VEREDICTO: [Aprovado/Arriscado/Reprovado]
         PROB: [Número]%
-        MOTIVO: [Explicação tática curta. Ex: "Visitante domina, mas reação do mandante favorece o Over 1.5".]
+        MOTIVO: [Sua análise tática aqui]
         """
         
-        # ... (parte anterior da função igual)
-        
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.2))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
         st.session_state['gemini_usage']['used'] += 1
-        texto = response.text.strip().replace("**", "").replace("*", "")
+        texto_raw = response.text.strip().replace("**", "").replace("*", "")
         
-        # --- CORREÇÃO DE LEITURA (REGEX MAIS FORTE) ---
+        # --- NOVO EXTRATOR FLEXÍVEL (RECUPERA O TEXTO RICO) ---
         prob_val = 0
         prob_str = "N/A"
         
-        # Tenta achar o número de várias formas (ex: "75%", "75", "PROB: 75")
-        match = re.search(r'(?:PROB|Probabilidade):\s*(\d+)', texto, re.IGNORECASE)
+        # 1. Tenta extrair a Probabilidade
+        match = re.search(r'(?:PROB|Probabilidade|Prob):\s*(\d+)', texto_raw, re.IGNORECASE)
         if match: 
             prob_val = int(match.group(1))
         else:
-            # Plano B: Procura qualquer número de 2 dígitos seguido de %
-            match_b = re.search(r'(\d{2})%', texto)
+            match_b = re.search(r'(\d{2})%', texto_raw)
             if match_b: prob_val = int(match_b.group(1))
-            
+        
         if prob_val > 0: prob_str = f"{prob_val}%"
 
-        # Extração do Motivo (Mais robusta)
-        motivo = "Análise tática inconclusiva."
-        if "MOTIVO:" in texto:
-            motivo = texto.split('MOTIVO:')[-1].strip().split('\n')[0]
-        elif "Motivo:" in texto:
-            motivo = texto.split('Motivo:')[-1].strip().split('\n')[0]
-        
-        # Lógica de Veredicto
+        # 2. Tenta extrair o Veredicto
         veredicto = "Neutro"
-        texto_lower = texto.lower()
+        texto_lower = texto_raw.lower()
         if "aprovado" in texto_lower and "reprovado" not in texto_lower: veredicto = "Aprovado"
         elif "arriscado" in texto_lower: veredicto = "Arriscado"
         elif "reprovado" in texto_lower: veredicto = "Reprovado"
+
+        # 3. EXTRAÇÃO INTELIGENTE DO MOTIVO (Aqui está a correção)
+        # Em vez de buscar a palavra "MOTIVO:", vamos limpar as linhas técnicas e pegar o que sobrar.
+        linhas = texto_raw.split('\n')
+        linhas_limpas = []
+        for linha in linhas:
+            # Pula as linhas que são apenas metadados
+            l_upper = linha.upper()
+            if "VEREDICTO" in l_upper or "PROB:" in l_upper or "PROBABILIDADE" in l_upper:
+                continue
+            # Remove o prefixo se existir, mas guarda o texto
+            linha_tratada = linha.replace("MOTIVO:", "").replace("Motivo:", "").strip()
+            if len(linha_tratada) > 5: # Só guarda se tiver conteúdo
+                linhas_limpas.append(linha_tratada)
         
-        # Calibragem (Regra dos 60%)
+        motivo = " ".join(linhas_limpas)
+        if len(motivo) < 5: motivo = "Análise técnica padrão." # Só usa fallback se realmente vier vazio
+
+        # 4. Calibragem (Regra dos 60% EV+)
         if veredicto == "Aprovado" and prob_val < 60: veredicto = "Arriscado"
         
-        # Se falhou tudo e deu N/A, força "Arriscado" para segurança
-        if prob_str == "N/A" and veredicto == "Aprovado": 
-            veredicto = "Arriscado"
-            motivo = "IA não conseguiu calcular probabilidade exata."
+        # Segurança visual
+        if prob_str == "N/A" and veredicto == "Aprovado": veredicto = "Arriscado"
 
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         
