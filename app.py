@@ -1021,12 +1021,23 @@ def buscar_inteligencia(estrategia, liga, jogo):
 
 def obter_odd_final_para_calculo(odd_registro, estrategia):
     try:
-        valor = float(odd_registro)
-        if valor <= 1.15: 
+        # Verifica se é NaN (Not a Number) do Pandas/Numpy
+        if pd.isna(odd_registro) or str(odd_registro).strip() == "":
+            # Se a odd for vazia, usamos a média teórica da estratégia
             limites = MAPA_ODDS_TEORICAS.get(estrategia, {"min": 1.40, "max": 1.60})
             return (limites['min'] + limites['max']) / 2
+            
+        valor = float(odd_registro)
+        
+        # Se a odd for muito baixa (ex: 0 ou 1.0), assume erro e usa teórica
+        if valor <= 1.01: 
+            limites = MAPA_ODDS_TEORICAS.get(estrategia, {"min": 1.40, "max": 1.60})
+            return (limites['min'] + limites['max']) / 2
+            
         return valor
-    except: return 1.50
+    except: 
+        # Em caso de qualquer outro erro, retorna odd média segura de 1.50
+        return 1.50
 # ==============================================================================
 # 3. LÓGICA DE ESTRATÉGIAS (O CÉREBRO) E MÓDULOS IA
 # ==============================================================================
@@ -2324,14 +2335,26 @@ if st.session_state.ROBO_LIGADO:
                         }
                         
                         if adicionar_historico(item):
-                            # --- NOVO LAYOUT "CLEAN" (ATUALIZADO) ---
+                            # --- BLOCO DE ENVIO ATUALIZADO (LAYOUT EXECUTIVO + WINRATE CORRIGIDO) ---
                             try:
-                                # 1. Cabeçalho com Winrate
+                                # 1. Cabeçalho com Winrate (Prioridade: Estratégia > Pessoal > API)
                                 header_winrate = ""
-                                if "Winrate Pessoal" in txt_pessoal:
+                                
+                                # Tenta pegar o Winrate da Estratégia (Global)
+                                if txt_winrate_historico: 
+                                    import re
+                                    # Procura um número seguido de % (ex: 82%)
+                                    match = re.search(r'(\d+%)', txt_winrate_historico)
+                                    if match:
+                                        header_winrate = f" | 🟢 <b>Strat: {match.group(1)}</b>"
+                                
+                                # Se não achou da estratégia, tenta o Histórico Pessoal com o Time
+                                if not header_winrate and "Winrate Pessoal" in txt_pessoal:
                                     wr_val = txt_pessoal.split(':')[-1].strip()
-                                    header_winrate = f" | 🟢 <b>Hist.: {wr_val}</b>"
-                                elif dados_50: 
+                                    header_winrate = f" | 👤 <b>Time: {wr_val}</b>"
+                                    
+                                # Se não tiver nenhum dos dois, tenta o da API (Últimos 50 jogos)
+                                if not header_winrate and dados_50: 
                                     header_winrate = f" | 📊 <b>API: {dados_50['home']['over15_ft']}%</b>"
 
                                 # 2. Tradução do Momentum (Fim do "0x0")
@@ -2357,13 +2380,13 @@ if st.session_state.ROBO_LIGADO:
                                 msg += "──────────────\n" # Divisória visual
                                 msg += f"📊 <b>Raio-X do Momento:</b>\n"
                                 msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
-                                msg += f"• 🌡️ <b>Ritmo:</b> {texto_momento}\n" # Momentum traduzido
+                                msg += f"• 🌡️ <b>Ritmo:</b> {texto_momento}\n" 
                                 msg += linha_bd
                                 
                                 msg += "\n" # Quebra de linha para separar a IA
                                 msg += f"{opiniao_txt}" # Análise da IA
                                 
-                                # 5. Envio
+                                # 5. Envio Condicional
                                 sent_status = False
                                 if opiniao_db == "Aprovado":
                                     enviar_telegram(safe_token, safe_chat, msg)
