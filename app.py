@@ -651,25 +651,14 @@ def buscar_media_gols_ultimos_jogos(api_key, home_id, away_id):
         return {'home': get_avg_goals(home_id, 'home'), 'away': get_avg_goals(away_id, 'away')}
     except: return {'home': '?', 'away': '?'}
 
-@st.cache_data(ttl=86400)
-def analisar_tendencia_50_jogos(api_key, home_id, away_id):
+# --- FUNÇÃO QUE FALTOU ---
+@st.cache_data(ttl=120) 
+def buscar_agenda_cached(api_key, date_str):
     try:
-        def get_stats_50(team_id):
-            url = "https://v3.football.api-sports.io/fixtures"
-            params = {"team": team_id, "last": "50", "status": "FT"}
-            res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
-            jogos = res.get('response', [])
-            if not jogos: return {"over05_ht": 0, "over15_ft": 0, "ambas_marcam": 0, "avg_cards": 0, "avg_shots_goal": 0, "avg_saves_conceded": 0}
-            stats = {"qtd": len(jogos), "over05_ht": 0, "over15_ft": 0, "ambas_marcam": 0}
-            for j in jogos:
-                gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
-                g_ht_h = j['score']['halftime']['home'] or 0; g_ht_a = j['score']['halftime']['away'] or 0
-                if (g_ht_h + g_ht_a) > 0: stats["over05_ht"] += 1
-                if (gh + ga) >= 2: stats["over15_ft"] += 1
-                if gh > 0 and ga > 0: stats["ambas_marcam"] += 1
-            return {k: int((v / stats["qtd"]) * 100) if k not in ["qtd"] else v for k, v in stats.items()}
-        return {"home": get_stats_50(home_id), "away": get_stats_50(away_id)}
-    except: return None
+        url = "https://v3.football.api-sports.io/fixtures"
+        return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
+    except: return []
+# -------------------------
 
 # ==============================================================================
 # [NOVO] FUNÇÕES DE INTELIGÊNCIA HÍBRIDA (MÚLTIPLAS + NOVOS MERCADOS)
