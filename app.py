@@ -1747,6 +1747,61 @@ def validar_multiplas_pendentes(jogos_live, api_key, token, chat_ids):
             adicionar_historico(item_save)
 # ----------------------------------
 
+# --- FUNÇÃO DE MERCADOS ALTERNATIVOS (Recuperada) ---
+def verificar_mercados_alternativos(api_key):
+    """
+    Função Auto-Auditável: Confere se os sinais de Cartões e Goleiros bateram.
+    """
+    hist = st.session_state.get('historico_sinais', [])
+    pendentes = [s for s in hist if s['Liga'] == 'Mercado Alternativo' and s['Resultado'] == 'Pendente']
+    
+    if not pendentes: return
+    updates_buffer = []
+    
+    for s in pendentes:
+        try:
+            fid_real = str(s['FID']).replace("ALT_", "")
+            meta = 0.0
+            try: meta = float(str(s['Placar_Sinal']).split(':')[1].strip())
+            except: continue 
+
+            url = "https://v3.football.api-sports.io/fixtures"
+            r = requests.get(url, headers={"x-apisports-key": api_key}, params={"id": fid_real}).json()
+            if not r.get('response'): continue
+            jogo = r['response'][0]
+            status = jogo['fixture']['status']['short']
+            if status not in ['FT', 'AET', 'PEN']: continue
+            
+            url_stats = "https://v3.football.api-sports.io/fixtures/statistics"
+            r_stats = requests.get(url_stats, headers={"x-apisports-key": api_key}, params={"fixture": fid_real}).json()
+            if not r_stats.get('response'): continue
+            
+            stats_home = r_stats['response'][0]['statistics']
+            stats_away = r_stats['response'][1]['statistics']
+            def gv(lista, tipo): return next((x['value'] or 0 for x in lista if x['type'] == tipo), 0)
+
+            resultado_final = "❌ RED" 
+            if "CARTÕES" in s['Estrategia'] or "SNIPER" in s['Estrategia']:
+                cards_h = gv(stats_home, "Yellow Cards") + gv(stats_home, "Red Cards")
+                cards_a = gv(stats_away, "Yellow Cards") + gv(stats_away, "Red Cards")
+                total_cards = cards_h + cards_a
+                if total_cards > meta: resultado_final = "✅ GREEN"
+                s['Placar_Sinal'] = f"Meta: {meta} | Saiu: {total_cards}"
+
+            elif "DEFESAS" in s['Estrategia'] or "MURALHA" in s['Estrategia']:
+                saves_h = gv(stats_home, "Goalkeeper Saves")
+                saves_a = gv(stats_away, "Goalkeeper Saves")
+                max_saves = max(saves_h, saves_a)
+                if max_saves >= meta: resultado_final = "✅ GREEN"
+                s['Placar_Sinal'] = f"Meta: {meta} | Defesas: {max_saves}"
+
+            s['Resultado'] = resultado_final
+            updates_buffer.append(s)
+        except: pass
+
+    if updates_buffer: atualizar_historico_ram(updates_buffer)
+# ----------------------------------------------------
+
 # --- LOOP PRINCIPAL DO ROBÔ ---
 if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
