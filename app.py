@@ -2324,54 +2324,59 @@ if st.session_state.ROBO_LIGADO:
                         }
                         
                         if adicionar_historico(item):
-                            # --- NOVO LAYOUT EXECUTIVO (OPÇÃO 1) ---
+                            # --- NOVO LAYOUT "CLEAN" (ATUALIZADO) ---
                             try:
-                                # 1. Cabeçalho com Winrate (Topo)
+                                # 1. Cabeçalho com Winrate
                                 header_winrate = ""
                                 if "Winrate Pessoal" in txt_pessoal:
-                                    # Extrai só o número e % do texto pessoal
                                     wr_val = txt_pessoal.split(':')[-1].strip()
-                                    header_winrate = f" | 🟢 <b>Histórico: {wr_val}</b>"
+                                    header_winrate = f" | 🟢 <b>Hist.: {wr_val}</b>"
                                 elif dados_50: 
-                                    # Se não tem pessoal, usa o da API
                                     header_winrate = f" | 📊 <b>API: {dados_50['home']['over15_ft']}%</b>"
 
-                                # 2. Resumo Big Data (Limpo)
-                                resumo_bd = ""
-                                if "MANDANTE" in txt_bigdata:
-                                    # Tenta pegar só a parte interessante para não poluir
-                                    resumo_bd = f"\n💾 <b>Big Data:</b> Tendência confirmada no confronto." 
-                                
-                                # 3. Dados do Jogo (Conciso)
-                                dados_jogo_str = f"🔥 {s.get('stats', 'Pressão')} | 🌡️ Momentum: {rh}x{ra}"
+                                # 2. Tradução do Momentum (Fim do "0x0")
+                                texto_momento = "Morno 🧊"
+                                if rh > ra: texto_momento = "Pressão Casa 🔥"
+                                elif ra > rh: texto_momento = "Pressão Visitante 🔥"
+                                elif rh > 2 or ra > 2: texto_momento = "Jogo Aberto ⚡"
 
-                                # 4. Montagem da Mensagem
-                                msg = f"🚨 <b>SINAL {s['tag'].upper()}</b>{header_winrate}\n\n"
-                                msg += f"🏆 <b>{liga_safe}</b>\n"
-                                msg += f"⚽ {home_safe} 🆚 {away_safe}\n"
-                                msg += f"⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n"
+                                # 3. Big Data como item de lista
+                                linha_bd = ""
+                                if "MANDANTE" in txt_bigdata:
+                                    linha_bd = f"• 💾 <b>Big Data:</b> Tendência confirmada.\n"
+
+                                # 4. Montagem da Mensagem (Com espaçamento)
+                                msg = f"🚨 <b>SINAL {s['tag'].upper()}</b>{header_winrate}\n"
+                                msg += f"🏆 {liga_safe}\n"
+                                msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
+                                msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
+                                
                                 msg += f"{s['ordem']}\n"
                                 if destaque_odd: msg += f"{destaque_odd}\n"
-                                msg += f"📊 <b>Dados:</b> {dados_jogo_str}"
-                                msg += f"{resumo_bd}" # Adiciona Big Data se tiver
-                                msg += f"{opiniao_txt}" # Adiciona Análise da IA (Já formatada na função anterior)
                                 
-                                # 5. Envio Condicional
+                                msg += "──────────────\n" # Divisória visual
+                                msg += f"📊 <b>Raio-X do Momento:</b>\n"
+                                msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
+                                msg += f"• 🌡️ <b>Ritmo:</b> {texto_momento}\n" # Momentum traduzido
+                                msg += linha_bd
+                                
+                                msg += "\n" # Quebra de linha para separar a IA
+                                msg += f"{opiniao_txt}" # Análise da IA
+                                
+                                # 5. Envio
                                 sent_status = False
                                 if opiniao_db == "Aprovado":
-                                    # Adiciona selo de aprovação no topo se for muito bom
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
                                     st.toast(f"✅ Sinal Enviado: {s['tag']}")
 
                                 elif opiniao_db == "Arriscado":
-                                    # Adiciona aviso de cautela
-                                    msg += "\n\n👀 <i>Obs: Entrada com risco moderado. Reduza a stake.</i>"
+                                    msg += "\n👀 <i>Obs: Risco moderado detectado.</i>"
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
                                     st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
                                 else:
-                                    st.toast(f"🛑 Sinal Retido (Reprovado): {s['tag']}")
+                                    st.toast(f"🛑 Sinal Retido: {s['tag']}")
 
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
