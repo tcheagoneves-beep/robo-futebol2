@@ -1101,8 +1101,10 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         elif "arriscado" in texto.lower(): veredicto = "Arriscado"
         elif "reprovado" in texto.lower(): veredicto = "Reprovado"
         
-        # AJUSTE TIAGO: Baixei a régua. 70% já é um excelente sinal.
-        if veredicto == "Aprovado" and prob_val < 70: veredicto = "Arriscado"
+        # AJUSTE TIAGO: Calibragem Fina. 
+        # 60% é o "Ponto de Equilíbrio" (Breakeven) de uma Odd @1.66.
+        # Se a IA der 65%, já temos valor matemático.
+        if veredicto == "Aprovado" and prob_val < 60: veredicto = "Arriscado"
         
         motivo = texto.split('MOTIVO:')[-1].strip().split('\n')[0] if 'MOTIVO:' in texto else "Análise técnica."
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
