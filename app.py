@@ -2038,10 +2038,12 @@ with st.sidebar:
         
         # [NOVO] BOTÃO DE ALAVANCAGEM SNIPER
         if st.button("🚀 Gerar Alavancagem (Jogo Único)"):
-            if IA_ATIVADA:
-                with st.spinner("🤖 Triangulando API + Big Data + Histórico Pessoal..."):
-                    enviar_alavancagem(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], st.session_state['API_KEY'])
-                    st.success("Análise de Alavancagem Realizada e Salva!")
+    if IA_ATIVADA:
+        with st.spinner("🤖 Analisando..."):
+            # Resetamos a flag temporariamente para o botão manual ignorar o bloqueio diário
+            st.session_state['alavancagem_enviada'] = False 
+            enviar_alavancagem(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], st.session_state['API_KEY'])
+            st.success("Análise realizada!")
             else: st.error("IA Desconectada.")
 
         if st.button("🔄 Forçar Backfill (Salvar Jogos Perdidos)"):
@@ -2706,4 +2708,5 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")    
+
 
