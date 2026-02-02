@@ -1088,25 +1088,49 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         MOTIVO: [Explicação tática curta. Ex: "Visitante domina, mas reação do mandante favorece o Over 1.5".]
         """
         
+        # ... (parte anterior da função igual)
+        
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.2))
         st.session_state['gemini_usage']['used'] += 1
         texto = response.text.strip().replace("**", "").replace("*", "")
         
-        prob_str = "N/A"; prob_val = 0
-        match = re.search(r'PROB:\s*(\d+)', texto)
-        if match: prob_val = int(match.group(1)); prob_str = f"{prob_val}%"
+        # --- CORREÇÃO DE LEITURA (REGEX MAIS FORTE) ---
+        prob_val = 0
+        prob_str = "N/A"
         
+        # Tenta achar o número de várias formas (ex: "75%", "75", "PROB: 75")
+        match = re.search(r'(?:PROB|Probabilidade):\s*(\d+)', texto, re.IGNORECASE)
+        if match: 
+            prob_val = int(match.group(1))
+        else:
+            # Plano B: Procura qualquer número de 2 dígitos seguido de %
+            match_b = re.search(r'(\d{2})%', texto)
+            if match_b: prob_val = int(match_b.group(1))
+            
+        if prob_val > 0: prob_str = f"{prob_val}%"
+
+        # Extração do Motivo (Mais robusta)
+        motivo = "Análise tática inconclusiva."
+        if "MOTIVO:" in texto:
+            motivo = texto.split('MOTIVO:')[-1].strip().split('\n')[0]
+        elif "Motivo:" in texto:
+            motivo = texto.split('Motivo:')[-1].strip().split('\n')[0]
+        
+        # Lógica de Veredicto
         veredicto = "Neutro"
-        if "aprovado" in texto.lower() and "reprovado" not in texto.lower(): veredicto = "Aprovado"
-        elif "arriscado" in texto.lower(): veredicto = "Arriscado"
-        elif "reprovado" in texto.lower(): veredicto = "Reprovado"
+        texto_lower = texto.lower()
+        if "aprovado" in texto_lower and "reprovado" not in texto_lower: veredicto = "Aprovado"
+        elif "arriscado" in texto_lower: veredicto = "Arriscado"
+        elif "reprovado" in texto_lower: veredicto = "Reprovado"
         
-        # AJUSTE TIAGO: Calibragem Fina. 
-        # 60% é o "Ponto de Equilíbrio" (Breakeven) de uma Odd @1.66.
-        # Se a IA der 65%, já temos valor matemático.
+        # Calibragem (Regra dos 60%)
         if veredicto == "Aprovado" and prob_val < 60: veredicto = "Arriscado"
         
-        motivo = texto.split('MOTIVO:')[-1].strip().split('\n')[0] if 'MOTIVO:' in texto else "Análise técnica."
+        # Se falhou tudo e deu N/A, força "Arriscado" para segurança
+        if prob_str == "N/A" and veredicto == "Aprovado": 
+            veredicto = "Arriscado"
+            motivo = "IA não conseguiu calcular probabilidade exata."
+
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
         
         return f"\n🤖 <b>ANÁLISE TÉCNICA:</b>\n{emoji} <b>{veredicto.upper()} ({prob_str})</b>\n📝 <i>{motivo}</i>", prob_str
