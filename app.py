@@ -742,7 +742,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
 
 # [NOVA FUNÇÃO] ESTRATÉGIA ALAVANCAGEM SNIPER (TRIANGULAÇÃO DE DADOS)
 def gerar_bet_builder_alavancagem(api_key):
-    if not IA_ATIVADA: return None
+    if not IA_ATIVADA: return []
     
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
@@ -752,19 +752,18 @@ def gerar_bet_builder_alavancagem(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # Filtra apenas Ligas Principais (Onde a estatística é confiável)
+        # Filtra apenas Ligas Principais
         LIGAS_ALAVANCAGEM = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
         candidatos = [j for j in jogos if j['league']['id'] in LIGAS_ALAVANCAGEM]
         
-        if not candidatos: return None
+        if not candidatos: return []
         
-        melhor_oportunidade = None
-        score_maximo = -1
+        lista_provaveis = []
         
-        # Carrega o Histórico Pessoal uma única vez para não pesar
+        # Carrega o Histórico Pessoal uma única vez
         df_historico = st.session_state.get('historico_full', pd.DataFrame())
 
-        # Varredura para encontrar o Jogo Perfeito
+        # Varredura para encontrar TODOS os jogos bons
         for j in candidatos:
             try:
                 home_nm = j['teams']['home']['name']
@@ -772,90 +771,84 @@ def gerar_bet_builder_alavancagem(api_key):
                 home_id = j['teams']['home']['id']
                 away_id = j['teams']['away']['id']
                 
-                # --- 2. FONTE B: BIG DATA (DADOS GLOBAIS - FIREBASE) ---
+                # --- 2. FONTE B: BIG DATA ---
                 dados_bd = consultar_bigdata_cenario_completo(home_id, away_id)
                 
-                # --- 3. FONTE C: HISTÓRICO PESSOAL (SEUS DADOS) ---
-                # Verifica se já lucramos com esses times antes
-                txt_historico_pessoal = "Sem histórico recente com estes times."
+                # --- 3. FONTE C: HISTÓRICO PESSOAL ---
+                txt_historico_pessoal = "Sem histórico recente."
+                wr_h = 0; wr_a = 0
                 if not df_historico.empty:
-                    # Filtra jogos passados desses times
                     f_h = df_historico[df_historico['Jogo'].str.contains(home_nm, na=False, case=False)]
                     f_a = df_historico[df_historico['Jogo'].str.contains(away_nm, na=False, case=False)]
-                    
-                    # Calcula Winrate Pessoal com esses times
-                    total_h = len(f_h); total_a = len(f_a)
-                    greens_h = len(f_h[f_h['Resultado'].str.contains('GREEN', na=False)])
-                    greens_a = len(f_a[f_a['Resultado'].str.contains('GREEN', na=False)])
-                    
-                    if total_h > 0 or total_a > 0:
-                        wr_h = (greens_h/total_h*100) if total_h > 0 else 0
-                        wr_a = (greens_a/total_a*100) if total_a > 0 else 0
-                        txt_historico_pessoal = f"Meu Histórico: {home_nm} ({wr_h:.0f}% de Acerto) | {away_nm} ({wr_a:.0f}% de Acerto)."
+                    if len(f_h) > 0: wr_h = len(f_h[f_h['Resultado'].str.contains('GREEN', na=False)]) / len(f_h) * 100
+                    if len(f_a) > 0: wr_a = len(f_a[f_a['Resultado'].str.contains('GREEN', na=False)]) / len(f_a) * 100
+                    if len(f_h) > 0 or len(f_a) > 0:
+                        txt_historico_pessoal = f"Histórico: {home_nm} ({wr_h:.0f}%) | {away_nm} ({wr_a:.0f}%)."
 
-                # Score Baseado no Big Data (Para pré-selecionar)
+                # SISTEMA DE PONTUAÇÃO (SCORE)
                 score = 0
-                if "7" in dados_bd or "8" in dados_bd or "9" in dados_bd: score += 2 
+                # Big Data Forte (Prob > 70%) ganha 2 pontos
+                if "7" in dados_bd or "8" in dados_bd or "9" in dados_bd: score += 2
+                # Histórico Pessoal Ruim tira pontos
+                if (len(f_h) > 2 and wr_h < 40) or (len(f_a) > 2 and wr_a < 40): score -= 5
                 
-                # Score Baseado no Árbitro (API)
-                referee = j['fixture'].get('referee', 'Desconhecido')
-                
-                if score >= score_maximo:
-                    score_maximo = score
-                    melhor_oportunidade = {
+                # Se tiver score positivo, entra na lista de candidatos
+                if score >= 2:
+                    lista_provaveis.append({
                         "jogo": j,
                         "bigdata": dados_bd,
                         "historico": txt_historico_pessoal,
-                        "referee": referee
-                    }
+                        "referee": j['fixture'].get('referee', 'Desconhecido'),
+                        "score": score
+                    })
             except: pass
             
-        if not melhor_oportunidade: return None
+        if not lista_provaveis: return []
         
-        # Preparação final para a IA
-        j = melhor_oportunidade['jogo']
-        home = j['teams']['home']['name']
-        away = j['teams']['away']['name']
-        fid = j['fixture']['id']
+        # Ordena pelos melhores scores e pega o TOP 3
+        lista_provaveis.sort(key=lambda x: x['score'], reverse=True)
+        top_picks = lista_provaveis[:3]
         
-        # --- 4. O CÉREBRO (CONSULTORIA IA) ---
-        prompt = f"""
-        ATUE COMO UM ANALISTA SÊNIOR DE RISCO (FUTEBOL).
-        OBJETIVO: Criar uma Estratégia de Alavancagem (Criar Aposta) para um ÚNICO jogo.
+        resultados_finais = []
         
-        DADOS COMPLETOS DA TRIANGULAÇÃO:
-        1. O JOGO (API): {home} x {away} | Liga: {j['league']['name']} | Árbitro: {melhor_oportunidade['referee']}
-        2. ESTATÍSTICA GLOBAL (BIG DATA 20k): {melhor_oportunidade['bigdata']}
-        3. PERFORMANCE DO USUÁRIO (HISTÓRICO): {melhor_oportunidade['historico']}
+        # --- 4. O CÉREBRO (CONSULTORIA IA PARA CADA UM DO TOP 3) ---
+        for pick in top_picks:
+            j = pick['jogo']
+            home = j['teams']['home']['name']
+            away = j['teams']['away']['name']
+            fid = j['fixture']['id']
+            
+            prompt = f"""
+            ATUE COMO ANALISTA SÊNIOR DE ALAVANCAGEM.
+            MONTE UM BET BUILDER PARA ESTE JOGO ESPECÍFICO.
+            
+            DADOS:
+            1. JOGO: {home} x {away} ({j['league']['name']})
+            2. BIG DATA: {pick['bigdata']}
+            3. HISTÓRICO USER: {pick['historico']}
+            4. JUIZ: {pick['referee']}
+            
+            SAÍDA JSON:
+            {{
+                "titulo": "🚀 ALAVANCAGEM {home} vs {away}",
+                "selecoes": ["Vencedor...", "Gols...", "Cartões..."],
+                "analise_ia": "Explicação técnica rápida.",
+                "confianca": "Alta"
+            }}
+            """
+            try:
+                time.sleep(1) # Delay para não travar a API do Gemini
+                response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
+                st.session_state['gemini_usage']['used'] += 1
+                r_json = json.loads(response.text)
+                r_json['fid'] = fid
+                r_json['jogo'] = f"{home} x {away}"
+                resultados_finais.append(r_json)
+            except: pass
+            
+        return resultados_finais
         
-        TAREFA:
-        Com base no cruzamento desses 3 dados, monte o bilhete ideal (Odd @3.50 a @5.00).
-        Se o Histórico Pessoal for ruim com esses times, SEJA MAIS CONSERVADOR.
-        Se o Big Data mostrar muitos gols, foque em gols.
-        Se o Árbitro for rigoroso, inclua cartões.
-        
-        SAÍDA (JSON):
-        {{
-            "titulo": "🚀 ALAVANCAGEM SNIPER",
-            "selecoes": [
-                "Vencedor/Dupla: ...",
-                "Gols: ...",
-                "Especial (Cantos/Cartões): ..."
-            ],
-            "analise_ia": "Explique como o histórico pessoal e o big data validaram essa escolha.",
-            "confianca": "Alta/Média/Baixa"
-        }}
-        """
-        
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
-        st.session_state['gemini_usage']['used'] += 1
-        resultado_json = json.loads(response.text)
-        
-        resultado_json['fid'] = fid
-        resultado_json['jogo'] = f"{home} x {away}"
-        return resultado_json
-        
-    except Exception as e: return None
+    except Exception as e: return []
 
 # ==============================================================================
 
@@ -1536,38 +1529,46 @@ def enviar_alavancagem(token, chat_ids, api_key):
     # Evita repetição no mesmo dia
     if st.session_state.get('alavancagem_enviada'): return
 
-    dados = gerar_bet_builder_alavancagem(api_key)
-    if not dados: return
+    # Agora recebe uma LISTA de oportunidades (Top 3)
+    lista_dados = gerar_bet_builder_alavancagem(api_key)
     
-    # Formata a mensagem bonita
-    msg = f"💎 <b>{dados['titulo']} (Estratégia Sniper)</b>\n"
-    msg += f"⚽ <b>{dados['jogo']}</b>\n\n"
-    msg += "🛠️ <b>CRIAR APOSTA (Combinação):</b>\n"
-    for sel in dados['selecoes']:
-        msg += f"✅ {sel}\n"
+    if not lista_dados: 
+        # Opcional: Avisar que não houve jogos bons
+        # enviar_telegram(token, chat_ids, "🚫 Hoje o Big Data não encontrou nenhuma oportunidade de Alavancagem com segurança.")
+        st.session_state['alavancagem_enviada'] = True
+        return
+    
+    # Loop para enviar cada uma das Top 3
+    for dados in lista_dados:
+        msg = f"💎 <b>{dados['titulo']}</b>\n"
+        msg += f"⚽ <b>{dados['jogo']}</b>\n\n"
+        msg += "🛠️ <b>CRIAR APOSTA (Combinação):</b>\n"
+        for sel in dados['selecoes']:
+            msg += f"✅ {sel}\n"
+            
+        msg += f"\n🧠 <b>Motivo IA:</b> {dados['analise_ia']}\n"
+        msg += "⚠️ <i>Gestão: Use apenas 'Gordura' (Stake Baixa). Alvo: Odd @3.50+</i>"
         
-    msg += f"\n🧠 <b>Motivo IA:</b> {dados['analise_ia']}\n"
-    msg += "⚠️ <i>Gestão: Use apenas 'Gordura' (Stake Baixa). Alvo: Odd @4.00+</i>"
-    
-    enviar_telegram(token, chat_ids, msg)
-    
-    # SALVA NO HISTÓRICO PARA CONFERÊNCIA AUTOMÁTICA
-    # Salvamos como "Estrategia: Alavancagem" para ser facilmente identificado
-    item_alavancagem = {
-        "FID": str(dados['fid']),
-        "Data": get_time_br().strftime('%Y-%m-%d'),
-        "Hora": "10:00", # Horário fixo de envio
-        "Liga": "Bet Builder Elite",
-        "Jogo": dados['jogo'],
-        "Placar_Sinal": "Combo @4.00", # Apenas visual
-        "Estrategia": "Alavancagem", # Tag para o filtro
-        "Resultado": "Pendente",
-        "Opiniao_IA": "Aprovado",
-        "Probabilidade": "Risco Alto" # Alavancagem é sempre risco alto
-    }
-    adicionar_historico(item_alavancagem)
+        enviar_telegram(token, chat_ids, msg)
+        
+        # SALVA NO HISTÓRICO
+        item_alavancagem = {
+            "FID": str(dados['fid']),
+            "Data": get_time_br().strftime('%Y-%m-%d'),
+            "Hora": "10:00",
+            "Liga": "Bet Builder Elite",
+            "Jogo": dados['jogo'],
+            "Placar_Sinal": "Combo Alavancagem", 
+            "Estrategia": "Alavancagem", 
+            "Resultado": "Pendente",
+            "Opiniao_IA": "Aprovado",
+            "Probabilidade": "Alta (Top 3)"
+        }
+        adicionar_historico(item_alavancagem)
+        time.sleep(3) # Pausa dramática entre mensagens no Telegram
     
     st.session_state['alavancagem_enviada'] = True
+
 def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
     candidatos = []
     for j in jogos_live:
