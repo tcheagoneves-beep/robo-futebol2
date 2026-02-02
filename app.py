@@ -1011,43 +1011,95 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
     try:
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
+        
+        # Dados Cruciais para Análise de Eficiência
         chutes_totais = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
+        chutes_gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
+        chutes_fora = chutes_totais - chutes_gol
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 0
-        if tempo > 20 and chutes_totais == 0:
-            return "\n🤖 <b>IA:</b> ⚠️ <b>Ignorado</b> - Dados zerados (API Delay).", "N/A"
+        
+        # 1. Filtro de "Jogo Morto" (Economia de API e Red óbvio)
+        if tempo > 20 and chutes_totais < 2:
+            return "\n🤖 <b>IA:</b> ⚠️ <b>Reprovado</b> - Jogo sem volume (Morto).", "10%"
+            
     except: return "", "N/A"
 
-    chutes_area_casa = gv(s1, 'Shots insidebox')
-    chutes_area_fora = gv(s2, 'Shots insidebox')
     escanteios = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
     
+    # PROMPT DE AUDITORIA MATEMÁTICA
     prompt = f"""
-    Atue como um ANALISTA SÊNIOR DE FUTEBOL.
-    DADOS DO JOGO: {dados_jogo['jogo']} | Placar: {dados_jogo['placar']} | Tempo: {dados_jogo.get('tempo')}
-    Estratégia: {estrategia} | Time Favorável: {time_favoravel}
-    ESTATÍSTICAS AO VIVO:
-    - Pressão (Momentum): Casa {rh} x {ra} Visitante
-    - Chutes no Gol: Casa {gv(s1, 'Shots on Goal')} x {gv(s2, 'Shots on Goal')} Visitante
-    - Escanteios Totais: {escanteios}
-    CONTEXTO HISTÓRICO: {extra_context}
-    TAREFA: Decida se aprova a entrada e dê uma explicação técnica de 1 linha.
-    FORMATO DE SAÍDA:
-    Aprovado/Arriscado - [Explicação Técnica]
-    PROB: [0-100]%
+    ATUE COMO UM ALGORITMO DE VALIDAÇÃO MATEMÁTICA (FUTEBOL).
+    SUA FUNÇÃO É DERRUBAR A PROBABILIDADE SE HOUVER INEFICIÊNCIA.
+    
+    DADOS DO JOGO:
+    - Jogo: {dados_jogo['jogo']} ({dados_jogo['placar']}) aos {tempo} min.
+    - Estratégia Alvo: {estrategia}
+    
+    ESTATÍSTICAS DE PRESSÃO:
+    - Chutes Totais: {chutes_totais}
+    - Chutes no Gol (Perigo Real): {chutes_gol}
+    - Chutes para Fora/Bloqueados (Ineficiência): {chutes_fora}
+    - Escanteios: {escanteios}
+    - Momentum (Pressão): Casa {rh} x {ra} Fora
+    
+    CONTEXTO (BIG DATA):
+    {extra_context}
+    
+    CÁLCULO DE SCORE (Siga estritamente):
+    1. Comece com a % histórica do Big Data (se não tiver, use 60%).
+    2. Se (Chutes no Gol) < (1/3 dos Chutes Totais) -> SUBTRAIA 15% (Time chuta fofo).
+    3. Se o jogo está empatado após os 70min e Momentum < 5 -> SUBTRAIA 20% (Jogo travado).
+    4. Se houver "Super Pressão" (Momentum > 10 E Chutes no Gol > 8) -> ADICIONE 15%.
+    
+    REGRAS DE VEREDICTO:
+    - Só marque "Aprovado" se o Score Final calculado for MAIOR QUE 80.
+    - Se for entre 60 e 79, marque "Arriscado".
+    - Menos de 60, marque "Reprovado".
+    
+    SAÍDA OBRIGATÓRIA:
+    VEREDICTO: [Aprovado/Arriscado/Reprovado]
+    PROB: [Número calculado]%
+    EXPLICAÇÃO: [Motivo matemático: ex "Muitos chutes pra fora baixaram a nota"]
     """
+    
     try:
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.2))
+        # Temperature 0.0 = Robô sem criatividade, apenas lógica pura
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.0))
         st.session_state['gemini_usage']['used'] += 1
         texto = response.text.strip().replace("**", "").replace("*", "")
+        
         prob_str = "N/A"
-        match = re.search(r'PROB:\s*(\d+[\.,]?\d*)', texto)
-        if match: prob_str = f"{int(float(match.group(1).replace(',', '.')))}%"
-        veredicto = "Aprovado" if "aprovado" in texto.lower()[:20] else "Arriscado"
-        motivo = texto.replace("Aprovado", "").replace("Arriscado", "").replace("-", "", 1).split('.')[0].strip() + "."
-        emoji = "✅" if veredicto == "Aprovado" else "⚠️"
+        prob_val = 0
+        match = re.search(r'PROB:\s*(\d+)', texto)
+        if match: 
+            prob_val = int(match.group(1))
+            prob_str = f"{prob_val}%"
+        
+        # Trava de Segurança Final (Hard Code)
+        # Se a IA alucinar e der 90% num jogo sem chute no gol, o código corta.
+        if prob_val > 70 and chutes_gol == 0 and tempo > 30:
+            prob_val = 40
+            texto = texto.replace("Aprovado", "Reprovado").replace(prob_str, "40%")
+            prob_str = "40%"
+
+        veredicto = "Neutro"
+        if "aprovado" in texto.lower() and "reprovado" not in texto.lower(): veredicto = "Aprovado"
+        elif "arriscado" in texto.lower(): veredicto = "Arriscado"
+        elif "reprovado" in texto.lower(): veredicto = "Reprovado"
+        
+        # Só exibe Aprovado se passar na malha fina (>80%)
+        if veredicto == "Aprovado" and prob_val < 80:
+            veredicto = "Arriscado"
+            
+        motivo = texto.split('EXPLICAÇÃO:')[-1].strip().split('\n')[0] if 'EXPLICAÇÃO:' in texto else "Análise técnica."
+        
+        emoji_map = {"Aprovado": "✅", "Arriscado": "⚠️", "Reprovado": "🛑", "Neutro": "😐"}
+        emoji = emoji_map.get(veredicto, "😐")
+        
         return f"\n🤖 <b>ANÁLISE TÉCNICA:</b>\n{emoji} <b>{veredicto.upper()}</b>\n📝 <i>{motivo}</i>", prob_str
     except: return "", "N/A"
+
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Desconectada."
     df = st.session_state.get('historico_full', pd.DataFrame())
@@ -2487,3 +2539,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")    
+
