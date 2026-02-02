@@ -1037,14 +1037,14 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
-        # Dados Cruciais para Análise de Eficiência
+        # Dados Cruciais
         chutes_totais = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
         chutes_gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
         chutes_fora = chutes_totais - chutes_gol
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 0
         
-        # 1. Filtro de "Jogo Morto" (Economia de API e Red óbvio)
+        # 1. Filtro de "Jogo Morto"
         if tempo > 20 and chutes_totais < 2:
             return "\n🤖 <b>IA:</b> ⚠️ <b>Reprovado</b> - Jogo sem volume (Morto).", "10%"
             
@@ -1052,44 +1052,36 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
     escanteios = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
     
-    # PROMPT DE AUDITORIA MATEMÁTICA
+    # PROMPT EXECUTIVO (SEM MATEMÁTICA, APENAS TÁTICA)
     prompt = f"""
-    ATUE COMO UM ALGORITMO DE VALIDAÇÃO MATEMÁTICA (FUTEBOL).
-    SUA FUNÇÃO É DERRUBAR A PROBABILIDADE SE HOUVER INEFICIÊNCIA.
+    ATUE COMO UM ANALISTA DE RISCO SÊNIOR (FUTEBOL).
+    SEJA DIRETO, FRIO E EXECUTIVO. NÃO SE AUTO-INTITULE.
     
-    DADOS DO JOGO:
+    CENÁRIO:
     - Jogo: {dados_jogo['jogo']} ({dados_jogo['placar']}) aos {tempo} min.
-    - Estratégia Alvo: {estrategia}
+    - Estratégia: {estrategia}
     
-    ESTATÍSTICAS DE PRESSÃO:
-    - Chutes Totais: {chutes_totais}
-    - Chutes no Gol (Perigo Real): {chutes_gol}
-    - Chutes para Fora/Bloqueados (Ineficiência): {chutes_fora}
+    DADOS TÉCNICOS:
+    - Chutes no Gol (Perigo Real): {chutes_gol} (de {chutes_totais} totais)
     - Escanteios: {escanteios}
     - Momentum (Pressão): Casa {rh} x {ra} Fora
     
-    CONTEXTO (BIG DATA):
+    CONTEXTO (BIG DATA/HISTÓRICO):
     {extra_context}
     
-    CÁLCULO DE SCORE (Siga estritamente):
-    1. Comece com a % histórica do Big Data (se não tiver, use 60%).
-    2. Se (Chutes no Gol) < (1/3 dos Chutes Totais) -> SUBTRAIA 15% (Time chuta fofo).
-    3. Se o jogo está empatado após os 70min e Momentum < 5 -> SUBTRAIA 20% (Jogo travado).
-    4. Se houver "Super Pressão" (Momentum > 10 E Chutes no Gol > 8) -> ADICIONE 15%.
+    SUA MISSÃO:
+    Calcule internamente a probabilidade de Green.
+    - Penalize ineficiência (muitos chutes pra fora).
+    - Penalize histórico ruim no Big Data.
+    - Valorize pressão alta (Momentum) + Chutes no Gol.
     
-    REGRAS DE VEREDICTO:
-    - Só marque "Aprovado" se o Score Final calculado for MAIOR QUE 80.
-    - Se for entre 60 e 79, marque "Arriscado".
-    - Menos de 60, marque "Reprovado".
-    
-    SAÍDA OBRIGATÓRIA:
+    SAÍDA OBRIGATÓRIA (Use exatamente este formato):
     VEREDICTO: [Aprovado/Arriscado/Reprovado]
-    PROB: [Número calculado]%
-    EXPLICAÇÃO: [Motivo matemático: ex "Muitos chutes pra fora baixaram a nota"]
+    PROB: [Número]%
+    MOTIVO: [Uma frase curta e tática explicando o porquê. NÃO mostre contas matemáticas. Ex: "Time da casa pressiona mas finaliza mal" ou "Pressão avassaladora confirma o Big Data".]
     """
     
     try:
-        # Temperature 0.0 = Robô sem criatividade, apenas lógica pura
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.0))
         st.session_state['gemini_usage']['used'] += 1
         texto = response.text.strip().replace("**", "").replace("*", "")
@@ -1101,11 +1093,10 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
             prob_val = int(match.group(1))
             prob_str = f"{prob_val}%"
         
-        # Trava de Segurança Final (Hard Code)
-        # Se a IA alucinar e der 90% num jogo sem chute no gol, o código corta.
+        # Trava de Segurança
         if prob_val > 70 and chutes_gol == 0 and tempo > 30:
             prob_val = 40
-            texto = texto.replace("Aprovado", "Reprovado").replace(prob_str, "40%")
+            texto = texto.replace("Aprovado", "Reprovado")
             prob_str = "40%"
 
         veredicto = "Neutro"
@@ -1113,16 +1104,15 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         elif "arriscado" in texto.lower(): veredicto = "Arriscado"
         elif "reprovado" in texto.lower(): veredicto = "Reprovado"
         
-        # Só exibe Aprovado se passar na malha fina (>80%)
+        # Filtro de qualidade
         if veredicto == "Aprovado" and prob_val < 80:
             veredicto = "Arriscado"
             
-        motivo = texto.split('EXPLICAÇÃO:')[-1].strip().split('\n')[0] if 'EXPLICAÇÃO:' in texto else "Análise técnica."
+        motivo = texto.split('MOTIVO:')[-1].strip().split('\n')[0] if 'MOTIVO:' in texto else "Análise técnica."
         
-        emoji_map = {"Aprovado": "✅", "Arriscado": "⚠️", "Reprovado": "🛑", "Neutro": "😐"}
-        emoji = emoji_map.get(veredicto, "😐")
-        
-        return f"\n🤖 <b>ANÁLISE TÉCNICA:</b>\n{emoji} <b>{veredicto.upper()}</b>\n📝 <i>{motivo}</i>", prob_str
+        # Formatação Limpa para o Telegram
+        emoji = "✅" if veredicto == "Aprovado" else "⚠️"
+        return f"\n🤖 <b>ANÁLISE TÉCNICA:</b>\n{emoji} <b>{veredicto.upper()} ({prob_str})</b>\n📝 <i>{motivo}</i>", prob_str
     except: return "", "N/A"
 
 def analisar_bi_com_ia():
@@ -2334,37 +2324,54 @@ if st.session_state.ROBO_LIGADO:
                         }
                         
                         if adicionar_historico(item):
-                            # Prepara Mensagem Telegram
+                            # --- NOVO LAYOUT EXECUTIVO (OPÇÃO 1) ---
                             try:
-                                txt_winrate_historico = ""
-                                if txt_pessoal != "Neutro":
-                                    txt_winrate_historico = f" | 👤 {txt_pessoal}"
+                                # 1. Cabeçalho com Winrate (Topo)
+                                header_winrate = ""
+                                if "Winrate Pessoal" in txt_pessoal:
+                                    # Extrai só o número e % do texto pessoal
+                                    wr_val = txt_pessoal.split(':')[-1].strip()
+                                    header_winrate = f" | 🟢 <b>Histórico: {wr_val}</b>"
+                                elif dados_50: 
+                                    # Se não tem pessoal, usa o da API
+                                    header_winrate = f" | 📊 <b>API: {dados_50['home']['over15_ft']}%</b>"
 
-                                if prob_txt != "..." and prob_txt != "N/A": prob_final_display = f"\n🔮 <b>Probabilidade IA: {prob_txt}</b>"
-                                else: prob_final_display = buscar_inteligencia(s['tag'], j['league']['name'], f"{home} x {away}")
+                                # 2. Resumo Big Data (Limpo)
+                                resumo_bd = ""
+                                if "MANDANTE" in txt_bigdata:
+                                    # Tenta pegar só a parte interessante para não poluir
+                                    resumo_bd = f"\n💾 <b>Big Data:</b> Tendência confirmada no confronto." 
                                 
-                                # Adiciona o dado do Big Data na mensagem para você ver
-                                texto_bigdata_msg = ""
-                                if "Freq." in txt_bigdata:
-                                    texto_bigdata_msg = f"\n💾 {txt_bigdata}"
+                                # 3. Dados do Jogo (Conciso)
+                                dados_jogo_str = f"🔥 {s.get('stats', 'Pressão')} | 🌡️ Momentum: {rh}x{ra}"
 
-                                msg = (f"<b>🚨 SINAL {s['tag'].upper()}</b>{txt_winrate_historico}\n\n🏆 <b>{liga_safe}</b>\n⚽ {home_safe} 🆚 {away_safe}\n⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n{s['ordem']}\n{destaque_odd}\n📊 <i>Dados: {s['stats']}</i>\n⚽ Médias (10j): Casa {medias_gols['home']} | Fora {medias_gols['away']}{texto_bigdata_msg}\n{prob_final_display}{opiniao_txt}")
+                                # 4. Montagem da Mensagem
+                                msg = f"🚨 <b>SINAL {s['tag'].upper()}</b>{header_winrate}\n\n"
+                                msg += f"🏆 <b>{liga_safe}</b>\n"
+                                msg += f"⚽ {home_safe} 🆚 {away_safe}\n"
+                                msg += f"⏰ <b>{tempo}' min</b> (Placar: {placar})\n\n"
+                                msg += f"{s['ordem']}\n"
+                                if destaque_odd: msg += f"{destaque_odd}\n"
+                                msg += f"📊 <b>Dados:</b> {dados_jogo_str}"
+                                msg += f"{resumo_bd}" # Adiciona Big Data se tiver
+                                msg += f"{opiniao_txt}" # Adiciona Análise da IA (Já formatada na função anterior)
                                 
+                                # 5. Envio Condicional
                                 sent_status = False
                                 if opiniao_db == "Aprovado":
-                                    msg = f"✅ <b>SINAL APROVADO (General Rigoroso)</b>\n" + msg
+                                    # Adiciona selo de aprovação no topo se for muito bom
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
                                     st.toast(f"✅ Sinal Enviado: {s['tag']}")
 
                                 elif opiniao_db == "Arriscado":
-                                    msg = f"⚠️ <b>SINAL MODERADO (Oportunidade)</b>\n" + msg
-                                    msg += "\n<i>💡 Obs: O General detectou risco nas estatísticas. Cautela.</i>"
+                                    # Adiciona aviso de cautela
+                                    msg += "\n\n👀 <i>Obs: Entrada com risco moderado. Reduza a stake.</i>"
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
                                     st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
                                 else:
-                                    st.toast(f"🛑 Sinal Retido pelo General: {s['tag']}")
+                                    st.toast(f"🛑 Sinal Retido (Reprovado): {s['tag']}")
 
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
