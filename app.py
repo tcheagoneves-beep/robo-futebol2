@@ -1051,7 +1051,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 0
 
-        # Filtro Hardcode: Jogo morto (apenas se não for estratégia de Under)
+        # Filtro Hardcode: Jogo morto
         if "Under" not in estrategia and "Morno" not in estrategia:
             if tempo > 20 and chutes_totais < 2:
                 return "\n🤖 <b>IA:</b> ⚠️ <b>Reprovado</b> - Jogo sem volume (Morto).", "10%"
@@ -1071,19 +1071,11 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         CONTEXTO (BIG DATA/HISTÓRICO):
         {extra_context}
         
-        DIRETRIZES DE AVALIAÇÃO:
-        1. SE A ESTRATÉGIA FOR "OVER GOLS" (Ex: Tiroteio, Blitz, Porteira, Janela):
-           - Se o time perdendo está pressionando (Reação), isso é ÓTIMO. Aumenta a chance de gol. NÃO REPROVE por "risco de reação".
-           - O cenário ideal é "Lá e Cá" (trocação).
-           
-        2. SE A ESTRATÉGIA FOR "FAVORITO/BACK":
-           - Aí sim, se o adversário pressiona, é Risco.
-           
-        SUA MISSÃO:
-        Dê o veredicto focado na probabilidade do GREEN da estratégia específica.
-        Seja breve e tático na explicação.
+        DIRETRIZES:
+        1. Em "OVER GOLS", time perdendo pressionando é OPORTUNIDADE (Reação), não risco.
+        2. Seja direto e tático.
         
-        SAÍDA OBRIGATÓRIA (JSON implícito):
+        SAÍDA OBRIGATÓRIA (TEXTO PURO - NÃO USE JSON, NÃO USE MARKDOWN):
         VEREDICTO: [Aprovado/Arriscado/Reprovado]
         PROB: [Número]%
         MOTIVO: [Sua análise tática aqui]
@@ -1091,14 +1083,18 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
         st.session_state['gemini_usage']['used'] += 1
-        texto_raw = response.text.strip().replace("**", "").replace("*", "")
         
-        # --- NOVO EXTRATOR FLEXÍVEL (RECUPERA O TEXTO RICO) ---
+        # --- LIMPEZA PESADA (A CORREÇÃO) ---
+        texto_raw = response.text
+        # Remove qualquer lixo de formatação de código
+        for lixo in ['```json', '```', '{', '}', '"', "'", '**']:
+            texto_raw = texto_raw.replace(lixo, "")
+        texto_raw = texto_raw.strip()
+        
+        # 1. Extração da Probabilidade
         prob_val = 0
         prob_str = "N/A"
-        
-        # 1. Tenta extrair a Probabilidade
-        match = re.search(r'(?:PROB|Probabilidade|Prob):\s*(\d+)', texto_raw, re.IGNORECASE)
+        match = re.search(r'(?:PROB|Probabilidade|Prob)[:\s]*(\d+)', texto_raw, re.IGNORECASE)
         if match: 
             prob_val = int(match.group(1))
         else:
@@ -1107,34 +1103,33 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         
         if prob_val > 0: prob_str = f"{prob_val}%"
 
-        # 2. Tenta extrair o Veredicto
+        # 2. Extração do Veredicto
         veredicto = "Neutro"
         texto_lower = texto_raw.lower()
         if "aprovado" in texto_lower and "reprovado" not in texto_lower: veredicto = "Aprovado"
         elif "arriscado" in texto_lower: veredicto = "Arriscado"
         elif "reprovado" in texto_lower: veredicto = "Reprovado"
 
-        # 3. EXTRAÇÃO INTELIGENTE DO MOTIVO (Aqui está a correção)
-        # Em vez de buscar a palavra "MOTIVO:", vamos limpar as linhas técnicas e pegar o que sobrar.
+        # 3. Extração do Motivo (Limpa linhas técnicas)
         linhas = texto_raw.split('\n')
         linhas_limpas = []
         for linha in linhas:
-            # Pula as linhas que são apenas metadados
-            l_upper = linha.upper()
-            if "VEREDICTO" in l_upper or "PROB:" in l_upper or "PROBABILIDADE" in l_upper:
+            l_up = linha.upper()
+            # Ignora linhas que contenham as palavras chaves técnicas
+            if "VEREDICTO" in l_up or "PROB" in l_up:
                 continue
-            # Remove o prefixo se existir, mas guarda o texto
-            linha_tratada = linha.replace("MOTIVO:", "").replace("Motivo:", "").strip()
-            if len(linha_tratada) > 5: # Só guarda se tiver conteúdo
-                linhas_limpas.append(linha_tratada)
+            # Limpa prefixos
+            linha_limpa = linha.replace("MOTIVO:", "").replace("Motivo:", "").strip()
+            if len(linha_limpa) > 5:
+                linhas_limpas.append(linha_limpa)
         
         motivo = " ".join(linhas_limpas)
-        if len(motivo) < 5: motivo = "Análise técnica padrão." # Só usa fallback se realmente vier vazio
+        if len(motivo) < 5: motivo = "Análise tática baseada nos dados acima."
 
-        # 4. Calibragem (Regra dos 60% EV+)
+        # 4. Calibragem (60%)
         if veredicto == "Aprovado" and prob_val < 60: veredicto = "Arriscado"
         
-        # Segurança visual
+        # Fallback de segurança
         if prob_str == "N/A" and veredicto == "Aprovado": veredicto = "Arriscado"
 
         emoji = "✅" if veredicto == "Aprovado" else "⚠️"
