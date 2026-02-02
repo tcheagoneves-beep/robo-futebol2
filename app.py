@@ -80,14 +80,14 @@ if 'precisa_salvar' not in st.session_state: st.session_state['precisa_salvar'] 
 if 'BLOQUEAR_SALVAMENTO' not in st.session_state: st.session_state['BLOQUEAR_SALVAMENTO'] = False
 if 'total_bigdata_count' not in st.session_state: st.session_state['total_bigdata_count'] = 0
 
-# --- VARIÁVEIS PARA MÚLTIPLAS E NOVOS MERCADOS ---
+# --- VARIÁVEIS PARA MÚLTIPLAS, TRADING E ALAVANCAGEM ---
 if 'multipla_matinal_enviada' not in st.session_state: st.session_state['multipla_matinal_enviada'] = False
 if 'multiplas_live_cache' not in st.session_state: st.session_state['multiplas_live_cache'] = {}
 if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
 if 'alternativos_enviado' not in st.session_state: st.session_state['alternativos_enviado'] = False
 if 'alavancagem_enviada' not in st.session_state: st.session_state['alavancagem_enviada'] = False 
 
-# --- [NOVO] VARIÁVEIS PARA ESTRATÉGIA DROP ODDS/TRADING ---
+# [NOVO] Variáveis de controle do Trading (Drop Odds)
 if 'drop_enviado_12' not in st.session_state: st.session_state['drop_enviado_12'] = False
 if 'drop_enviado_16' not in st.session_state: st.session_state['drop_enviado_16'] = False
 # -------------------------------------------------
@@ -141,7 +141,7 @@ MAPA_LOGICA_ESTRATEGIAS = {
     "🟨 Sniper de Cartões": "Over Cartões",
     "🧤 Muralha (Defesas)": "Over Defesas",
     "Alavancagem": "Bet Builder",
-    "Drop Odds Cashout": "Trading"
+    "Drop Odds Cashout": "Trading" # [NOVO] Adicionado para o relatório
 }
 
 MAPA_ODDS_TEORICAS = {
@@ -545,6 +545,9 @@ def atualizar_historico_ram(lista_atualizada_hoje):
     st.session_state['historico_full'] = df_final
 
 def consultar_bigdata_cenario_completo(home_id, away_id):
+    """
+    RAIO-X 360º: Analisa Gols, Cantos, Cartões, Chutes e Agressividade.
+    """
     if not db_firestore: return "Big Data Offline"
     try:
         docs_h = db_firestore.collection("BigData_Futebol").where("home_id", "==", str(home_id)).limit(20).stream()
@@ -560,8 +563,6 @@ def consultar_bigdata_cenario_completo(home_id, away_id):
             h_data['cantos'] += safe_get(st, 'escanteios_casa')
             h_data['cards'] += safe_get(st, 'cartoes_amarelos') + safe_get(st, 'cartoes_vermelhos')
             h_data['sog'] += safe_get(st, 'chutes_gol')
-            h_data['faltas'] += safe_get(st, 'faltas_total')
-            h_data['imp'] += safe_get(st, 'impedimentos')
         a_data = {'qtd': 0, 'gols_pro': 0, 'cantos': 0, 'cards': 0, 'sog': 0, 'faltas': 0, 'imp': 0}
         for d in docs_a:
             dd = d.to_dict(); a_data['qtd'] += 1; st = dd.get('estatisticas', {})
@@ -570,13 +571,11 @@ def consultar_bigdata_cenario_completo(home_id, away_id):
             a_data['cantos'] += safe_get(st, 'escanteios_fora') 
             a_data['cards'] += safe_get(st, 'cartoes_amarelos') + safe_get(st, 'cartoes_vermelhos')
             a_data['sog'] += safe_get(st, 'chutes_gol')
-            a_data['faltas'] += safe_get(st, 'faltas_total')
-            a_data['imp'] += safe_get(st, 'impedimentos')
         if h_data['qtd'] == 0 and a_data['qtd'] == 0: return "Sem dados suficientes."
         txt_h = "N/D"
-        if h_data['qtd'] > 0: q = h_data['qtd']; txt_h = (f"MANDANTE (Casa, {q}j): Gols {h_data['gols_pro']/q:.1f} | Cantos {h_data['cantos']/q:.1f} | ChutesGol {h_data['sog']/q:.1f} | Cartões {h_data['cards']/q:.1f}")
+        if h_data['qtd'] > 0: q = h_data['qtd']; txt_h = (f"MANDANTE (Casa, {q}j): Gols {h_data['gols_pro']/q:.1f} | Cantos {h_data['cantos']/q:.1f} | ChutesGol {h_data['sog']/q:.1f}")
         txt_a = "N/D"
-        if a_data['qtd'] > 0: q = a_data['qtd']; txt_a = (f"VISITANTE (Fora, {q}j): Gols {a_data['gols_pro']/q:.1f} | Cantos {a_data['cantos']/q:.1f} | ChutesGol {a_data['sog']/q:.1f} | Cartões {a_data['cards']/q:.1f}")
+        if a_data['qtd'] > 0: q = a_data['qtd']; txt_a = (f"VISITANTE (Fora, {q}j): Gols {a_data['gols_pro']/q:.1f} | Cantos {a_data['cantos']/q:.1f} | ChutesGol {a_data['sog']/q:.1f}")
         return f"{txt_h} || {txt_a}"
     except Exception as e: return f"Erro BD: {str(e)}"
 
@@ -680,13 +679,16 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
         return {"home": get_stats_50(home_id), "away": get_stats_50(away_id)}
     except: return None
 
-# --- ESSENCIAIS QUE FALTAVAM ---
 @st.cache_data(ttl=120) 
 def buscar_agenda_cached(api_key, date_str):
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
+
+# ==============================================================================
+# [NOVO] FUNÇÕES DE INTELIGÊNCIA HÍBRIDA (MÚLTIPLAS + NOVOS MERCADOS)
+# ==============================================================================
 
 def carregar_contexto_global_firebase():
     if not db_firestore: return "Firebase Offline."
@@ -763,10 +765,14 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
+        
         LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3]
         jogos_candidatos = [j for j in jogos if j['league']['id'] in LIGAS_TOP and j['fixture'].get('referee')]
+        
         if not jogos_candidatos: return []
+        
         amostra = random.sample(jogos_candidatos, min(len(jogos_candidatos), 5))
+        
         dados_analise = ""
         for j in amostra:
             fid = j['fixture']['id']
@@ -774,13 +780,16 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             away = j['teams']['away']['name']
             referee = j['fixture']['referee']
             dados_analise += f"- Jogo: {home} x {away} | Árbitro: {referee} | ID: {fid}\n"
+
         prompt = f"""
         ATUE COMO ANALISTA DE MERCADOS ESPECIAIS (Cartões e Goleiros).
         DADOS DE HOJE:
         {dados_analise}
+        
         TAREFA:
         1. Identifique se algum desses Árbitros é conhecido por ser "Rigoroso" (Over Cartões).
         2. Identifique se algum desses confrontos sugere "Muitos Chutes" (Bom para Goleiro do time mais fraco).
+        
         RETORNE APENAS AS OPORTUNIDADES CLARAS (Se houver).
         FORMATO JSON:
         {{
@@ -801,24 +810,34 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         return json.loads(response.text).get('sinais', [])
     except: return []
 
+# [MÓDULO ATUALIZADO] ESTRATÉGIA ALAVANCAGEM SNIPER (TOP 3)
 def gerar_bet_builder_alavancagem(api_key):
     if not IA_ATIVADA: return []
+    
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
+        
         LIGAS_ALAVANCAGEM = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
         candidatos = [j for j in jogos if j['league']['id'] in LIGAS_ALAVANCAGEM]
+        
         if not candidatos: return []
+        
         lista_provaveis = []
         df_historico = st.session_state.get('historico_full', pd.DataFrame())
+
         for j in candidatos:
             try:
-                home_nm = j['teams']['home']['name']; away_nm = j['teams']['away']['name']
-                home_id = j['teams']['home']['id']; away_id = j['teams']['away']['id']
+                home_nm = j['teams']['home']['name']
+                away_nm = j['teams']['away']['name']
+                home_id = j['teams']['home']['id']
+                away_id = j['teams']['away']['id']
+                
                 dados_bd = consultar_bigdata_cenario_completo(home_id, away_id)
+                
                 txt_historico_pessoal = "Sem histórico recente."
                 wr_h = 0; wr_a = 0
                 if not df_historico.empty:
@@ -828,9 +847,11 @@ def gerar_bet_builder_alavancagem(api_key):
                     if len(f_a) > 0: wr_a = len(f_a[f_a['Resultado'].str.contains('GREEN', na=False)]) / len(f_a) * 100
                     if len(f_h) > 0 or len(f_a) > 0:
                         txt_historico_pessoal = f"Histórico: {home_nm} ({wr_h:.0f}%) | {away_nm} ({wr_a:.0f}%)."
+
                 score = 0
                 if "7" in dados_bd or "8" in dados_bd or "9" in dados_bd: score += 2 
                 if (len(f_h) > 2 and wr_h < 40) or (len(f_a) > 2 and wr_a < 40): score -= 5
+                
                 if score >= 2:
                     lista_provaveis.append({
                         "jogo": j,
@@ -840,20 +861,29 @@ def gerar_bet_builder_alavancagem(api_key):
                         "score": score
                     })
             except: pass
+            
         if not lista_provaveis: return []
+        
         lista_provaveis.sort(key=lambda x: x['score'], reverse=True)
         top_picks = lista_provaveis[:3]
+        
         resultados_finais = []
         for pick in top_picks:
-            j = pick['jogo']; home = j['teams']['home']['name']; away = j['teams']['away']['name']; fid = j['fixture']['id']
+            j = pick['jogo']
+            home = j['teams']['home']['name']
+            away = j['teams']['away']['name']
+            fid = j['fixture']['id']
+            
             prompt = f"""
             ATUE COMO ANALISTA SÊNIOR DE ALAVANCAGEM.
             MONTE UM BET BUILDER PARA ESTE JOGO ESPECÍFICO.
+            
             DADOS:
             1. JOGO: {home} x {away} ({j['league']['name']})
             2. BIG DATA: {pick['bigdata']}
             3. HISTÓRICO USER: {pick['historico']}
             4. JUIZ: {pick['referee']}
+            
             SAÍDA JSON:
             {{
                 "titulo": "🚀 ALAVANCAGEM {home} vs {away}",
@@ -871,7 +901,9 @@ def gerar_bet_builder_alavancagem(api_key):
                 r_json['jogo'] = f"{home} x {away}"
                 resultados_finais.append(r_json)
             except: pass
+            
         return resultados_finais
+        
     except Exception as e: return []
 # ==============================================================================
 # 4. INTELIGÊNCIA ARTIFICIAL, CÁLCULOS E ESTRATÉGIAS (O CÉREBRO)
@@ -1874,20 +1906,18 @@ if st.session_state.ROBO_LIGADO:
 
                                 # 1. Cabeçalho com Winrate (Prioridade: Estratégia > Pessoal > API)
                                 header_winrate = ""
-                                
                                 # Tenta pegar o Winrate da Estratégia (Global)
-                                if txt_winrate_historico: 
-                                    import re
-                                    match = re.search(r'(\d+%)', txt_winrate_historico)
-                                    if match:
-                                        header_winrate = f" | 🟢 <b>Strat: {match.group(1)}</b>"
-                                
-                                # Se não achou da estratégia, tenta o Histórico Pessoal com o Time
+                                df_h = st.session_state.get('historico_full', pd.DataFrame())
+                                if not df_h.empty:
+                                    strat_f = df_h[df_h['Estrategia'] == s['tag']]
+                                    if len(strat_f) >= 3:
+                                        greens_s = len(strat_f[strat_f['Resultado'].str.contains('GREEN', na=False)])
+                                        wr_s = (greens_s / len(strat_f)) * 100
+                                        header_winrate = f" | 🟢 <b>Strat: {wr_s:.0f}%</b>"
+
                                 if not header_winrate and "Winrate Pessoal" in txt_pessoal:
                                     wr_val = txt_pessoal.split(':')[-1].strip()
                                     header_winrate = f" | 👤 <b>Time: {wr_val}</b>"
-                                    
-                                # Se não tiver nenhum dos dois, tenta o da API
                                 if not header_winrate and dados_50: 
                                     header_winrate = f" | 📊 <b>API: {dados_50['home']['over15_ft']}%</b>"
 
