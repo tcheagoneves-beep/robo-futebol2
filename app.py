@@ -2041,7 +2041,11 @@ with st.sidebar:
             if IA_ATIVADA:
                 with st.spinner("🤖 Analisando..."):
                     # Força o reset para o botão manual sempre funcionar
-                    st.session_state['alavancagem_enviada'] = False 
+        if not lista_dados:
+        enviar_telegram(token, chat_ids, "🔍 O sistema analisou os jogos, mas nenhum atingiu o score de segurança para Alavancagem.")
+        st.session_state['alavancagem_enviada'] = True
+        return
+               
                     enviar_alavancagem(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], st.session_state['API_KEY'])
                     st.success("Análise realizada!")
             else:
