@@ -718,24 +718,37 @@ def gerar_multipla_matinal_ia(api_key):
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
-        LIGAS_SEGURAS = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
-        jogos_candidatos = [j for j in jogos if j['league']['id'] in LIGAS_SEGURAS]
+        
+        # --- FILTRO LIBERADO: QUALQUER LIGA ---
+        # Removemos a lista restritiva. Pegamos qualquer jogo 'Não Iniciado' (NS)
+        jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
+        
         if len(jogos_candidatos) < 2: return None, []
         
         lista_jogos_txt = ""
         mapa_jogos = {}
-        for j in jogos_candidatos[:10]:
+        
+        # Aumentamos o leque para 40 jogos para a IA ter bastante opção
+        count_validos = 0
+        for j in jogos_candidatos:
+            if count_validos >= 40: break
+            
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
-            mapa_jogos[fid] = f"{home} x {away}"
+            
+            # O filtro de qualidade agora é TER DADOS NA API
             try:
                 stats_h = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-                if stats_h:
-                    lista_jogos_txt += f"- ID {fid}: {home} x {away} | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
+                # Se a API retornou stats válidas (não vazias), o jogo é bom para análise
+                if stats_h and stats_h['home']['qtd'] > 0:
+                    mapa_jogos[fid] = f"{home} x {away}"
+                    lista_jogos_txt += f"- ID {fid}: {home} x {away} ({j['league']['name']}) | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
+                    count_validos += 1
             except: pass
 
         if not lista_jogos_txt: return None, []
+        
         contexto_firebase = carregar_contexto_global_firebase()
         df_sheets = st.session_state.get('historico_full', pd.DataFrame())
         winrate_sheets = "N/A"
@@ -747,9 +760,16 @@ def gerar_multipla_matinal_ia(api_key):
         prompt = f"""
         Atue como GESTOR DE RISCO E ESTRATÉGIA.
         OBJETIVO: Criar uma "Múltipla de Segurança" (Bingo Matinal) com 2 ou 3 jogos para HOJE.
-        DADOS: Winrate Pessoal: {winrate_sheets}. Global Firebase: {contexto_firebase}.
-        Jogos: {lista_jogos_txt}
-        TAREFA: Escolha os 2 ou 3 jogos mais seguros para Over 0.5 Gols.
+        
+        DADOS GLOBAIS: Winrate Pessoal: {winrate_sheets}. {contexto_firebase}.
+        
+        LISTA DE CANDIDATOS (DIVERSAS LIGAS):
+        {lista_jogos_txt}
+        
+        TAREFA: 
+        Escolha os 2 ou 3 jogos estatisticamente MAIS SEGUROS para Over 0.5 Gols ou Over 1.5 Gols.
+        Não tenha preconceito com ligas menores, foque nos NÚMEROS (Porcentagem alta de Over).
+        
         FORMATO JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
         """
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
@@ -766,12 +786,18 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        LIGAS_TOP = [39, 140, 78, 135, 61, 71, 72, 2, 3]
-        jogos_candidatos = [j for j in jogos if j['league']['id'] in LIGAS_TOP and j['fixture'].get('referee')]
+        # --- FILTRO LIBERADO: QUALQUER LIGA COM DADOS ---
+        # A única condição agora é ter ÁRBITRO DEFINIDO (garante cobertura para cartões)
+        jogos_candidatos = [
+            j for j in jogos 
+            if j['fixture'].get('referee') and j['fixture']['status']['short'] == 'NS'
+        ]
         
         if not jogos_candidatos: return []
         
-        amostra = random.sample(jogos_candidatos, min(len(jogos_candidatos), 5))
+        # --- VARREDURA MASSIVA (ATÉ 60 JOGOS) ---
+        # O Gemini Flash aguenta muito texto. Vamos mandar um lote grande.
+        amostra = jogos_candidatos[:60] 
         
         dados_analise = ""
         for j in amostra:
@@ -779,27 +805,31 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             referee = j['fixture']['referee']
-            dados_analise += f"- Jogo: {home} x {away} | Árbitro: {referee} | ID: {fid}\n"
+            liga_nome = j['league']['name']
+            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Árbitro: {referee} | ID: {fid}\n"
 
         prompt = f"""
-        ATUE COMO ANALISTA DE MERCADOS ESPECIAIS (Cartões e Goleiros).
-        DADOS DE HOJE:
+        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (SMALL & BIG MARKETS).
+        
+        Eu liberei o filtro de ligas. Você tem acesso a jogos do mundo todo abaixo.
+        Sua missão é encontrar OPORTUNIDADES DE OURO, não importa se é Champions League ou 2ª Divisão.
+        
+        LISTA DE JOGOS E ÁRBITROS (HOJE):
         {dados_analise}
         
-        TAREFA:
-        1. Identifique se algum desses Árbitros é conhecido por ser "Rigoroso" (Over Cartões).
-        2. Identifique se algum desses confrontos sugere "Muitos Chutes" (Bom para Goleiro do time mais fraco).
+        CRITÉRIOS DE ANÁLISE:
+        1. CARTÕES: Procure a combinação "Árbitro Rigoroso" + "Jogo Equilibrado/Tenso".
+        2. GOLEIROS (DEFESAS): Jogos onde há um desnível técnico claro (o goleiro do time pior vai trabalhar).
         
-        RETORNE APENAS AS OPORTUNIDADES CLARAS (Se houver).
-        FORMATO JSON:
+        SAÍDA OBRIGATÓRIA (JSON):
         {{
             "sinais": [
                 {{
-                    "fid": "123",
+                    "fid": "12345",
                     "tipo": "CARTAO" ou "GOLEIRO",
                     "titulo": "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA (DEFESAS)",
                     "jogo": "Time A x Time B",
-                    "destaque": "Juiz Fulano tem média 6.5 cartões",
+                    "destaque": "Árbitro com média alta em liga under",
                     "indicacao": "Over 4.5 Cartões"
                 }}
             ]
