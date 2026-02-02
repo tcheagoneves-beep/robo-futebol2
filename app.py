@@ -2038,7 +2038,7 @@ with st.sidebar:
         
         # [NOVO] BOTÃO DE ALAVANCAGEM SNIPER
         if st.button("🚀 Gerar Alavancagem (Jogo Único)"):
-        if IA_ATIVADA:
+            if IA_ATIVADA:
         with st.spinner("🤖 Analisando..."):
             # Resetamos a flag temporariamente para o botão manual ignorar o bloqueio diário
             st.session_state['alavancagem_enviada'] = False 
