@@ -1683,6 +1683,70 @@ with st.sidebar:
             st.session_state['confirmar_reset'] = False; st.rerun()
         if c2.button("❌ NÃO"): st.session_state['confirmar_reset'] = False; st.rerun()
 
+# --- FUNÇÃO QUE ESTAVA FALTANDO ---
+def validar_multiplas_pendentes(jogos_live, api_key, token, chat_ids):
+    if 'multiplas_pendentes' not in st.session_state or not st.session_state['multiplas_pendentes']: return
+    pendentes = st.session_state['multiplas_pendentes']
+    mapa_live = {str(j['fixture']['id']): j for j in jogos_live}
+    
+    for m in pendentes:
+        if m['status'] != 'Pendente': continue
+        # Verifica se é de hoje
+        if m['data'] != get_time_br().strftime('%Y-%m-%d'): continue
+
+        resultados_jogos = []
+        placar_final_str = []
+        
+        for fid in m['fids']:
+            jogo = mapa_live.get(fid)
+            # Se não estiver no Live, tenta buscar na API (pode ter acabado)
+            if not jogo:
+                try:
+                    res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
+                    if res.get('response'): jogo = res['response'][0]
+                except: pass
+            
+            if not jogo: 
+                resultados_jogos.append("PENDENTE")
+                continue
+            
+            status_short = jogo['fixture']['status']['short']
+            gh = jogo['goals']['home'] or 0
+            ga = jogo['goals']['away'] or 0
+            total_agora = gh + ga
+            
+            # Regra de Green (Matinal vs Quebra-Empate)
+            if m['tipo'] == "MATINAL":
+                condicao_green = (total_agora >= 1) # Over 0.5
+            else:
+                # Pega a referência de gols salva (ex: estava 1x1, precisa de mais 1)
+                gols_ref = m.get('gols_ref', {}).get(fid, 0)
+                condicao_green = (total_agora > gols_ref)
+            
+            if condicao_green: resultados_jogos.append("GREEN")
+            elif status_short in ['FT', 'AET', 'PEN', 'INT']: resultados_jogos.append("RED")
+            else: resultados_jogos.append("PENDENTE")
+            
+            placar_final_str.append(f"{gh}x{ga}")
+        
+        # Avaliação Final da Múltipla
+        if "RED" in resultados_jogos:
+            msg = f"❌ <b>RED MÚLTIPLA FINALIZADA</b>\nUma das seleções não bateu.\n📉 Placar Final: {' / '.join(placar_final_str)}"
+            enviar_telegram(token, chat_ids, msg)
+            m['status'] = "RED"
+            # Salva no histórico
+            item_save = {"FID": m['id_unico'], "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": "Múltiplas", "Jogo": " + ".join(m['nomes']), "Placar_Sinal": " / ".join(placar_final_str), "Estrategia": f"Múltipla {m['tipo']}", "Resultado": "❌ RED", "HomeID": "", "AwayID": "", "Odd": "", "Odd_Atualizada": "", "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"}
+            adicionar_historico(item_save)
+
+        elif "PENDENTE" not in resultados_jogos and all(x == "GREEN" for x in resultados_jogos):
+            msg = f"✅ <b>GREEN MÚLTIPLA CONFIRMADO!</b>\nTodas as seleções bateram!\n📈 Placares: {' / '.join(placar_final_str)}"
+            enviar_telegram(token, chat_ids, msg)
+            m['status'] = "GREEN"
+            # Salva no histórico
+            item_save = {"FID": m['id_unico'], "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": "Múltiplas", "Jogo": " + ".join(m['nomes']), "Placar_Sinal": " / ".join(placar_final_str), "Estrategia": f"Múltipla {m['tipo']}", "Resultado": "✅ GREEN", "HomeID": "", "AwayID": "", "Odd": "", "Odd_Atualizada": "", "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"}
+            adicionar_historico(item_save)
+# ----------------------------------
+
 # --- LOOP PRINCIPAL DO ROBÔ ---
 if st.session_state.ROBO_LIGADO:
     with placeholder_root.container():
@@ -2285,3 +2349,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
