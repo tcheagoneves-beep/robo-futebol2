@@ -1566,7 +1566,7 @@ def otimizar_estrategias_existentes_ia():
         
         prompt += "DADOS GERAIS:\n"
         prompt += f"- Total de Jogos Analisados: {total_jogos}\n"
-        prompt += f"- Winrate Global Atual: {winrate_global:.1f}%\n\n" # <--- O erro estava aqui, agora resolvido
+        prompt += f"- Winrate Global Atual: {winrate_global:.1f}%\n\n" 
         
         prompt += "BASE DE DADOS COMPLETA (HISTÓRICO):\n"
         prompt += f"{dados_csv}\n\n"
@@ -1670,7 +1670,6 @@ def enviar_relatorio_bi(token, chat_ids):
         enviar_telegram(token, chat_ids, msg)
         
     except Exception as e: 
-        # Fallback seguro também
         msg_erro = "📈 RELATÓRIO BI (Simplificado)\n\n" + str(analisar_bi_com_ia())
         enviar_telegram(token, chat_ids, msg_erro)
 
@@ -2815,4 +2814,8 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
+
+
+
 
