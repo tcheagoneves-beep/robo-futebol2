@@ -667,15 +667,22 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
             params = {"team": team_id, "last": "50", "status": "FT"}
             res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
             jogos = res.get('response', [])
-            if not jogos: return {"over05_ht": 0, "over15_ft": 0, "ambas_marcam": 0, "avg_cards": 0, "avg_shots_goal": 0, "avg_saves_conceded": 0}
+            
+            # --- A CORREÇÃO ESTÁ NESTA LINHA ABAIXO ---
+            # Antes faltava o "qtd": 0. Agora adicionamos para não dar erro de chave inexistente.
+            if not jogos: return {"qtd": 0, "over05_ht": 0, "over15_ft": 0, "ambas_marcam": 0, "avg_cards": 0, "avg_shots_goal": 0, "avg_saves_conceded": 0}
+            
             stats = {"qtd": len(jogos), "over05_ht": 0, "over15_ft": 0, "ambas_marcam": 0}
             for j in jogos:
                 gh = j['goals']['home'] or 0; ga = j['goals']['away'] or 0
                 g_ht_h = j['score']['halftime']['home'] or 0; g_ht_a = j['score']['halftime']['away'] or 0
+                
                 if (g_ht_h + g_ht_a) > 0: stats["over05_ht"] += 1
                 if (gh + ga) >= 2: stats["over15_ft"] += 1
                 if gh > 0 and ga > 0: stats["ambas_marcam"] += 1
+            
             return {k: int((v / stats["qtd"]) * 100) if k not in ["qtd"] else v for k, v in stats.items()}
+            
         return {"home": get_stats_50(home_id), "away": get_stats_50(away_id)}
     except: return None
 
@@ -2762,6 +2769,7 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
 
 
 
