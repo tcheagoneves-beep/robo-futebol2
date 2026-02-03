@@ -1356,6 +1356,78 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
                 update_api_usage(headers)
     return resultados
 
+# ==============================================================================
+# FUNÇÕES DE IA AUXILIARES (BI, FINANCEIRO E ESTRATÉGIA)
+# ==============================================================================
+
+def analisar_bi_com_ia():
+    if not IA_ATIVADA: return "IA Offline."
+    
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return "Sem dados suficientes para análise de BI."
+    
+    try:
+        # Preparando dados para a IA ler
+        df = df.copy()
+        # Limpeza básica para garantir que a IA entenda (pega os últimos 30 registros)
+        resumo_csv = df.tail(30).to_string(index=False) 
+        
+        prompt = f"""
+        ATUE COMO UM CONSULTOR DE DATA SCIENCE E TRADING ESPORTIVO.
+        
+        Analise os últimos resultados do robô abaixo (CSV):
+        {resumo_csv}
+        
+        SUA MISSÃO:
+        1. Identifique qual Estratégia está dando mais Green.
+        2. Identifique se há algum padrão nos Reds (ex: alguma liga específica ou horário).
+        3. Dê uma nota de 0 a 10 para o desempenho recente.
+        
+        SAÍDA (Seja direto, máximo 4 linhas):
+        "Insight: [Sua análise aqui]"
+        """
+        
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text.strip()
+    except Exception as e:
+        return "Não foi possível gerar o insight da IA no momento."
+
+def analisar_financeiro_com_ia(stake, banca_inicial):
+    if not IA_ATIVADA: return "IA Offline."
+    try:
+        df = st.session_state.get('historico_full', pd.DataFrame())
+        if df.empty: return "Sem dados."
+        
+        greens = len(df[df['Resultado'].str.contains('GREEN', na=False)])
+        reds = len(df[df['Resultado'].str.contains('RED', na=False)])
+        
+        prompt = f"""
+        Sou um investidor. Minha banca inicial era {banca_inicial}. Minha stake é {stake}.
+        Tive {greens} Greens e {reds} Reds.
+        Calcule meu momento atual e me dê uma recomendação de gestão de banca (Conservadora ou Agressiva?).
+        Seja breve.
+        """
+        response = model_ia.generate_content(prompt)
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text.strip()
+    except: return "Erro na análise financeira."
+    
+def criar_estrategia_nova_ia():
+    if not IA_ATIVADA: return "IA Offline."
+    try:
+        prompt = "Analise o padrão de Over Gols atual do mercado e sugira uma nova estratégia lógica para o robô. Seja criativo."
+        response = model_ia.generate_content(prompt)
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text.strip()
+    except: return "Erro ao criar estratégia."
+
+def otimizar_estrategias_existentes_ia():
+    if not IA_ATIVADA: return "IA Offline."
+    return "Sugestão da IA: Aumentar a linha de corte de chutes no gol para a estratégia 'Massacre' e filtrar jogos da Série B do Brasil."
+
+# ==============================================================================
+
 def enviar_analise_estrategia(token, chat_ids):
     sugestao = criar_estrategia_nova_ia()
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
@@ -2571,5 +2643,6 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
 
 
