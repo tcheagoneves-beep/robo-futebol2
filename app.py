@@ -1455,50 +1455,58 @@ def otimizar_estrategias_existentes_ia():
     if df.empty: return "Sem dados suficientes para simulação."
     
     try:
-        # 1. Filtra apenas jogos finalizados (Green ou Red)
+        # 1. Filtra jogos finalizados (Green ou Red)
         df_final = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
         
-        if len(df_final) < 5: return "Preciso de pelo menos 5 jogos finalizados para simular melhorias."
+        if len(df_final) < 10: return "Preciso de mais dados (mínimo 10 jogos) para uma análise robusta."
 
-        # 2. Calcula métricas atuais
-        greens_atuais = len(df_final[df_final['Resultado'].str.contains('GREEN')])
+        # 2. Estatísticas Gerais
         total_jogos = len(df_final)
-        winrate_atual = (greens_atuais / total_jogos) * 100
+        greens = len(df_final[df_final['Resultado'].str.contains('GREEN')])
+        winrate_global = (greens / total_jogos) * 100
         
-        # 3. Prepara os dados para a IA (Incluindo o 'Placar_Sinal' que tem os dados de Escanteios/Gols/Defesas)
-        # Ex: "Meta: 4.5 | Saiu: 4" -> A IA vai ler isso e ver que se a meta fosse 3.5, teria batido.
-        colunas_importantes = ['Estrategia', 'Liga', 'Jogo', 'Placar_Sinal', 'Odd', 'Resultado']
-        # Pega as últimas 40 entradas para não estourar o limite
-        dados_csv = df_final[colunas_importantes].tail(40).to_string(index=False)
+        # 3. Preparação dos Dados (ENVIA TUDO AGORA - ATÉ 1000 REGISTROS)
+        # Removemos a coluna 'Odd' da visão da IA para ela não focar nisso
+        colunas_foco = ['Data', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado']
+        
+        # Pega até 1000 jogos (O Gemini Flash aguenta janelas grandes)
+        dados_csv = df_final[colunas_foco].tail(1000).to_string(index=False)
 
         prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS ESPECIALISTA EM BACKTESTING DE APOSTAS.
+        ATUE COMO UM CIENTISTA DE DADOS SÊNIOR E ESPECIALISTA EM ALGORITMOS DE FUTEBOL.
         
-        DADOS REAIS DO USUÁRIO:
-        - Winrate Atual: {winrate_atual:.1f}%
-        - Total de Jogos na Amostra: {total_jogos}
+        OBJETIVO: Identificar falhas na LÓGICA das estratégias, não nas Odds.
         
-        TABELA DE RESULTADOS (Analise a coluna 'Placar_Sinal' e 'Resultado'):
+        DADOS GERAIS:
+        - Total de Jogos Analisados: {total_jogos}
+        - Winrate Global Atual: {winrate_global:.1f}%
+        
+        BASE DE DADOS COMPLETA (HISTÓRICO):
         {dados_csv}
         
-        SUA MISSÃO (SIMULAÇÃO MATEMÁTICA):
-        1. Olhe para os jogos que deram ❌ RED.
-        2. Verifique na coluna 'Placar_Sinal' ou 'Jogo' se o resultado ficou "por pouco" (Ex: Apostou Over 4.5 e saiu 4).
-        3. Simule: "E se a linha fosse menor?" ou "E se a Odd mínima fosse maior?".
+        SUA MISSÃO (AUDITORIA TÉCNICA):
+        1. Ignore as Odds. Foque no PADRÃO DOS REDS.
+        2. Analise TODAS as estratégias que tiveram erros.
+        3. Identifique CORRELAÇÕES TÓXICAS:
+           - Ex: "A estratégia 'Massacre' falha muito quando o jogo é na Liga X?"
+           - Ex: "A estratégia 'Vovô' está tomando gol no final quando o placar é magro (1x0)?"
+           - Ex: "A estratégia 'Blitz' falha quando o visitante é zebra?"
+           
+        GERE UM RELATÓRIO DE ENGENHARIA REVERSA:
         
-        GERE UMA RESPOSTA NESTE FORMATO EXATO (Sem enrolação):
+        "🔍 **DIAGNÓSTICO PROFUNDO (Base: {total_jogos} jogos):**
         
-        "💡 **SIMULAÇÃO DE CENÁRIO:**
+        Identifiquei falhas sistêmicas nas seguintes lógicas:
         
-        Identifiquei que {len(df_final[df_final['Resultado'].str.contains('RED')])} jogos deram Red.
-        
-        Se você mudasse **[PARÂMETRO ESPECÍFICO]** (Ex: Linha de Gols de 1.5 para 0.5 HT / Linha de Defesas de 4.5 para 3.5):
-        
-        🔄 **O que aconteceria:**
-        - Você converteria aproximadamente **[NÚMERO]** Reds em Greens (ou Void).
-        - Sua assertividade saltaria de **{winrate_atual:.1f}%** para estimadamente **[NOVO WINRATE]%**.
-        
-        📉 **Impacto:** Isso exigiria pegar Odds ligeiramente menores (média estimada @[NOVA ODD]), mas aumentaria a consistência."
+        1. **Estratégia: [NOME DA ESTRATÉGIA COM PROBLEMA]**
+           - ❌ **O Padrão do Erro:** [Descreva o cenário onde ela falha. Ex: Falha sistematicamente em jogos da Série B ou quando o mandante já está ganhando].
+           - 🛠️ **Ajuste Lógico Sugerido:** [Ex: Adicionar filtro 'Somente se estiver Empatado' ou 'Excluir Ligas Sul-Americanas'].
+           - 📈 **Projeção:** Isso eliminaria X Reds e subiria o Winrate para Y%.
+           
+        2. **Estratégia: [OUTRA ESTRATÉGIA]**
+           - ... (mesma estrutura)
+           
+        🏁 **Conclusão:** Para aumentar a assertividade geral, foque na correção da lógica da estratégia [NOME], que é a maior ofensora no momento."
         """
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
