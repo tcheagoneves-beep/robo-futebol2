@@ -821,56 +821,61 @@ def gerar_insights_matinais_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # 2. Filtra jogos Não Iniciados (NS) de QUALQUER liga
+        # 2. Filtra jogos Não Iniciados (NS)
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
         
         if not jogos_candidatos: return "Sem jogos para analisar hoje."
         
-        # 3. Pré-seleção Estatística (Pente Fino)
-        # Vamos pegar até 50 jogos, mas só os que têm dados históricos na API
+        # --- FILTRO 2: REMOVER LIGAS 'LIXO' (U21, U19, Amadoras) ---
+        TERMOS_BANIDOS = ["U21", "U19", "U20", "U23", "Reserve", "Women", "Feminino", "Youth", "Regional", "Amateur", "Ascenso", "Development"]
+        
         lista_para_ia = ""
         count = 0
         random.shuffle(jogos_candidatos) # Embaralha para variar as ligas
         
         for j in jogos_candidatos:
-            if count >= 40: break # Limite para não estourar o prompt
+            if count >= 45: break # Limite para não estourar o prompt
+            
+            nome_liga = j['league']['name']
+            
+            # Pula se a liga tiver termos banidos
+            if any(term in nome_liga for term in TERMOS_BANIDOS): continue
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
-            liga = j['league']['name']
             
             # Busca dados de 50 jogos (Cacheado)
             stats = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
             if stats and stats['home']['qtd'] > 0:
-                # Critério de corte: Pelo menos um dos times tem que ser over
+                # Critério de corte: Alta tendência de Over 1.5
                 if stats['home']['over15_ft'] > 70 or stats['away']['over15_ft'] > 70:
-                    lista_para_ia += f"- Jogo: {home} x {away} ({liga}) | Over 1.5 FT: Casa {stats['home']['over15_ft']}% / Fora {stats['away']['over15_ft']}% | Over 0.5 HT: Casa {stats['home']['over05_ht']}% / Fora {stats['away']['over05_ht']}%\n"
+                    lista_para_ia += f"- Jogo: {home} x {away} ({nome_liga}) | Over 1.5 FT: Casa {stats['home']['over15_ft']}% / Fora {stats['away']['over15_ft']}% | Over 0.5 HT: Casa {stats['home']['over05_ht']}% / Fora {stats['away']['over05_ht']}%\n"
                     count += 1
         
-        if not lista_para_ia: return "Nenhum jogo com tendência clara de gols hoje."
+        if not lista_para_ia: return "Nenhum jogo qualificado (Sem Sub-20/Amadores) com tendência de gols hoje."
 
-        # 4. Prompt do "Sniper Matinal" (Formato da Imagem)
+        # 4. Prompt do "Sniper Matinal"
         prompt = f"""
         ATUE COMO UM ANALISTA SÊNIOR DE FUTEBOL (SNIPER).
         
-        Eu tenho uma lista de jogos promissores para hoje com suas estatísticas de Gols.
-        Sua missão é escolher os **TOP 3 ou 4 MELHORES JOGOS** para operar.
+        Eu tenho uma lista de jogos promissores para hoje (JÁ FILTREI AS LIGAS RUINS).
+        Sua missão é escolher os **TOP 3 ou 4 MELHORES JOGOS** para operar GOLS.
         
         DADOS DOS JOGOS:
         {lista_para_ia}
         
         CRITÉRIOS DE SELEÇÃO:
-        - Priorize jogos onde AMBOS os times têm alta frequência de gols (Soma das % > 150).
-        - Indique "Over 0.5 HT" se a média de HT for alta (>75%).
-        - Indique "Over 1.5 FT" ou "Over 0.5 FT" para jogos mais seguros.
+        - Priorize jogos onde a SOMA das % de Over 1.5 FT seja a maior possível.
+        - Indique "Over 0.5 HT" APENAS se a média de HT for muito alta (>80%).
+        - Caso contrário, indique "Over 1.5 FT" ou "Over 2.5 FT" se os números permitirem.
         
         GERE O RELATÓRIO NO SEGUINTE FORMATO (Exatamente como abaixo):
         
         ⚽ Jogo: [Nome do Jogo]
-        🎯 Palpite: [Ex: Over 0.5 Gols HT]
-        📝 Motivo: [Explicação detalhada usando os números fornecidos. Ex: "O mandante tem 82% de over..."]
+        🎯 Palpite: [Ex: Over 1.5 Gols FT]
+        📝 Motivo: [Explicação técnica curta baseada nas % fornecidas]
         
         (Repita para os 3 ou 4 jogos escolhidos)
         """
