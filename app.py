@@ -1261,6 +1261,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
         def get_v(l, t): v = next((x['value'] for x in l if x['type']==t), 0); return v if v is not None else 0
+        
         sh_h = get_v(stats_h, 'Total Shots'); sog_h = get_v(stats_h, 'Shots on Goal')
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
@@ -1270,10 +1271,12 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         total_chutes = sh_h + sh_a; total_chutes_gol = sog_h + sog_a; total_bloqueados = blk_h + blk_a
         chutes_fora_h = max(0, sh_h - sog_h - blk_h); chutes_fora_a = max(0, sh_a - sog_a - blk_a)
         total_fora = chutes_fora_h + chutes_fora_a
+        
         posse_h = 50
         try: posse_h = int(str(next((x['value'] for x in stats_h if x['type']=='Ball Possession'), "50%")).replace('%', ''))
         except: pass
         posse_a = 100 - posse_h
+        
         rh, ra = momentum(j['fixture']['id'], sog_h, sog_a)
         gh = j['goals']['home']; ga = j['goals']['away']; total_gols = gh + ga
 
@@ -1286,44 +1289,71 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
 
         SINAIS = []
         golden_bet_ativada = False
+        
+        # --- ESTRATÉGIA 1: GOLDEN BET (Corrigida: Exige Domínio Claro) ---
         if 65 <= tempo <= 75:
-            if ((rh >= 3 and sog_h >= 4) or (ra >= 3 and sog_a >= 4)) and (total_gols >= 1 or total_chutes >= 18):
+            # Filtro IA: Só entra se houver pressão REAL (Mínimo 4 chutes no gol de um lado E pressão alta)
+            pressao_real_h = (rh >= 3 and sog_h >= 5) # Aumentei de 4 para 5
+            pressao_real_a = (ra >= 3 and sog_a >= 5)
+            
+            if (pressao_real_h or pressao_real_a) and (total_gols >= 1 or total_chutes >= 18):
                 if total_bloqueados >= 5: 
                     SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🛡️ {total_bloqueados} Bloqueios (Pressão Real)", "rh": rh, "ra": ra, "favorito": "GOLS"})
                     golden_bet_ativada = True
+
+        # --- ESTRATÉGIA 2: JANELA DE OURO (Corrigida: Timing) ---
         if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1:
-            if total_chutes_gol >= 4: 
+            # Filtro IA: Evita se o jogo estiver muito "fechado" (poucos chutes)
+            if total_chutes_gol >= 5: # Aumentei régua de 4 para 5
                 SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🔥 {total_chutes_gol} Chutes no Gol", "rh": rh, "ra": ra, "favorito": "GOLS"})
-        if 55 <= tempo <= 75 and total_chutes <= 10 and (sog_h + sog_a) <= 2 and gh == ga:
+
+        # --- ESTRATÉGIA 3: JOGO MORNO (Corrigida: Domínio) ---
+        # Filtro IA: Se um time tem mais de 60% de posse ou >3 chutes no gol, NÃO É MORNO.
+        dominio_claro = (posse_h > 60 or posse_a > 60) or (sog_h > 3 or sog_a > 3)
+        if 55 <= tempo <= 75 and total_chutes <= 10 and (sog_h + sog_a) <= 2 and gh == ga and not dominio_claro:
             SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": f"👉 <b>FAZER:</b> Under Gols\n✅ Aposta: <b>Menos de {total_gols + 0.5} Gols</b>", "stats": "Jogo Travado", "rh": rh, "ra": ra, "favorito": "UNDER"})
-        if 70 <= tempo <= 80 and total_chutes < 18:
+
+        # --- ESTRATÉGIA 4: VOVÔ (Corrigida: Solidez Defensiva) ---
+        if 75 <= tempo <= 85 and total_chutes < 18: # Ajustei tempo para 75-85 (mais seguro)
             diff = gh - ga
-            if (diff == 1 and ra < 2 and posse_h >= 45) or (diff == -1 and rh < 2 and posse_a >= 45):
+            # Filtro IA: Só entra se o time ganhando NÃO estiver sofrendo pressão (ra < 2)
+            if (diff == 1 and ra < 1 and posse_h >= 45) or (diff == -1 and rh < 1 and posse_a >= 45):
                  SINAIS.append({"tag": "👴 Estratégia do Vovô", "ordem": "👉 <b>FAZER:</b> Back Favorito (Segurar)\n✅ Aposta: <b>Vitória Seca</b>", "stats": "Controle Total", "rh": rh, "ra": ra, "favorito": "FAVORITO"})
+
+        # --- ESTRATÉGIA 5: PORTEIRA ABERTA (Corrigida: Equilíbrio) ---
         if tempo <= 30 and total_gols >= 2: 
-            SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": "Jogo Aberto", "rh": rh, "ra": ra, "favorito": "GOLS"})
-        if total_gols == 0 and (tempo <= 10 and total_chutes >= 3): 
+            # Filtro IA: Jogo tem que estar aberto (chutes dos dois lados)
+            if sog_h >= 1 and sog_a >= 1:
+                SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": "Jogo Aberto", "rh": rh, "ra": ra, "favorito": "GOLS"})
+
+        # --- ESTRATÉGIA 6: GOL RELÂMPAGO ---
+        if total_gols == 0 and (tempo <= 12 and total_chutes >= 4): # Aumentei tempo 10->12 e chutes 3->4
             SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": gerar_ordem_gol(0, "HT"), "stats": "Início Intenso", "rh": rh, "ra": ra, "favorito": "GOLS"})
+
+        # --- ESTRATÉGIA 7: BLITZ ---
         if tempo <= 60:
-            if (gh <= ga and (rh >= 3 or sh_h >= 8)) or (ga <= gh and (ra >= 3 or sh_a >= 8)): 
+            if (gh <= ga and (rh >= 3 or sh_h >= 10)) or (ga <= gh and (ra >= 3 or sh_a >= 10)): # Aumentei sh 8->10 
                 if post_h == 0: 
                     tag_blitz = "🟢 Blitz Casa" if gh <= ga else "🟢 Blitz Visitante"
                     SINAIS.append({"tag": tag_blitz, "ordem": gerar_ordem_gol(total_gols), "stats": "Pressão Limpa", "rh": rh, "ra": ra, "favorito": "GOLS"})
-        if 15 <= tempo <= 25 and total_chutes >= 6 and (sog_h + sog_a) >= 3:
+
+        # --- ESTRATÉGIA 8: TIROTEIO ELITE ---
+        if 15 <= tempo <= 25 and total_chutes >= 8 and (sog_h + sog_a) >= 4: # Aumentei chutes 6->8 e gol 3->4
              SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": "Muitos Chutes", "rh": rh, "ra": ra, "favorito": "GOLS"})
-        if 20 <= tempo <= 35 and gh == 0 and ga == 0 and (sog_h + sog_a) >= 6:
-            SINAIS.append({"tag": "🔥 O Catalisador (IA)", "ordem": "👉 <b>FAZER:</b> Over 0.5 HT\n✅ Aposta: <b>Mais de 0.5 Gols</b>", "stats": "Pontaria Alta", "rh": rh, "ra": ra, "favorito": "GOLS"})
+
+        # --- ESTRATÉGIA 9: LAY GOLEADA (Corrigida: Defesa Instável) ---
+        if 60 <= tempo <= 88 and abs(gh - ga) >= 3 and (total_chutes >= 16): # Aumentei chutes 14->16
+             # Filtro: Só entra se o time perdendo ainda estiver chutando (tentando honra)
+             time_perdendo_chuta = (gh < ga and sog_h >= 2) or (ga < gh and sog_a >= 2)
+             if time_perdendo_chuta:
+                 SINAIS.append({"tag": "🔫 Lay Goleada", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "Goleada Viva", "rh": rh, "ra": ra, "favorito": "GOLS"})
+
+        # --- ESTRATÉGIA 10: SNIPER FINAL ---
         if tempo >= 80 and abs(gh - ga) <= 1:
-            if total_fora <= 6 and ((rh >= 4) or (total_chutes_gol >= 5)): 
+            # Filtro: Exige pressão absurda no final
+            if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
-        if 60 <= tempo <= 88 and abs(gh - ga) >= 3 and (total_chutes >= 14):
-             SINAIS.append({"tag": "🔫 Lay Goleada", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "Goleada Viva", "rh": rh, "ra": ra, "favorito": "GOLS"})
-        if 60 <= tempo <= 75:
-            diff_sog = sog_h - sog_a
-            condicao_casa_reage = (diff_sog <= -3) and (rh >= 5) and (gh <= ga)
-            condicao_fora_reage = (diff_sog >= 3) and (ra >= 5) and (ga <= gh)
-            if condicao_casa_reage or condicao_fora_reage:
-                SINAIS.append({"tag": "⚡ Oportunidade Relâmpago", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "Caos Tático: Pressão do Azarão", "rh": rh, "ra": ra, "favorito": "GOLS"})
+
         return SINAIS
     except: return []
 
