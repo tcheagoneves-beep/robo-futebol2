@@ -1504,7 +1504,7 @@ def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
         # Filtra para 1 entrada por jogo (evita duplicidade no mesmo jogo)
         df_hoje = df_hoje.drop_duplicates(subset=['FID'])
         
-        # PARÂMETROS DA SIMULAÇÃO (O que você pediu)
+        # PARÂMETROS DA SIMULAÇÃO
         STAKE_FIXA = 10.00
         ODD_MEDIA = 1.40
         LUCRO_POR_GREEN = STAKE_FIXA * (ODD_MEDIA - 1) # R$ 4.00
@@ -1515,24 +1515,18 @@ def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
         lucro_total = (greens * LUCRO_POR_GREEN) - (reds * STAKE_FIXA)
         
         emoji_res = "🤑" if lucro_total > 0 else "🔻"
-        cor_res = "VERDE" if lucro_total > 0 else "VERMELHO"
         
-        # Monta o texto bonitinho
-        texto = f"""
-📊 <b>SIMULAÇÃO REALISTA (HOJE):</b>
+        # Monta o texto (Usei concatenação simples para evitar erro de indentação na f-string)
+        texto = "📊 <b>SIMULAÇÃO REALISTA (HOJE):</b>\n\n"
+        texto += f"Se você tivesse apostado <b>R$ {STAKE_FIXA:.2f}</b> fixos em cada jogo hoje,\n"
+        texto += f"buscando uma Odd média de <b>@{ODD_MEDIA:.2f}</b> (segurança):\n\n"
+        texto += f"✅ <b>{greens} Greens</b> (R$ +{greens * LUCRO_POR_GREEN:.2f})\n"
+        texto += f"❌ <b>{reds} Reds</b> (R$ -{reds * STAKE_FIXA:.2f})\n\n"
+        texto += "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        texto += f"💰 <b>RESULTADO FINAL: R$ {lucro_total:.2f}</b> {emoji_res}\n"
+        texto += "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
+        texto += "<i>*Cenário conservador (1 entrada única por partida).</i>"
 
-Se você tivesse apostado <b>R$ {STAKE_FIXA:.2f}</b> fixos em cada jogo hoje,
-buscando uma Odd média de <b>@{ODD_MEDIA:.2f}</b> (segurança):
-
-✅ <b>{greens} Greens</b> (R$ +{greens * LUCRO_POR_GREEN:.2f})
-❌ <b>{reds} Reds</b> (R$ -{reds * STAKE_FIXA:.2f})
-
-▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
-💰 <b>RESULTADO FINAL: R$ {lucro_total:.2f}</b> {emoji_res}
-▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
-
-<i>*Cenário conservador (1 entrada única por partida).</i>
-"""
         return texto
     except Exception as e: return f"Erro no cálculo: {e}"
     
@@ -2829,8 +2823,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
-
-
-
-
