@@ -1393,25 +1393,51 @@ def analisar_bi_com_ia():
     except Exception as e:
         return "Não foi possível gerar o insight da IA no momento."
 
-def analisar_financeiro_com_ia(stake, banca_inicial):
-    if not IA_ATIVADA: return "IA Offline."
+def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
+    # Essa função agora é uma SIMULADORA DE CENÁRIO (Mais precisa que a IA)
     try:
         df = st.session_state.get('historico_full', pd.DataFrame())
-        if df.empty: return "Sem dados."
+        hoje = get_time_br().strftime('%Y-%m-%d')
         
-        greens = len(df[df['Resultado'].str.contains('GREEN', na=False)])
-        reds = len(df[df['Resultado'].str.contains('RED', na=False)])
+        # Filtra apenas hoje
+        df_hoje = df[df['Data'] == hoje].copy()
         
-        prompt = f"""
-        Sou um investidor. Minha banca inicial era {banca_inicial}. Minha stake é {stake}.
-        Tive {greens} Greens e {reds} Reds.
-        Calcule meu momento atual e me dê uma recomendação de gestão de banca (Conservadora ou Agressiva?).
-        Seja breve.
-        """
-        response = model_ia.generate_content(prompt)
-        st.session_state['gemini_usage']['used'] += 1
-        return response.text.strip()
-    except: return "Erro na análise financeira."
+        if df_hoje.empty: return "Sem operações hoje para simular."
+        
+        # Filtra para 1 entrada por jogo (evita duplicidade no mesmo jogo)
+        df_hoje = df_hoje.drop_duplicates(subset=['FID'])
+        
+        # PARÂMETROS DA SIMULAÇÃO (O que você pediu)
+        STAKE_FIXA = 10.00
+        ODD_MEDIA = 1.40
+        LUCRO_POR_GREEN = STAKE_FIXA * (ODD_MEDIA - 1) # R$ 4.00
+        
+        greens = len(df_hoje[df_hoje['Resultado'].str.contains('GREEN', na=False)])
+        reds = len(df_hoje[df_hoje['Resultado'].str.contains('RED', na=False)])
+        
+        lucro_total = (greens * LUCRO_POR_GREEN) - (reds * STAKE_FIXA)
+        
+        emoji_res = "🤑" if lucro_total > 0 else "🔻"
+        cor_res = "VERDE" if lucro_total > 0 else "VERMELHO"
+        
+        # Monta o texto bonitinho
+        texto = f"""
+📊 <b>SIMULAÇÃO REALISTA (HOJE):</b>
+
+Se você tivesse apostado <b>R$ {STAKE_FIXA:.2f}</b> fixos em cada jogo hoje,
+buscando uma Odd média de <b>@{ODD_MEDIA:.2f}</b> (segurança):
+
+✅ <b>{greens} Greens</b> (R$ +{greens * LUCRO_POR_GREEN:.2f})
+❌ <b>{reds} Reds</b> (R$ -{reds * STAKE_FIXA:.2f})
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+💰 <b>RESULTADO FINAL: R$ {lucro_total:.2f}</b> {emoji_res}
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+<i>*Cenário conservador (1 entrada única por partida).</i>
+"""
+        return texto
+    except Exception as e: return f"Erro no cálculo: {e}"
     
 def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Offline."
