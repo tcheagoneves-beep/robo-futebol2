@@ -726,29 +726,30 @@ def gerar_multipla_matinal_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # --- FILTRO LIBERADO: QUALQUER LIGA ---
-        # Removemos a lista restritiva. Pegamos qualquer jogo 'Não Iniciado' (NS)
-        jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
+        # --- FILTRO DE LIQUIDEZ ---
+        # Ligas principais + Segundonas fortes (Championship, Bundesliga 2, Serie B)
+        # Isso garante que o mercado de GOLS esteja aberto e com liquidez.
+        LIGAS_LIQUIDEZ = [39, 140, 78, 135, 61, 71, 72, 2, 3, 13, 128, 40, 41, 42, 141, 136]
+        
+        jogos_candidatos = [j for j in jogos if j['league']['id'] in LIGAS_LIQUIDEZ and j['fixture']['status']['short'] == 'NS']
         
         if len(jogos_candidatos) < 2: return None, []
         
         lista_jogos_txt = ""
         mapa_jogos = {}
         
-        # Aumentamos o leque para 40 jogos para a IA ter bastante opção
         count_validos = 0
         for j in jogos_candidatos:
-            if count_validos >= 40: break
+            if count_validos >= 30: break
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             
-            # O filtro de qualidade agora é TER DADOS NA API
             try:
                 stats_h = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-                # Se a API retornou stats válidas (não vazias), o jogo é bom para análise
-                if stats_h and stats_h['home']['qtd'] > 0:
+                # Verifica se retornou dados válidos (qtd > 0)
+                if stats_h and stats_h['home'].get('qtd', 0) > 0:
                     mapa_jogos[fid] = f"{home} x {away}"
                     lista_jogos_txt += f"- ID {fid}: {home} x {away} ({j['league']['name']}) | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
                     count_validos += 1
@@ -765,17 +766,16 @@ def gerar_multipla_matinal_ia(api_key):
             if total > 0: winrate_sheets = f"{(greens/total)*100:.1f}%"
 
         prompt = f"""
-        Atue como GESTOR DE RISCO E ESTRATÉGIA.
-        OBJETIVO: Criar uma "Múltipla de Segurança" (Bingo Matinal) com 2 ou 3 jogos para HOJE.
+        Atue como GESTOR DE RISCO.
+        OBJETIVO: Múltipla de Segurança (Bingo Matinal) para HOJE.
         
-        DADOS GLOBAIS: Winrate Pessoal: {winrate_sheets}. {contexto_firebase}.
+        DADOS: {contexto_firebase}
         
-        LISTA DE CANDIDATOS (DIVERSAS LIGAS):
+        CANDIDATOS (LIGAS PRINCIPAIS):
         {lista_jogos_txt}
         
         TAREFA: 
-        Escolha os 2 ou 3 jogos estatisticamente MAIS SEGUROS para Over 0.5 Gols ou Over 1.5 Gols.
-        Não tenha preconceito com ligas menores, foque nos NÚMEROS (Porcentagem alta de Over).
+        Escolha 2 ou 3 jogos onde o Over 0.5 Gols ou Over 1.5 Gols é estatisticamente "impossível de não bater".
         
         FORMATO JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
         """
@@ -907,6 +907,66 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     "titulo": "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA (DEFESAS)",
                     "jogo": "Time A x Time B",
                     "destaque": "Árbitro com média alta em liga under",
+                    "indicacao": "Over 4.5 Cartões"
+                }}
+            ]
+        }}def gerar_analise_mercados_alternativos_ia(api_key):
+    if not IA_ATIVADA: return []
+    hoje = get_time_br().strftime('%Y-%m-%d')
+    try:
+        url = "https://v3.football.api-sports.io/fixtures"
+        params = {"date": hoje, "timezone": "America/Sao_Paulo"}
+        res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
+        jogos = res.get('response', [])
+        
+        # --- FILTRO BET365: APENAS LIGAS COM MERCADO DE PROPS ---
+        # 39=Premier, 140=LaLiga, 78=Bundesliga, 135=SerieA, 61=Ligue1, 
+        # 71=BR-A, 72=BR-B, 2=UCL, 3=UEL, 13=Liberta, 128=Argentina
+        LIGAS_COM_MERCADO = [39, 140, 78, 135, 61, 71, 72, 2, 3, 13, 128, 848, 143] 
+        
+        jogos_candidatos = [
+            j for j in jogos 
+            if j['league']['id'] in LIGAS_COM_MERCADO  # <--- TRAVA DE LIGA
+            and j['fixture'].get('referee') 
+            and j['fixture']['status']['short'] == 'NS'
+        ]
+        
+        if not jogos_candidatos: return []
+        
+        # Pega até 20 jogos dessas ligas top
+        amostra = jogos_candidatos[:20] 
+        
+        dados_analise = ""
+        for j in amostra:
+            fid = j['fixture']['id']
+            home = j['teams']['home']['name']
+            away = j['teams']['away']['name']
+            referee = j['fixture']['referee']
+            liga_nome = j['league']['name']
+            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Árbitro: {referee} | ID: {fid}\n"
+
+        prompt = f"""
+        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (SMALL & BIG MARKETS).
+        
+        Analise estes jogos das PRINCIPAIS LIGAS DO MUNDO.
+        A casa de aposta ABRIRÁ mercado para eles. Encontre valor real.
+        
+        LISTA DE JOGOS E ÁRBITROS (HOJE):
+        {dados_analise}
+        
+        CRITÉRIOS DE ANÁLISE:
+        1. CARTÕES: Procure a combinação "Árbitro Rigoroso" + "Jogo Equilibrado/Tenso".
+        2. GOLEIROS (DEFESAS): Jogos onde há um desnível técnico claro (o goleiro do time pior vai trabalhar).
+        
+        SAÍDA OBRIGATÓRIA (JSON):
+        {{
+            "sinais": [
+                {{
+                    "fid": "12345",
+                    "tipo": "CARTAO" ou "GOLEIRO",
+                    "titulo": "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA (DEFESAS)",
+                    "jogo": "Time A x Time B",
+                    "destaque": "Árbitro com média alta em clássico",
                     "indicacao": "Over 4.5 Cartões"
                 }}
             ]
@@ -2769,6 +2829,7 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
 
 
 
