@@ -117,6 +117,26 @@ COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
 LIGAS_TABELA = [71, 72, 39, 140, 141, 135, 78, 79, 94]
+
+# ==============================================================================
+# LISTA DE ELITE (Ligas que abrem Mercados de Cartões, Defesas e Especiais)
+# ==============================================================================
+LIGAS_TOP_TIER = [
+    39,   # Premier League (Inglaterra)
+    140,  # La Liga (Espanha)
+    78,   # Bundesliga (Alemanha)
+    135,  # Serie A (Itália)
+    61,   # Ligue 1 (França)
+    2,    # Champions League
+    3,    # Europa League
+    71,   # Brasileirão Série A
+    13,   # Libertadores
+    128,  # Copa Sul-Americana
+    848,  # Copa do Brasil (Fases finais)
+    # 94, # Primeira Liga (Portugal) - Às vezes abre, às vezes não
+    # 88, # Eredivisie (Holanda) - Às vezes abre
+]
+
 DB_CACHE_TIME = 60
 STATIC_CACHE_TIME = 600
 
@@ -726,13 +746,15 @@ def gerar_multipla_matinal_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # --- FILTRO DE LIQUIDEZ ---
-        # Ligas principais + Segundonas fortes (Championship, Bundesliga 2, Serie B)
-        # Isso garante que o mercado de GOLS esteja aberto e com liquidez.
-        LIGAS_LIQUIDEZ = [39, 140, 78, 135, 61, 71, 72, 2, 3, 13, 128, 40, 41, 42, 141, 136]
+        # --- FILTRO APLICADO: APENAS LIGAS TOP TIER ---
+        # Filtra jogos 'Não Iniciados' (NS) E que pertençam à lista de elite
+        jogos_candidatos = [
+            j for j in jogos 
+            if j['fixture']['status']['short'] == 'NS' 
+            and j['league']['id'] in LIGAS_TOP_TIER
+        ]
         
-        jogos_candidatos = [j for j in jogos if j['league']['id'] in LIGAS_LIQUIDEZ and j['fixture']['status']['short'] == 'NS']
-        
+        # Se tiver poucos jogos Top Tier, o robô não força entrada
         if len(jogos_candidatos) < 2: return None, []
         
         lista_jogos_txt = ""
@@ -740,7 +762,7 @@ def gerar_multipla_matinal_ia(api_key):
         
         count_validos = 0
         for j in jogos_candidatos:
-            if count_validos >= 30: break
+            if count_validos >= 20: break # Limite menor pois agora são ligas de qualidade
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
@@ -748,9 +770,9 @@ def gerar_multipla_matinal_ia(api_key):
             
             try:
                 stats_h = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-                # Verifica se retornou dados válidos (qtd > 0)
-                if stats_h and stats_h['home'].get('qtd', 0) > 0:
+                if stats_h and stats_h['home']['qtd'] > 0:
                     mapa_jogos[fid] = f"{home} x {away}"
+                    # Adiciona ao texto para a IA ler
                     lista_jogos_txt += f"- ID {fid}: {home} x {away} ({j['league']['name']}) | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
                     count_validos += 1
             except: pass
@@ -766,16 +788,17 @@ def gerar_multipla_matinal_ia(api_key):
             if total > 0: winrate_sheets = f"{(greens/total)*100:.1f}%"
 
         prompt = f"""
-        Atue como GESTOR DE RISCO.
-        OBJETIVO: Múltipla de Segurança (Bingo Matinal) para HOJE.
+        Atue como GESTOR DE RISCO E ESTRATÉGIA.
+        OBJETIVO: Criar uma "Múltipla de Segurança" (Bingo Matinal) com 2 ou 3 jogos para HOJE.
         
-        DADOS: {contexto_firebase}
+        DADOS GLOBAIS: Winrate Pessoal: {winrate_sheets}. {contexto_firebase}.
         
-        CANDIDATOS (LIGAS PRINCIPAIS):
+        LISTA DE CANDIDATOS (SOMENTE LIGAS ELITE):
         {lista_jogos_txt}
         
         TAREFA: 
-        Escolha 2 ou 3 jogos onde o Over 0.5 Gols ou Over 1.5 Gols é estatisticamente "impossível de não bater".
+        Escolha os 2 ou 3 jogos estatisticamente MAIS SEGUROS para Over 0.5 Gols ou Over 1.5 Gols.
+        Como são ligas grandes, a liquidez é garantida. Foque na probabilidade de gol.
         
         FORMATO JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
         """
@@ -863,78 +886,18 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # --- FILTRO LIBERADO: QUALQUER LIGA COM DADOS ---
-        # A única condição agora é ter ÁRBITRO DEFINIDO (garante cobertura para cartões)
+        # --- FILTRO HARDCORE: SÓ LIGAS TOP TIER ---
+        # Só pega jogos que tenham Árbitro (referee) E estejam na lista de Elite
         jogos_candidatos = [
             j for j in jogos 
-            if j['fixture'].get('referee') and j['fixture']['status']['short'] == 'NS'
-        ]
-        
-        if not jogos_candidatos: return []
-        
-        # --- VARREDURA MASSIVA (ATÉ 60 JOGOS) ---
-        # O Gemini Flash aguenta muito texto. Vamos mandar um lote grande.
-        amostra = jogos_candidatos[:60] 
-        
-        dados_analise = ""
-        for j in amostra:
-            fid = j['fixture']['id']
-            home = j['teams']['home']['name']
-            away = j['teams']['away']['name']
-            referee = j['fixture']['referee']
-            liga_nome = j['league']['name']
-            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Árbitro: {referee} | ID: {fid}\n"
-
-        prompt = f"""
-        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (SMALL & BIG MARKETS).
-        
-        Eu liberei o filtro de ligas. Você tem acesso a jogos do mundo todo abaixo.
-        Sua missão é encontrar OPORTUNIDADES DE OURO, não importa se é Champions League ou 2ª Divisão.
-        
-        LISTA DE JOGOS E ÁRBITROS (HOJE):
-        {dados_analise}
-        
-        CRITÉRIOS DE ANÁLISE:
-        1. CARTÕES: Procure a combinação "Árbitro Rigoroso" + "Jogo Equilibrado/Tenso".
-        2. GOLEIROS (DEFESAS): Jogos onde há um desnível técnico claro (o goleiro do time pior vai trabalhar).
-        
-        SAÍDA OBRIGATÓRIA (JSON):
-        {{
-            "sinais": [
-                {{
-                    "fid": "12345",
-                    "tipo": "CARTAO" ou "GOLEIRO",
-                    "titulo": "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA (DEFESAS)",
-                    "jogo": "Time A x Time B",
-                    "destaque": "Árbitro com média alta em liga under",
-                    "indicacao": "Over 4.5 Cartões"
-                }}
-            ]
-        }}def gerar_analise_mercados_alternativos_ia(api_key):
-    if not IA_ATIVADA: return []
-    hoje = get_time_br().strftime('%Y-%m-%d')
-    try:
-        url = "https://v3.football.api-sports.io/fixtures"
-        params = {"date": hoje, "timezone": "America/Sao_Paulo"}
-        res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
-        jogos = res.get('response', [])
-        
-        # --- FILTRO BET365: APENAS LIGAS COM MERCADO DE PROPS ---
-        # 39=Premier, 140=LaLiga, 78=Bundesliga, 135=SerieA, 61=Ligue1, 
-        # 71=BR-A, 72=BR-B, 2=UCL, 3=UEL, 13=Liberta, 128=Argentina
-        LIGAS_COM_MERCADO = [39, 140, 78, 135, 61, 71, 72, 2, 3, 13, 128, 848, 143] 
-        
-        jogos_candidatos = [
-            j for j in jogos 
-            if j['league']['id'] in LIGAS_COM_MERCADO  # <--- TRAVA DE LIGA
-            and j['fixture'].get('referee') 
+            if j['fixture'].get('referee') 
             and j['fixture']['status']['short'] == 'NS'
+            and j['league']['id'] in LIGAS_TOP_TIER
         ]
         
         if not jogos_candidatos: return []
         
-        # Pega até 20 jogos dessas ligas top
-        amostra = jogos_candidatos[:20] 
+        amostra = jogos_candidatos[:40] 
         
         dados_analise = ""
         for j in amostra:
@@ -946,17 +909,16 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Árbitro: {referee} | ID: {fid}\n"
 
         prompt = f"""
-        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (SMALL & BIG MARKETS).
+        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (BIG MARKETS).
         
-        Analise estes jogos das PRINCIPAIS LIGAS DO MUNDO.
-        A casa de aposta ABRIRÁ mercado para eles. Encontre valor real.
+        Você tem acesso apenas a jogos de LIGAS DE ELITE (Premier League, La Liga, etc) onde mercados de Cartões e Defesas existem.
         
         LISTA DE JOGOS E ÁRBITROS (HOJE):
         {dados_analise}
         
         CRITÉRIOS DE ANÁLISE:
-        1. CARTÕES: Procure a combinação "Árbitro Rigoroso" + "Jogo Equilibrado/Tenso".
-        2. GOLEIROS (DEFESAS): Jogos onde há um desnível técnico claro (o goleiro do time pior vai trabalhar).
+        1. CARTÕES: Procure a combinação "Árbitro Rigoroso" + "Clássico/Jogo Tenso".
+        2. GOLEIROS (DEFESAS): Jogos onde há um desnível técnico claro (o goleiro do time pior vai trabalhar muito).
         
         SAÍDA OBRIGATÓRIA (JSON):
         {{
@@ -1504,7 +1466,7 @@ def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
         # Filtra para 1 entrada por jogo (evita duplicidade no mesmo jogo)
         df_hoje = df_hoje.drop_duplicates(subset=['FID'])
         
-        # PARÂMETROS DA SIMULAÇÃO
+        # PARÂMETROS DA SIMULAÇÃO (O que você pediu)
         STAKE_FIXA = 10.00
         ODD_MEDIA = 1.40
         LUCRO_POR_GREEN = STAKE_FIXA * (ODD_MEDIA - 1) # R$ 4.00
@@ -1515,18 +1477,24 @@ def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
         lucro_total = (greens * LUCRO_POR_GREEN) - (reds * STAKE_FIXA)
         
         emoji_res = "🤑" if lucro_total > 0 else "🔻"
+        cor_res = "VERDE" if lucro_total > 0 else "VERMELHO"
         
-        # Monta o texto (Usei concatenação simples para evitar erro de indentação na f-string)
-        texto = "📊 <b>SIMULAÇÃO REALISTA (HOJE):</b>\n\n"
-        texto += f"Se você tivesse apostado <b>R$ {STAKE_FIXA:.2f}</b> fixos em cada jogo hoje,\n"
-        texto += f"buscando uma Odd média de <b>@{ODD_MEDIA:.2f}</b> (segurança):\n\n"
-        texto += f"✅ <b>{greens} Greens</b> (R$ +{greens * LUCRO_POR_GREEN:.2f})\n"
-        texto += f"❌ <b>{reds} Reds</b> (R$ -{reds * STAKE_FIXA:.2f})\n\n"
-        texto += "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-        texto += f"💰 <b>RESULTADO FINAL: R$ {lucro_total:.2f}</b> {emoji_res}\n"
-        texto += "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n\n"
-        texto += "<i>*Cenário conservador (1 entrada única por partida).</i>"
+        # Monta o texto bonitinho
+        texto = f"""
+📊 <b>SIMULAÇÃO REALISTA (HOJE):</b>
 
+Se você tivesse apostado <b>R$ {STAKE_FIXA:.2f}</b> fixos em cada jogo hoje,
+buscando uma Odd média de <b>@{ODD_MEDIA:.2f}</b> (segurança):
+
+✅ <b>{greens} Greens</b> (R$ +{greens * LUCRO_POR_GREEN:.2f})
+❌ <b>{reds} Reds</b> (R$ -{reds * STAKE_FIXA:.2f})
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+💰 <b>RESULTADO FINAL: R$ {lucro_total:.2f}</b> {emoji_res}
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+<i>*Cenário conservador (1 entrada única por partida).</i>
+"""
         return texto
     except Exception as e: return f"Erro no cálculo: {e}"
     
@@ -1546,7 +1514,7 @@ def otimizar_estrategias_existentes_ia():
     if df.empty: return "Sem dados suficientes para simulação."
     
     try:
-        # 1. Filtra jogos finalizados
+        # 1. Filtra jogos finalizados (Green ou Red)
         df_final = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
         
         if len(df_final) < 10: return "Preciso de mais dados (mínimo 10 jogos) para uma análise robusta."
@@ -1556,36 +1524,49 @@ def otimizar_estrategias_existentes_ia():
         greens = len(df_final[df_final['Resultado'].str.contains('GREEN')])
         winrate_global = (greens / total_jogos) * 100
         
-        # 3. Preparação dos Dados
+        # 3. Preparação dos Dados (ENVIA TUDO AGORA - ATÉ 1000 REGISTROS)
+        # Removemos a coluna 'Odd' da visão da IA para ela não focar nisso
         colunas_foco = ['Data', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado']
+        
+        # Pega até 1000 jogos (O Gemini Flash aguenta janelas grandes)
         dados_csv = df_final[colunas_foco].tail(1000).to_string(index=False)
 
-        # 4. Construção do Prompt (Blindada contra erro de sintaxe)
-        prompt = "ATUE COMO UM CIENTISTA DE DADOS SÊNIOR E ESPECIALISTA EM ALGORITMOS DE FUTEBOL.\n"
-        prompt += "OBJETIVO: Identificar falhas na LÓGICA das estratégias, não nas Odds.\n\n"
+        prompt = f"""
+        ATUE COMO UM CIENTISTA DE DADOS SÊNIOR E ESPECIALISTA EM ALGORITMOS DE FUTEBOL.
         
-        prompt += "DADOS GERAIS:\n"
-        prompt += f"- Total de Jogos Analisados: {total_jogos}\n"
-        prompt += f"- Winrate Global Atual: {winrate_global:.1f}%\n\n" 
+        OBJETIVO: Identificar falhas na LÓGICA das estratégias, não nas Odds.
         
-        prompt += "BASE DE DADOS COMPLETA (HISTÓRICO):\n"
-        prompt += f"{dados_csv}\n\n"
+        DADOS GERAIS:
+        - Total de Jogos Analisados: {total_jogos}
+        - Winrate Global Atual: {winrate_global:.1f}%
         
-        prompt += "SUA MISSÃO (AUDITORIA TÉCNICA):\n"
-        prompt += "1. Ignore as Odds. Foque no PADRÃO DOS REDS.\n"
-        prompt += "2. Analise TODAS as estratégias que tiveram erros.\n"
-        prompt += "3. Identifique CORRELAÇÕES TÓXICAS (Ex: Estratégia X não funciona na Liga Y).\n\n"
+        BASE DE DADOS COMPLETA (HISTÓRICO):
+        {dados_csv}
         
-        prompt += "GERE UM RELATÓRIO DE ENGENHARIA REVERSA:\n"
-        prompt += f"\"🔍 **DIAGNÓSTICO PROFUNDO (Base: {total_jogos} jogos):**\n\n"
-        prompt += "Identifiquei falhas sistêmicas nas seguintes lógicas:\n\n"
-        prompt += "1. **Estratégia: [NOME DA ESTRATÉGIA]**\n"
-        prompt += "- ❌ **O Padrão do Erro:** [Descreva o cenário do erro]\n"
-        prompt += "- 🛠️ **Ajuste Lógico Sugerido:** [Sua solução técnica]\n"
-        prompt += "- 📈 **Projeção:** Isso eliminaria X Reds e subiria o Winrate para Y%.\n\n"
-        prompt += "2. **Estratégia: [OUTRA ESTRATÉGIA]**\n"
-        prompt += "... (mesma estrutura)\n\n"
-        prompt += "🏁 **Conclusão:** Foco total na correção da estratégia [NOME].\""
+        SUA MISSÃO (AUDITORIA TÉCNICA):
+        1. Ignore as Odds. Foque no PADRÃO DOS REDS.
+        2. Analise TODAS as estratégias que tiveram erros.
+        3. Identifique CORRELAÇÕES TÓXICAS:
+           - Ex: "A estratégia 'Massacre' falha muito quando o jogo é na Liga X?"
+           - Ex: "A estratégia 'Vovô' está tomando gol no final quando o placar é magro (1x0)?"
+           - Ex: "A estratégia 'Blitz' falha quando o visitante é zebra?"
+           
+        GERE UM RELATÓRIO DE ENGENHARIA REVERSA:
+        
+        "🔍 **DIAGNÓSTICO PROFUNDO (Base: {total_jogos} jogos):**
+        
+        Identifiquei falhas sistêmicas nas seguintes lógicas:
+        
+        1. **Estratégia: [NOME DA ESTRATÉGIA COM PROBLEMA]**
+           - ❌ **O Padrão do Erro:** [Descreva o cenário onde ela falha. Ex: Falha sistematicamente em jogos da Série B ou quando o mandante já está ganhando].
+           - 🛠️ **Ajuste Lógico Sugerido:** [Ex: Adicionar filtro 'Somente se estiver Empatado' ou 'Excluir Ligas Sul-Americanas'].
+           - 📈 **Projeção:** Isso eliminaria X Reds e subiria o Winrate para Y%.
+           
+        2. **Estratégia: [OUTRA ESTRATÉGIA]**
+           - ... (mesma estrutura)
+           
+        🏁 **Conclusão:** Para aumentar a assertividade geral, foque na correção da lógica da estratégia [NOME], que é a maior ofensora no momento."
+        """
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
         st.session_state['gemini_usage']['used'] += 1
@@ -1647,31 +1628,27 @@ def enviar_relatorio_bi(token, chat_ids):
 
         insight_text = analisar_bi_com_ia()
 
-        # --- MONTAGEM SEGURA DA MENSAGEM (LINHA A LINHA) ---
-        msg = "📈 <b>RELATÓRIO BI AVANÇADO</b>\n\n"
-        
-        msg += f"📆 <b>DIÁRIO (HOJE):</b>\n"
-        msg += f"• Geral: {get_placar_str(d_hoje)}\n"
-        msg += f"• 🤖 IA Aprovados: {get_ia_stats(d_hoje)}\n\n"
+        msg = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>
 
-        msg += f"🗓 <b>SEMANAL (7 Dias):</b>\n"
-        msg += f"• Geral: {get_placar_str(d_semana)}\n"
-        msg += f"• 🤖 IA Aprovados: {get_ia_stats(d_semana)}\n\n"
+📆 <b>DIÁRIO (HOJE):</b>
+• Geral: {get_placar_str(d_hoje)}
+• 🤖 IA Aprovados: {get_ia_stats(d_hoje)}
 
-        msg += f"📅 <b>MENSAL (30 Dias):</b>\n"
-        msg += f"• Geral: {get_placar_str(d_mes)}\n\n"
+🗓 <b>SEMANAL (7 Dias):</b>
+• Geral: {get_placar_str(d_semana)}
+• 🤖 IA Aprovados: {get_ia_stats(d_semana)}
 
-        msg += f"🏆 <b>TOP 5 ESTRATÉGIAS (Série Histórica):</b>\n"
-        msg += f"{top_strats_txt}\n\n"
+📅 <b>MENSAL (30 Dias):</b>
+• Geral: {get_placar_str(d_mes)}
 
-        msg += f"🧠 <b>INSIGHT IA (Análise do Dia):</b>\n"
-        msg += f"{insight_text}"
+🏆 <b>TOP 5 ESTRATÉGIAS (Série Histórica):</b>
+{top_strats_txt}
 
+🧠 <b>INSIGHT IA (Análise do Dia):</b>
+{insight_text}
+"""
         enviar_telegram(token, chat_ids, msg)
-        
-    except Exception as e: 
-        msg_erro = "📈 RELATÓRIO BI (Simplificado)\n\n" + str(analisar_bi_com_ia())
-        enviar_telegram(token, chat_ids, msg_erro)
+    except Exception as e: enviar_telegram(token, chat_ids, f"📈 RELATÓRIO BI (Simplificado)\n\n{analisar_bi_com_ia()}")
 
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10)
@@ -2814,7 +2791,6 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
 
 
 
