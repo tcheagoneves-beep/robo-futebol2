@@ -1647,27 +1647,32 @@ def enviar_relatorio_bi(token, chat_ids):
 
         insight_text = analisar_bi_com_ia()
 
-        msg = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>
+        # --- MONTAGEM SEGURA DA MENSAGEM (LINHA A LINHA) ---
+        msg = "📈 <b>RELATÓRIO BI AVANÇADO</b>\n\n"
+        
+        msg += f"📆 <b>DIÁRIO (HOJE):</b>\n"
+        msg += f"• Geral: {get_placar_str(d_hoje)}\n"
+        msg += f"• 🤖 IA Aprovados: {get_ia_stats(d_hoje)}\n\n"
 
-📆 <b>DIÁRIO (HOJE):</b>
-• Geral: {get_placar_str(d_hoje)}
-• 🤖 IA Aprovados: {get_ia_stats(d_hoje)}
+        msg += f"🗓 <b>SEMANAL (7 Dias):</b>\n"
+        msg += f"• Geral: {get_placar_str(d_semana)}\n"
+        msg += f"• 🤖 IA Aprovados: {get_ia_stats(d_semana)}\n\n"
 
-🗓 <b>SEMANAL (7 Dias):</b>
-• Geral: {get_placar_str(d_semana)}
-• 🤖 IA Aprovados: {get_ia_stats(d_semana)}
+        msg += f"📅 <b>MENSAL (30 Dias):</b>\n"
+        msg += f"• Geral: {get_placar_str(d_mes)}\n\n"
 
-📅 <b>MENSAL (30 Dias):</b>
-• Geral: {get_placar_str(d_mes)}
+        msg += f"🏆 <b>TOP 5 ESTRATÉGIAS (Série Histórica):</b>\n"
+        msg += f"{top_strats_txt}\n\n"
 
-🏆 <b>TOP 5 ESTRATÉGIAS (Série Histórica):</b>
-{top_strats_txt}
+        msg += f"🧠 <b>INSIGHT IA (Análise do Dia):</b>\n"
+        msg += f"{insight_text}"
 
-🧠 <b>INSIGHT IA (Análise do Dia):</b>
-{insight_text}
-"""
         enviar_telegram(token, chat_ids, msg)
-    except Exception as e: enviar_telegram(token, chat_ids, f"📈 RELATÓRIO BI (Simplificado)\n\n{analisar_bi_com_ia()}")
+        
+    except Exception as e: 
+        # Fallback seguro também
+        msg_erro = "📈 RELATÓRIO BI (Simplificado)\n\n" + str(analisar_bi_com_ia())
+        enviar_telegram(token, chat_ids, msg_erro)
 
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10)
@@ -2810,5 +2815,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
 
