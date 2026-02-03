@@ -1546,7 +1546,7 @@ def otimizar_estrategias_existentes_ia():
     if df.empty: return "Sem dados suficientes para simulação."
     
     try:
-        # 1. Filtra jogos finalizados (Green ou Red)
+        # 1. Filtra jogos finalizados
         df_final = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
         
         if len(df_final) < 10: return "Preciso de mais dados (mínimo 10 jogos) para uma análise robusta."
@@ -1556,49 +1556,36 @@ def otimizar_estrategias_existentes_ia():
         greens = len(df_final[df_final['Resultado'].str.contains('GREEN')])
         winrate_global = (greens / total_jogos) * 100
         
-        # 3. Preparação dos Dados (ENVIA TUDO AGORA - ATÉ 1000 REGISTROS)
-        # Removemos a coluna 'Odd' da visão da IA para ela não focar nisso
+        # 3. Preparação dos Dados
         colunas_foco = ['Data', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado']
-        
-        # Pega até 1000 jogos (O Gemini Flash aguenta janelas grandes)
         dados_csv = df_final[colunas_foco].tail(1000).to_string(index=False)
 
-        prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS SÊNIOR E ESPECIALISTA EM ALGORITMOS DE FUTEBOL.
+        # 4. Construção do Prompt (Blindada contra erro de sintaxe)
+        prompt = "ATUE COMO UM CIENTISTA DE DADOS SÊNIOR E ESPECIALISTA EM ALGORITMOS DE FUTEBOL.\n"
+        prompt += "OBJETIVO: Identificar falhas na LÓGICA das estratégias, não nas Odds.\n\n"
         
-        OBJETIVO: Identificar falhas na LÓGICA das estratégias, não nas Odds.
+        prompt += "DADOS GERAIS:\n"
+        prompt += f"- Total de Jogos Analisados: {total_jogos}\n"
+        prompt += f"- Winrate Global Atual: {winrate_global:.1f}%\n\n" # <--- O erro estava aqui, agora resolvido
         
-        DADOS GERAIS:
-        - Total de Jogos Analisados: {total_jogos}
-        - Winrate Global Atual: {winrate_global:.1f}%
+        prompt += "BASE DE DADOS COMPLETA (HISTÓRICO):\n"
+        prompt += f"{dados_csv}\n\n"
         
-        BASE DE DADOS COMPLETA (HISTÓRICO):
-        {dados_csv}
+        prompt += "SUA MISSÃO (AUDITORIA TÉCNICA):\n"
+        prompt += "1. Ignore as Odds. Foque no PADRÃO DOS REDS.\n"
+        prompt += "2. Analise TODAS as estratégias que tiveram erros.\n"
+        prompt += "3. Identifique CORRELAÇÕES TÓXICAS (Ex: Estratégia X não funciona na Liga Y).\n\n"
         
-        SUA MISSÃO (AUDITORIA TÉCNICA):
-        1. Ignore as Odds. Foque no PADRÃO DOS REDS.
-        2. Analise TODAS as estratégias que tiveram erros.
-        3. Identifique CORRELAÇÕES TÓXICAS:
-           - Ex: "A estratégia 'Massacre' falha muito quando o jogo é na Liga X?"
-           - Ex: "A estratégia 'Vovô' está tomando gol no final quando o placar é magro (1x0)?"
-           - Ex: "A estratégia 'Blitz' falha quando o visitante é zebra?"
-           
-        GERE UM RELATÓRIO DE ENGENHARIA REVERSA:
-        
-        "🔍 **DIAGNÓSTICO PROFUNDO (Base: {total_jogos} jogos):**
-        
-        Identifiquei falhas sistêmicas nas seguintes lógicas:
-        
-        1. **Estratégia: [NOME DA ESTRATÉGIA COM PROBLEMA]**
-           - ❌ **O Padrão do Erro:** [Descreva o cenário onde ela falha. Ex: Falha sistematicamente em jogos da Série B ou quando o mandante já está ganhando].
-           - 🛠️ **Ajuste Lógico Sugerido:** [Ex: Adicionar filtro 'Somente se estiver Empatado' ou 'Excluir Ligas Sul-Americanas'].
-           - 📈 **Projeção:** Isso eliminaria X Reds e subiria o Winrate para Y%.
-           
-        2. **Estratégia: [OUTRA ESTRATÉGIA]**
-           - ... (mesma estrutura)
-           
-        🏁 **Conclusão:** Para aumentar a assertividade geral, foque na correção da lógica da estratégia [NOME], que é a maior ofensora no momento."
-        """
+        prompt += "GERE UM RELATÓRIO DE ENGENHARIA REVERSA:\n"
+        prompt += f"\"🔍 **DIAGNÓSTICO PROFUNDO (Base: {total_jogos} jogos):**\n\n"
+        prompt += "Identifiquei falhas sistêmicas nas seguintes lógicas:\n\n"
+        prompt += "1. **Estratégia: [NOME DA ESTRATÉGIA]**\n"
+        prompt += "- ❌ **O Padrão do Erro:** [Descreva o cenário do erro]\n"
+        prompt += "- 🛠️ **Ajuste Lógico Sugerido:** [Sua solução técnica]\n"
+        prompt += "- 📈 **Projeção:** Isso eliminaria X Reds e subiria o Winrate para Y%.\n\n"
+        prompt += "2. **Estratégia: [OUTRA ESTRATÉGIA]**\n"
+        prompt += "... (mesma estrutura)\n\n"
+        prompt += "🏁 **Conclusão:** Foco total na correção da estratégia [NOME].\""
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
         st.session_state['gemini_usage']['used'] += 1
@@ -2823,3 +2810,5 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
+
