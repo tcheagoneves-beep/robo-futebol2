@@ -746,23 +746,27 @@ def gerar_multipla_matinal_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # --- FILTRO APLICADO: APENAS LIGAS TOP TIER ---
-        # Filtra jogos 'Não Iniciados' (NS) E que pertençam à lista de elite
-        jogos_candidatos = [
-            j for j in jogos 
-            if j['fixture']['status']['short'] == 'NS' 
-            and j['league']['id'] in LIGAS_TOP_TIER
-        ]
+        # --- FILTRO 'LISTA NEGRA' (IGUAL AO SNIPER) ---
+        # Pega tudo, exceto o que tiver esses termos ruins
+        TERMOS_BANIDOS = ["U21", "U19", "U20", "U23", "Reserve", "Women", "Feminino", "Youth", "Regional", "Amateur", "Ascenso", "Development", "League Two"]
         
-        # Se tiver poucos jogos Top Tier, o robô não força entrada
+        jogos_candidatos = []
+        for j in jogos:
+            nome_liga = j['league']['name']
+            # Se for jogo Não Iniciado (NS) E NÃO tiver termo banido
+            if j['fixture']['status']['short'] == 'NS' and not any(t in nome_liga for t in TERMOS_BANIDOS):
+                jogos_candidatos.append(j)
+        
         if len(jogos_candidatos) < 2: return None, []
         
         lista_jogos_txt = ""
         mapa_jogos = {}
         
         count_validos = 0
+        random.shuffle(jogos_candidatos) # Mistura para variar as ligas
+        
         for j in jogos_candidatos:
-            if count_validos >= 20: break # Limite menor pois agora são ligas de qualidade
+            if count_validos >= 30: break 
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
@@ -772,7 +776,6 @@ def gerar_multipla_matinal_ia(api_key):
                 stats_h = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
                 if stats_h and stats_h['home']['qtd'] > 0:
                     mapa_jogos[fid] = f"{home} x {away}"
-                    # Adiciona ao texto para a IA ler
                     lista_jogos_txt += f"- ID {fid}: {home} x {away} ({j['league']['name']}) | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
                     count_validos += 1
             except: pass
@@ -783,24 +786,25 @@ def gerar_multipla_matinal_ia(api_key):
         df_sheets = st.session_state.get('historico_full', pd.DataFrame())
         winrate_sheets = "N/A"
         if not df_sheets.empty:
-            greens = len(df_sheets[df_sheets['Resultado'].str.contains('GREEN', na=False)])
-            total = len(df_sheets[df_sheets['Resultado'].isin(['✅ GREEN', '❌ RED'])])
-            if total > 0: winrate_sheets = f"{(greens/total)*100:.1f}%"
+            total = len(df_sheets)
+            if total > 0: winrate_sheets = "calculado"
 
         prompt = f"""
-        Atue como GESTOR DE RISCO E ESTRATÉGIA.
-        OBJETIVO: Criar uma "Múltipla de Segurança" (Bingo Matinal) com 2 ou 3 jogos para HOJE.
+        Atue como GESTOR DE RISCO.
+        OBJETIVO: Criar uma Múltipla de Segurança (Bingo Matinal) com 2 ou 3 jogos.
         
-        DADOS GLOBAIS: Winrate Pessoal: {winrate_sheets}. {contexto_firebase}.
-        
-        LISTA DE CANDIDATOS (SOMENTE LIGAS ELITE):
+        CANDIDATOS (VÁRIAS LIGAS):
         {lista_jogos_txt}
         
         TAREFA: 
-        Escolha os 2 ou 3 jogos estatisticamente MAIS SEGUROS para Over 0.5 Gols ou Over 1.5 Gols.
-        Como são ligas grandes, a liquidez é garantida. Foque na probabilidade de gol.
+        1. Escolha os 2 ou 3 jogos com MAIOR probabilidade estatística de Over 0.5 Gols ou Over 1.5.
+        2. CALCULE UMA PROBABILIDADE COMBINADA NUMÉRICA (Ex: "84.5").
         
-        FORMATO JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
+        FORMATO JSON OBRIGATÓRIO: 
+        {{ 
+            "jogos": [ {{"fid": 123, "jogo": "Time A x Time B", "motivo": "Texto curto"}} ], 
+            "probabilidade_combinada": "85.5" 
+        }}
         """
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
@@ -886,18 +890,20 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # --- FILTRO HARDCORE: SÓ LIGAS TOP TIER ---
-        # Só pega jogos que tenham Árbitro (referee) E estejam na lista de Elite
-        jogos_candidatos = [
-            j for j in jogos 
-            if j['fixture'].get('referee') 
-            and j['fixture']['status']['short'] == 'NS'
-            and j['league']['id'] in LIGAS_TOP_TIER
-        ]
+        # --- FILTRO ABRANGENTE (LISTA NEGRA) ---
+        TERMOS_BANIDOS = ["U21", "U19", "U20", "U23", "Reserve", "Women", "Feminino", "Youth", "Regional", "Amateur", "Ascenso", "Development"]
+        
+        jogos_candidatos = []
+        for j in jogos:
+            nome_liga = j['league']['name']
+            # Tem que ter Árbitro (referee), ser Não Iniciado (NS) e NÃO ser de liga banida
+            if j['fixture'].get('referee') and j['fixture']['status']['short'] == 'NS' and not any(t in nome_liga for t in TERMOS_BANIDOS):
+                jogos_candidatos.append(j)
         
         if not jogos_candidatos: return []
         
-        amostra = jogos_candidatos[:40] 
+        # Pega uma amostra maior (até 60 jogos) já que agora liberamos mais ligas
+        amostra = jogos_candidatos[:60] 
         
         dados_analise = ""
         for j in amostra:
@@ -909,16 +915,16 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Árbitro: {referee} | ID: {fid}\n"
 
         prompt = f"""
-        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (BIG MARKETS).
+        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (CARTÕES E PLAYER PROPS).
         
-        Você tem acesso apenas a jogos de LIGAS DE ELITE (Premier League, La Liga, etc) onde mercados de Cartões e Defesas existem.
+        Você tem uma lista de jogos variados (Grandes e Médios).
         
         LISTA DE JOGOS E ÁRBITROS (HOJE):
         {dados_analise}
         
         CRITÉRIOS DE ANÁLISE:
-        1. CARTÕES: Procure a combinação "Árbitro Rigoroso" + "Clássico/Jogo Tenso".
-        2. GOLEIROS (DEFESAS): Jogos onde há um desnível técnico claro (o goleiro do time pior vai trabalhar muito).
+        1. CARTÕES (Prioridade): Procure "Árbitro Rigoroso" em jogos que tendem a ser disputados. Ligas de segunda divisão costumam ser boas para isso.
+        2. GOLEIROS (Defesas): Jogos com desnível técnico onde um time chuta muito (o goleiro adversário fará defesas).
         
         SAÍDA OBRIGATÓRIA (JSON):
         {{
@@ -928,7 +934,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     "tipo": "CARTAO" ou "GOLEIRO",
                     "titulo": "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA (DEFESAS)",
                     "jogo": "Time A x Time B",
-                    "destaque": "Árbitro com média alta em clássico",
+                    "destaque": "Árbitro com média alta em liga under",
                     "indicacao": "Over 4.5 Cartões"
                 }}
             ]
@@ -2791,7 +2797,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
-
-
-
-
