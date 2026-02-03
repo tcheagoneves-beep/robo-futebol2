@@ -1450,7 +1450,62 @@ def criar_estrategia_nova_ia():
 
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "IA Offline."
-    return "Sugestão da IA: Aumentar a linha de corte de chutes no gol para a estratégia 'Massacre' e filtrar jogos da Série B do Brasil."
+    
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return "Sem dados suficientes para simulação."
+    
+    try:
+        # 1. Filtra apenas jogos finalizados (Green ou Red)
+        df_final = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
+        
+        if len(df_final) < 5: return "Preciso de pelo menos 5 jogos finalizados para simular melhorias."
+
+        # 2. Calcula métricas atuais
+        greens_atuais = len(df_final[df_final['Resultado'].str.contains('GREEN')])
+        total_jogos = len(df_final)
+        winrate_atual = (greens_atuais / total_jogos) * 100
+        
+        # 3. Prepara os dados para a IA (Incluindo o 'Placar_Sinal' que tem os dados de Escanteios/Gols/Defesas)
+        # Ex: "Meta: 4.5 | Saiu: 4" -> A IA vai ler isso e ver que se a meta fosse 3.5, teria batido.
+        colunas_importantes = ['Estrategia', 'Liga', 'Jogo', 'Placar_Sinal', 'Odd', 'Resultado']
+        # Pega as últimas 40 entradas para não estourar o limite
+        dados_csv = df_final[colunas_importantes].tail(40).to_string(index=False)
+
+        prompt = f"""
+        ATUE COMO UM CIENTISTA DE DADOS ESPECIALISTA EM BACKTESTING DE APOSTAS.
+        
+        DADOS REAIS DO USUÁRIO:
+        - Winrate Atual: {winrate_atual:.1f}%
+        - Total de Jogos na Amostra: {total_jogos}
+        
+        TABELA DE RESULTADOS (Analise a coluna 'Placar_Sinal' e 'Resultado'):
+        {dados_csv}
+        
+        SUA MISSÃO (SIMULAÇÃO MATEMÁTICA):
+        1. Olhe para os jogos que deram ❌ RED.
+        2. Verifique na coluna 'Placar_Sinal' ou 'Jogo' se o resultado ficou "por pouco" (Ex: Apostou Over 4.5 e saiu 4).
+        3. Simule: "E se a linha fosse menor?" ou "E se a Odd mínima fosse maior?".
+        
+        GERE UMA RESPOSTA NESTE FORMATO EXATO (Sem enrolação):
+        
+        "💡 **SIMULAÇÃO DE CENÁRIO:**
+        
+        Identifiquei que {len(df_final[df_final['Resultado'].str.contains('RED')])} jogos deram Red.
+        
+        Se você mudasse **[PARÂMETRO ESPECÍFICO]** (Ex: Linha de Gols de 1.5 para 0.5 HT / Linha de Defesas de 4.5 para 3.5):
+        
+        🔄 **O que aconteceria:**
+        - Você converteria aproximadamente **[NÚMERO]** Reds em Greens (ou Void).
+        - Sua assertividade saltaria de **{winrate_atual:.1f}%** para estimadamente **[NOVO WINRATE]%**.
+        
+        📉 **Impacto:** Isso exigiria pegar Odds ligeiramente menores (média estimada @[NOVA ODD]), mas aumentaria a consistência."
+        """
+        
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text.strip()
+        
+    except Exception as e: return f"Erro na simulação: {str(e)}"
 
 # ==============================================================================
 
