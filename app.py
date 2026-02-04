@@ -1299,6 +1299,17 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
+        # --- CORREÇÃO: FALLBACK DE DADOS (Se faltar Ataque Perigoso, usa Chutes) ---
+        usou_estimativa = False
+        if atq_perigo_total == 0 and chutes_totais > 0:
+            # Estima que cada chute surgiu de pelo menos 1 ataque perigoso
+            # Multiplicamos por 1.5 para simular uma intensidade realista
+            atq_perigo_total = int(chutes_totais * 1.5)
+            # Distribui proporcionalmente (só para cálculo)
+            atq_perigo_h = int(chutes_h * 1.5)
+            atq_perigo_a = int(chutes_a * 1.5)
+            usou_estimativa = True
+
         # --- 2. ENGENHARIA DE DADOS (KPIs AVANÇADOS) ---
         
         # A. Precisão (Qualidade do Chute)
@@ -1319,15 +1330,20 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
         # --- FILTRO PRÉVIO ---
         if "Under" not in estrategia and "Morno" not in estrategia:
-            if intensidade_jogo < 0.5 and tempo > 20: # Menos de 1 ataque perigoso a cada 2 min
+            if intensidade_jogo < 0.5 and tempo > 20: 
                  return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> - Jogo muito lento para operar.", "15%"
+
+        # Aviso para o Prompt se o dado foi estimado
+        aviso_dados = ""
+        if usou_estimativa:
+            aviso_dados = "(NOTA: A API não forneceu 'Ataques Perigosos', a Intensidade foi estimada baseada nos Chutes)."
 
         # --- 3. O PROMPT ENRIQUECIDO ---
         prompt = f"""
         ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL (Data-Driven Decisions).
         
         Eu calculei os KPIs avançados do jogo. Use-os para classificar a oportunidade.
-        Não ignore a 'Intensidade' e a 'Dominância'.
+        {aviso_dados}
 
         DADOS DO CONFRONTO:
         - Jogo: {dados_jogo['jogo']} ({dados_jogo['placar']}) aos {tempo} min.
@@ -1340,7 +1356,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         4. 🛡️ Pressão (Momentum): Casa {rh} x {ra} Fora.
         
         ESTATÍSTICAS BRUTAS:
-        - Ataques Perigosos: {atq_perigo_h} x {atq_perigo_a}
+        - Ataques Perigosos (Ref): {atq_perigo_h} x {atq_perigo_a}
         - Chutes no Gol: {gol_h} x {gol_a}
         - Escanteios: {cantos_h} x {cantos_a}
         
@@ -1383,7 +1399,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
         prob_str = f"{prob_val}%"
         
-        # Montagem Visual com os KPIs para você ver no Telegram
+        # Montagem Visual
         html_analise = f"\n🤖 <b>IA ANALYTICS:</b>\n{emoji} <b>{classe} ({prob_str})</b>\n"
         html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | {quem_manda}</i>\n"
         html_analise += f"📝 <i>{motivo}</i>"
