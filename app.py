@@ -697,6 +697,38 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
         return {"home": get_stats_50(home_id), "away": get_stats_50(away_id)}
     except: return None
 
+@st.cache_data(ttl=86400)
+def analisar_tendencia_macro_micro(api_key, home_id, away_id):
+    try:
+        def get_stats_advanced(team_id):
+            url = "https://v3.football.api-sports.io/fixtures"
+            # Pedimos 50 jogos
+            params = {"team": team_id, "last": "50", "status": "FT"} 
+            res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
+            jogos = res.get('response', [])
+            
+            if not jogos: return {"qtd": 0, "macro": 0, "micro": 0}
+            
+            # --- CÁLCULO MICRO (Últimos 5 jogos - Momento Atual) ---
+            jogos_micro = jogos[:5] 
+            over_micro = 0
+            for j in jogos_micro:
+                gols = (j['goals']['home'] or 0) + (j['goals']['away'] or 0)
+                if gols >= 2: over_micro += 1 # Over 1.5
+            pct_micro = int((over_micro / len(jogos_micro)) * 100) if jogos_micro else 0
+
+            # --- CÁLCULO MACRO (Últimos 50 jogos - Histórico) ---
+            over_macro = 0
+            for j in jogos:
+                gols = (j['goals']['home'] or 0) + (j['goals']['away'] or 0)
+                if gols >= 2: over_macro += 1
+            pct_macro = int((over_macro / len(jogos)) * 100)
+            
+            return {"qtd": len(jogos), "macro": pct_macro, "micro": pct_micro}
+            
+        return {"home": get_stats_advanced(home_id), "away": get_stats_advanced(away_id)}
+    except: return None
+
 @st.cache_data(ttl=120) 
 def buscar_agenda_cached(api_key, date_str):
     try:
@@ -802,75 +834,83 @@ def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
-        # 1. Busca a grade completa do dia
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # 2. Filtra jogos Não Iniciados (NS) de QUALQUER liga
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
         
         if not jogos_candidatos: return "Sem jogos para analisar hoje."
         
-        # 3. Pré-seleção Estatística COM FILTRO DE ODDS (O AJUSTE PRINCIPAL)
         lista_para_ia = ""
         count = 0
         random.shuffle(jogos_candidatos) 
         
         for j in jogos_candidatos:
-            if count >= 40: break 
+            if count >= 30: break 
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga = j['league']['name']
             
-            # Busca dados de 50 jogos (Cacheado)
-            stats = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
+            # --- FILTRO 1: ODD NA BET365 ---
+            odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
+            if odd_val == 0 or odd_val < 1.45: continue 
+            
+            # --- FILTRO 2: MACRO VS MICRO (A Lógica Nova) ---
+            stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
             if stats and stats['home']['qtd'] > 0:
+                h_mac = stats['home']['macro']; h_mic = stats['home']['micro']
+                a_mac = stats['away']['macro']; a_mic = stats['away']['micro']
                 
-                # --- [MELHORIA] BUSCA ODD PARA FILTRAR LIXO ---
-                odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
-                
-                # Se a odd for muito baixa (ex: 1.20) ou não existir, pula.
-                # Só queremos jogos com valor > 1.45
-                if odd_val > 0 and odd_val < 1.45:
-                    continue 
-                # ----------------------------------------------
+                # Regra de Corte: Ignorar times que morreram recentemente (Micro < 40%)
+                if h_mic < 40 and a_mic < 40: continue
 
-                # Critério de corte: Pelo menos um dos times tem que ser over
-                if stats['home']['over15_ft'] > 70 or stats['away']['over15_ft'] > 70:
-                    lista_para_ia += f"- Jogo: {home} x {away} ({liga}) | ODD: {odd_nome} @{odd_val:.2f} | Over 1.5 FT: Casa {stats['home']['over15_ft']}% / Fora {stats['away']['over15_ft']}% | Over 0.5 HT: Casa {stats['home']['over05_ht']}% / Fora {stats['away']['over05_ht']}%\n"
-                    count += 1
+                # Identificação de Tendência para a IA
+                def get_trend(mac, mic):
+                    diff = mic - mac
+                    if diff >= 20: return "📈 AQUECENDO (Melhorou muito)"
+                    if diff <= -20: return "📉 ESFRIANDO (Cuidado)"
+                    return "➡️ ESTÁVEL"
+
+                trend_h = get_trend(h_mac, h_mic)
+                trend_a = get_trend(a_mac, a_mic)
+
+                lista_para_ia += f"""
+                - Jogo: {home} x {away} ({liga}) | ODD: @{odd_val:.2f}
+                  CASA: Histórico {h_mac}% -> Recente {h_mic}% ({trend_h})
+                  FORA: Histórico {a_mac}% -> Recente {a_mic}% ({trend_a})
+                """
+                count += 1
         
-        if not lista_para_ia: return "Nenhum jogo com valor (Odd > 1.45) encontrado hoje."
+        if not lista_para_ia: return "Nenhum jogo com valor e tendência positiva encontrado hoje."
 
-        # 4. Prompt do "Sniper Matinal" Atualizado
         prompt = f"""
-        ATUE COMO UM ANALISTA SÊNIOR DE FUTEBOL (SNIPER DE ODDS).
+        ATUE COMO UM ANALISTA DE PERFORMANCE (PRÉ-MATCH).
         
-        Eu filtrei o mercado e removi odds esmagadas. Abaixo estão jogos com ODD DECENTE (@1.45+) e boas estatísticas.
-        Sua missão é escolher os **TOP 3 ou 4 MELHORES JOGOS** onde o risco/retorno vale a pena.
+        Eu filtrei os jogos com Odd na Bet365. Agora preciso que você analise o "MOMENTO" dos times.
+        Não olhe apenas o histórico geral. Dê peso total para a FORMA RECENTE (Micro).
         
-        DADOS DOS JOGOS (COM ODDS):
+        LISTA DE CANDIDATOS (Com Tendências):
         {lista_para_ia}
         
-        CRITÉRIOS DE SELEÇÃO:
-        - Priorize jogos onde AMBOS os times têm alta frequência de gols (Soma das % > 150).
-        - Use a Odd informada para validar se vale a pena.
+        CRITÉRIOS DE ESCOLHA (TOP 3):
+        1. PREFIRA times com etiqueta "📈 AQUECENDO" ou "➡️ ESTÁVEL" com % alta.
+        2. EVITE times com "📉 ESFRIANDO" (Armadilha de estatística antiga).
+        3. O confronto ideal é: Casa Aquecendo x Fora Aquecendo (Chuva de gols).
         
-        GERE O RELATÓRIO NO SEGUINTE FORMATO (Exatamente como abaixo):
+        SAÍDA (Formato de Relatório):
         
-        ⚽ Jogo: [Nome do Jogo]
-        🎯 Palpite: [Ex: Over 0.5 Gols HT]
-        📝 Motivo: [Explique a estatística E mencione que a Odd tem valor. Ex: "Odd @1.60 está pagando bem para um time com 80% de over..."]
-        
-        (Repita para os 3 ou 4 jogos escolhidos)
+        ⚽ Jogo: [Nome]
+        🔥 Tendência: [Ex: Casa Aquecendo muito nos últimos 5 jogos]
+        🎯 Palpite: [Over 1.5 / Over 2.5]
+        📝 Motivo: [Explique cruzando a odd com a forma recente. Ex: "A odd @1.70 é valor pois o time melhorou 30% nas últimas semanas..."]
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.4))
         st.session_state['gemini_usage']['used'] += 1
         return response.text
         
