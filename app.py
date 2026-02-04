@@ -1283,34 +1283,29 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         # Casa
         chutes_h = gv(s1, 'Total Shots'); gol_h = gv(s1, 'Shots on Goal')
         cantos_h = gv(s1, 'Corner Kicks'); atq_perigo_h = gv(s1, 'Dangerous Attacks')
-        posse_h = str(gv(s1, 'Ball Possession')).replace('%','')
-        try: posse_h = int(posse_h)
-        except: posse_h = 50
-
+        faltas_h = gv(s1, 'Fouls'); cards_h = gv(s1, 'Yellow Cards') + gv(s1, 'Red Cards')
+        
         # Fora
         chutes_a = gv(s2, 'Total Shots'); gol_a = gv(s2, 'Shots on Goal')
         cantos_a = gv(s2, 'Corner Kicks'); atq_perigo_a = gv(s2, 'Dangerous Attacks')
+        faltas_a = gv(s2, 'Fouls'); cards_a = gv(s2, 'Yellow Cards') + gv(s2, 'Red Cards')
         
         # Totais
         chutes_totais = chutes_h + chutes_a
-        chutes_gol_total = gol_h + gol_a
         atq_perigo_total = atq_perigo_h + atq_perigo_a
+        total_faltas = faltas_h + faltas_a
         
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
-        # --- CORREÇÃO: FALLBACK DE DADOS (CALIBRAGEM REALISTA) ---
+        # --- FALLBACK DE DADOS (Se faltar Ataque Perigoso, usa Chutes) ---
         usou_estimativa = False
-        # Se não tem ataques perigosos registrados, mas tem chutes...
         if atq_perigo_total == 0 and chutes_totais > 0:
-            # CORREÇÃO: Multiplicador 5x (1 Chute costuma vir de ~5 ataques)
             atq_perigo_total = int(chutes_totais * 5)
-            atq_perigo_h = int(chutes_h * 5)
-            atq_perigo_a = int(chutes_a * 5)
+            atq_perigo_h = int(chutes_h * 5); atq_perigo_a = int(chutes_a * 5)
             usou_estimativa = True
 
-        # --- 2. ENGENHARIA DE DADOS (KPIs AVANÇADOS) ---
-        
+        # --- 2. ENGENHARIA DE DADOS (KPIs) ---
         precisao_h = (gol_h / chutes_h * 100) if chutes_h > 0 else 0
         precisao_a = (gol_a / chutes_a * 100) if chutes_a > 0 else 0
         
@@ -1324,46 +1319,52 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         if dominancia_h > 60: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
         elif dominancia_h < 40: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
 
-        # --- FILTRO PRÉVIO (SEGURANÇA) ---
-        # Só veta se NÃO estiver usando estimativa. Se for dado estimado, deixa a IA julgar.
-        if not usou_estimativa and "Under" not in estrategia and "Morno" not in estrategia:
+        # --- 3. FILTRO PRÉVIO INTELIGENTE (SEMÁFORO) ---
+        # Lista de estratégias onde "Jogo Parado" é BOM (Não vetar por baixa intensidade)
+        strats_low_intensity = ["Under", "Morno", "Vovô", "Back", "Segurar"]
+        eh_strat_low = any(x in estrategia for x in strats_low_intensity)
+        eh_strat_card = "Cartão" in estrategia
+
+        # Só veta por "jogo parado" se a estratégia EXIGIR ataque (Gols/Cantos)
+        if not usou_estimativa and not eh_strat_low and not eh_strat_card:
             if intensidade_jogo < 0.5 and tempo > 15: 
                  return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> (Dados Reais) - Jogo muito lento.", "15%"
 
         aviso_dados = ""
-        if usou_estimativa:
-            aviso_dados = "(NOTA TÉCNICA: API sem 'Ataques Perigosos'. Intensidade projetada via Volume de Chutes)."
+        if usou_estimativa: aviso_dados = "(NOTA: Intensidade projetada via Chutes)."
 
-        # --- 3. O PROMPT ---
+        # --- 4. O PROMPT (Instruindo a IA sobre o objetivo) ---
         prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL (Data-Driven Decisions).
-        
-        Analise os KPIs abaixo. {aviso_dados}
+        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL.
+        Analise os KPIs abaixo para validar a entrada '{estrategia}'.
+        {aviso_dados}
 
-        DADOS:
-        - Jogo: {dados_jogo['jogo']} ({dados_jogo['placar']}) aos {tempo} min.
-        - Estratégia: {estrategia}
+        DADOS DO JOGO:
+        - Placar/Tempo: {dados_jogo['placar']} aos {tempo} min.
         
         KPIs:
-        1. Intensidade: {intensidade_jogo:.2f} atq/min ({status_intensidade}).
-        2. Tática: {quem_manda}.
-        3. Precisão Chutes: Casa {precisao_h:.0f}% vs Fora {precisao_a:.0f}%.
-        4. Pressão (Momentum): Casa {rh} x {ra} Fora.
+        1. Intensidade (Ataque): {intensidade_jogo:.2f}/min ({status_intensidade}).
+        2. Disciplina (Faltas): {total_faltas} totais (Casa {faltas_h} x {faltas_a} Fora).
+        3. Cartões Atuais: Casa {cards_h} x {cards_a} Fora.
+        4. Tática: {quem_manda}.
         
-        STATS BRUTAS:
-        - Ataques (Ref): {atq_perigo_h} x {atq_perigo_a}
-        - Chutes no Gol: {gol_h} x {gol_a}
+        STATS EXTRAS:
+        - Chutes Gol: {gol_h} x {gol_a}
         - Escanteios: {cantos_h} x {cantos_a}
         
         CONTEXTO: {extra_context}
         
+        REGRAS DE DECISÃO (IMPORTANTE):
+        - SE A ESTRATÉGIA FOR 'CARTÃO': Ignore a intensidade de ataque baixa. Foque se há muitas faltas ({total_faltas}+) ou desequilíbrio emocional.
+        - SE A ESTRATÉGIA FOR 'UNDER/MORNO/VOVÔ': Baixa intensidade (<0.6) é SINAL DE APROVAÇÃO (DIAMANTE). Jogo parado é bom aqui.
+        - SE FOR GOLS/CANTOS: Exija intensidade alta (>0.8).
+        
         CLASSIFIQUE:
-        💎 DIAMANTE: Intensidade > 1.0, Dominância clara e Precisão alta.
-        ✅ PADRÃO: Intensidade média, volume de jogo aceitável.
-        ⚠️ ARRISCADO: Jogo travado, sem chutes ou dados contraditórios.
+        💎 DIAMANTE: Dados perfeitos para o OBJETIVO da estratégia (Seja ele atacar ou defender).
+        ✅ PADRÃO: Dados aceitáveis.
+        ⚠️ ARRISCADO: Dados contraditórios (ex: pedir gol em jogo parado, ou pedir under em jogo frenético).
 
-        JSON:
-        {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
+        JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
         """
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
@@ -1375,17 +1376,14 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         motivo = r_json.get('motivo_tecnico', 'Análise baseada em KPIs.')
         
         emoji = "✅"
-        if classe == "DIAMANTE" or (prob_val >= 85 and intensidade_jogo > 0.8):
-            emoji = "💎"; classe = "DIAMANTE"
-        elif classe == "ARRISCADO" or prob_val < 60:
-            emoji = "⚠️"; classe = "ARRISCADO"
-        else:
-            emoji = "✅"; classe = "APROVADO"
+        if classe == "DIAMANTE" or (prob_val >= 85): emoji = "💎"; classe = "DIAMANTE"
+        elif classe == "ARRISCADO" or prob_val < 60: emoji = "⚠️"; classe = "ARRISCADO"
+        else: emoji = "✅"; classe = "APROVADO"
 
         prob_str = f"{prob_val}%"
         
         html_analise = f"\n🤖 <b>IA ANALYTICS:</b>\n{emoji} <b>{classe} ({prob_str})</b>\n"
-        html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | {quem_manda}</i>\n"
+        html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | Faltas: {total_faltas}</i>\n"
         html_analise += f"📝 <i>{motivo}</i>"
         
         return html_analise, prob_str
