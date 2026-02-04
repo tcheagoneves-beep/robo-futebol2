@@ -2601,6 +2601,9 @@ if st.session_state.ROBO_LIGADO:
                     st.chat_message("user").write(prompt)
 
                     # --- 1. PREPARAÇÃO DOS DADOS (O CÉREBRO MATEMÁTICO) ---
+                    # [CORREÇÃO] Inicializa variáveis com 0 para evitar NameError se não tiver dados
+                    media_cantos = 0.0 
+                    
                     txt_bigdata_resumo = "BIG DATA: Sem dados carregados."
                     dados_bd = st.session_state.get('cache_firebase_view', [])
                     total_bd = st.session_state.get('total_bigdata_count', 0)
