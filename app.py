@@ -1443,58 +1443,70 @@ buscando uma Odd média de <b>@{ODD_MEDIA:.2f}</b> (segurança):
     
 def criar_estrategia_nova_ia():
     if not IA_ATIVADA: return "IA Offline."
+    
+    # 1. Roleta de Temas (Garante variedade a cada clique)
+    temas = [
+        "Caça-Zebras (Times perdendo em casa)",
+        "Over Cantos no Final (Pressão absurda)",
+        "Under Gols (Jogos travados)",
+        "Lei do Ex (Estatística de confronto direto)",
+        "Recuperação no 2º Tempo (Times favoritos perdendo)",
+        "Mercado de Cartões (Jogos violentos)",
+        "Empate Anula (Proteção)",
+        "Over 1.5 Gols HT (Jogos frenéticos)"
+    ]
+    tema_sorteado = random.choice(temas)
+    
+    # 2. Injeção de Dados (Grounding)
+    txt_dados = "Dados insuficientes no momento."
     try:
-        prompt = "Analise o padrão de Over Gols atual do mercado e sugira uma nova estratégia lógica para o robô. Seja criativo."
-        response = model_ia.generate_content(prompt)
+        dados_bd = st.session_state.get('cache_firebase_view', [])
+        if dados_bd:
+            df = pd.DataFrame(dados_bd)
+            media_gols = 2.5 # Valor padrão caso falhe o cálculo
+            
+            # Tenta extrair média real se possível
+            try:
+                soma_gols = 0
+                for d in dados_bd:
+                    p = d.get('placar_final', '0x0').split('x')
+                    soma_gols += int(p[0]) + int(p[1])
+                media_gols = soma_gols / len(dados_bd)
+            except: pass
+            
+            txt_dados = f"Base de {len(dados_bd)} jogos. Média de Gols atual: {media_gols:.2f}."
+    except: pass
+
+    # 3. O Prompt "Engenheiro"
+    prompt = f"""
+    ATUE COMO: Arquiteto de Software e Estrategista de Apostas (Quant).
+    
+    OBJETIVO: Criar uma nova lógica algorítmica para o robô "Neves Analytics".
+    
+    FOCO DA VEZ: {tema_sorteado}
+    CONTEXTO DE DADOS: {txt_dados}
+    
+    REGRAS OBRIGATÓRIAS (ANTI-ALUCINAÇÃO):
+    1. NÃO sugira "análise de sentimento", "twitter", "notícias" ou "VAR". O robô só vê NÚMEROS (Chutes, Cantos, Placar, Tempo).
+    2. A estratégia deve ser baseada em "Gatilhos Logicos" (Ex: Se chutes > 10 e placar = 0x0, então...).
+    3. Seja curto e direto.
+    
+    SAÍDA ESPERADA:
+    
+    Nome: [Nome Criativo da Estratégia]
+    Lógica: [Explique a lógica: "Buscar jogos onde o time da casa tem X chutes..."]
+    Gatilhos (IF):
+      - Tempo: [Ex: 70-80 min]
+      - Placar: [Ex: Empate ou Perdendo por 1]
+      - Stats: [Ex: Mais de 15 chutes totais]
+    Ação: [Ex: Apostar em Over 0.5 Gols]
+    """
+    
+    try:
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.7)) # Temp alta para criatividade
         st.session_state['gemini_usage']['used'] += 1
         return response.text.strip()
-    except: return "Erro ao criar estratégia."
-
-def otimizar_estrategias_existentes_ia():
-    if not IA_ATIVADA: return "IA Offline."
-    df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Sem dados suficientes para simulação."
-    try:
-        df_final = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
-        if len(df_final) < 10: return "Preciso de mais dados (mínimo 10 jogos) para uma análise robusta."
-
-        total_jogos = len(df_final)
-        greens = len(df_final[df_final['Resultado'].str.contains('GREEN')])
-        winrate_global = (greens / total_jogos) * 100
-        
-        colunas_foco = ['Data', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado']
-        dados_csv = df_final[colunas_foco].tail(1000).to_string(index=False)
-
-        prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS SÊNIOR E ESPECIALISTA EM ALGORITMOS DE FUTEBOL.
-        OBJETIVO: Identificar falhas na LÓGICA das estratégias, não nas Odds.
-        
-        DADOS GERAIS:
-        - Total de Jogos Analisados: {total_jogos}
-        - Winrate Global Atual: {winrate_global:.1f}%
-        
-        BASE DE DADOS COMPLETA (HISTÓRICO):
-        {dados_csv}
-        
-        SUA MISSÃO (AUDITORIA TÉCNICA):
-        1. Ignore as Odds. Foque no PADRÃO DOS REDS.
-        2. Analise TODAS as estratégias que tiveram erros.
-        3. Identifique CORRELAÇÕES TÓXICAS:
-           - Ex: "A estratégia 'Massacre' falha muito quando o jogo é na Liga X?"
-           - Ex: "A estratégia 'Vovô' está tomando gol no final quando o placar é magro (1x0)?"
-           
-        GERE UM RELATÓRIO DE ENGENHARIA REVERSA:
-        "🔍 **DIAGNÓSTICO PROFUNDO (Base: {total_jogos} jogos):**
-        Identifiquei falhas sistêmicas nas seguintes lógicas:
-        1. **Estratégia: [NOME DA ESTRATÉGIA COM PROBLEMA]**
-           - ❌ **O Padrão do Erro:** [Descreva o cenário onde ela falha].
-           - 🛠️ **Ajuste Lógico Sugerido:** [Ex: Adicionar filtro].
-           - 📈 **Projeção:** Isso eliminaria X Reds.
-        """
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
-        st.session_state['gemini_usage']['used'] += 1
-        return response.text.strip()
-    except Exception as e: return f"Erro na simulação: {str(e)}"
+    except Exception as e: return f"Erro na criação: {str(e)}"
 
 # ==============================================================================
 
