@@ -1167,95 +1167,121 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
     if not IA_ATIVADA: return "", "N/A"
     try:
+        # --- 1. Extração de Dados Brutos ---
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
-        chutes_totais = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
-        chutes_gol = gv(s1, 'Shots on Goal') + gv(s2, 'Shots on Goal')
-        escanteios = gv(s1, 'Corner Kicks') + gv(s2, 'Corner Kicks')
+        
+        # Casa
+        chutes_h = gv(s1, 'Total Shots'); gol_h = gv(s1, 'Shots on Goal')
+        cantos_h = gv(s1, 'Corner Kicks'); atq_perigo_h = gv(s1, 'Dangerous Attacks')
+        posse_h = str(gv(s1, 'Ball Possession')).replace('%','')
+        try: posse_h = int(posse_h)
+        except: posse_h = 50
+
+        # Fora
+        chutes_a = gv(s2, 'Total Shots'); gol_a = gv(s2, 'Shots on Goal')
+        cantos_a = gv(s2, 'Corner Kicks'); atq_perigo_a = gv(s2, 'Dangerous Attacks')
+        
+        # Totais
+        chutes_totais = chutes_h + chutes_a
+        chutes_gol_total = gol_h + gol_a
+        atq_perigo_total = atq_perigo_h + atq_perigo_a
         
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
-        tempo = int(tempo_str) if tempo_str.isdigit() else 0
+        tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
-        # Filtro Hardcode: Jogo morto
+        # --- 2. ENGENHARIA DE DADOS (KPIs AVANÇADOS) ---
+        
+        # A. Precisão (Qualidade do Chute)
+        precisao_h = (gol_h / chutes_h * 100) if chutes_h > 0 else 0
+        precisao_a = (gol_a / chutes_a * 100) if chutes_a > 0 else 0
+        
+        # B. Intensidade (Ataques Perigosos por Minuto) - O Termômetro
+        intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
+        status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.2 else "❄️ BAIXA" if intensidade_jogo < 0.7 else "😐 MÉDIA"
+
+        # C. Dominância (Quem manda no jogo?)
+        soma_atq = atq_perigo_h + atq_perigo_a
+        dominancia_h = (atq_perigo_h / soma_atq * 100) if soma_atq > 0 else 50
+        
+        quem_manda = "EQUILIBRADO"
+        if dominancia_h > 65: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
+        elif dominancia_h < 35: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
+
+        # --- FILTRO PRÉVIO ---
         if "Under" not in estrategia and "Morno" not in estrategia:
-            if tempo > 20 and chutes_totais < 2:
-                return "\n🤖 <b>IA:</b> ⚠️ <b>Reprovado</b> - Jogo sem volume (Morto).", "10%"
+            if intensidade_jogo < 0.5 and tempo > 20: # Menos de 1 ataque perigoso a cada 2 min
+                 return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> - Jogo muito lento para operar.", "15%"
 
+        # --- 3. O PROMPT ENRIQUECIDO ---
         prompt = f"""
-        ATUE COMO UM TRADER ESPORTIVO SÊNIOR (TEXTO ANALÍTICO).
+        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL (Data-Driven Decisions).
         
-        CENÁRIO:
+        Eu calculei os KPIs avançados do jogo. Use-os para classificar a oportunidade.
+        Não ignore a 'Intensidade' e a 'Dominância'.
+
+        DADOS DO CONFRONTO:
         - Jogo: {dados_jogo['jogo']} ({dados_jogo['placar']}) aos {tempo} min.
-        - Estratégia: {estrategia}
+        - Estratégia Sinalizada: {estrategia}
         
-        DADOS TÉCNICOS:
-        - Chutes no Gol: {chutes_gol} | Total: {chutes_totais}
-        - Escanteios: {escanteios}
-        - Pressão (Momentum): Casa {rh} x {ra} Fora
+        KPIs AVANÇADOS (Calculados):
+        1. 🔥 Intensidade do Jogo: {intensidade_jogo:.2f} atq/min ({status_intensidade}).
+        2. ⚖️ Cenário Tático: {quem_manda}.
+        3. 🎯 Precisão de Chutes: Casa {precisao_h:.0f}% vs Fora {precisao_a:.0f}%.
+        4. 🛡️ Pressão (Momentum): Casa {rh} x {ra} Fora.
         
-        CONTEXTO:
+        ESTATÍSTICAS BRUTAS:
+        - Ataques Perigosos: {atq_perigo_h} x {atq_perigo_a}
+        - Chutes no Gol: {gol_h} x {gol_a}
+        - Escanteios: {cantos_h} x {cantos_a}
+        
+        CONTEXTO HISTÓRICO (Big Data):
         {extra_context}
         
-        SUA MISSÃO:
-        1. Calcule a probabilidade (0-100%).
-        2. Dê um Veredicto (Aprovado/Arriscado/Reprovado).
-        3. ESCREVA UMA ANÁLISE TÁTICA DE 2 LINHAS explicando o momento do jogo. Fale sobre quem está pressionando, se há perigo real ou se o jogo está travado.
-           - Regra de Ouro: No mercado de Gols, jogo lá e cá (trocação) é BOM.
-        
-        FORMATO DE SAÍDA (Use exatamente este padrão):
-        VEREDICTO: [Seu Veredicto]
-        PROB: [Número]%
-        ANÁLISE: [Sua explicação rica e detalhada aqui. Não use caracteres especiais como chaves ou aspas de código.]
+        SUA MISSÃO - CLASSIFIQUE:
+        💎 DIAMANTE (Top 1%): Intensidade > 1.2, Dominância clara de quem precisa do gol OU jogo lá e cá (trocação) com alta precisão.
+        ✅ PADRÃO (Normal): Intensidade média, números coerentes com a estratégia. Segue o fluxo.
+        ⚠️ ARRISCADO (Evitar): Intensidade Baixa (<0.7), Dominância estéril (muita posse, zero chute) ou números contraditórios.
+
+        SAÍDA JSON:
+        {{
+            "classe": "DIAMANTE" ou "PADRAO" ou "ARRISCADO",
+            "probabilidade": "0-100",
+            "motivo_tecnico": "Use os KPIs para justificar. Ex: 'Intensidade alta (1.5) com domínio total do Casa'."
+        }}
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.4))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         
-        texto_raw = response.text
+        r_json = json.loads(response.text)
+        classe = r_json.get('classe', 'PADRAO').upper()
+        prob_val = int(r_json.get('probabilidade', 70))
+        motivo = r_json.get('motivo_tecnico', 'Análise baseada em KPIs.')
         
-        for lixo in ['```json', '```', '{', '}', '"PROB"', '"VEREDICTO"', '"ANÁLISE"']:
-            texto_raw = texto_raw.replace(lixo, "")
+        emoji = "✅"
         
-        prob_val = 0
-        prob_str = "N/A"
-        match = re.search(r'(?:PROB|Probabilidade)[:\s]*(\d+)', texto_raw, re.IGNORECASE)
-        if match: 
-            prob_val = int(match.group(1))
+        # Ajuste Fino Pós-IA
+        if classe == "DIAMANTE" or (prob_val >= 85 and intensidade_jogo > 1.0):
+            emoji = "💎"
+            classe = "DIAMANTE"
+        elif classe == "ARRISCADO" or prob_val < 60:
+            emoji = "⚠️"
+            classe = "ARRISCADO"
         else:
-            match_b = re.search(r'(\d{2})%', texto_raw)
-            if match_b: prob_val = int(match_b.group(1))
+            emoji = "✅"
+            classe = "APROVADO"
+
+        prob_str = f"{prob_val}%"
         
-        if prob_val > 0: prob_str = f"{prob_val}%"
-
-        veredicto = "Neutro"
-        texto_lower = texto_raw.lower()
-        if "aprovado" in texto_lower and "reprovado" not in texto_lower: veredicto = "Aprovado"
-        elif "arriscado" in texto_lower: veredicto = "Arriscado"
-        elif "reprovado" in texto_lower: veredicto = "Reprovado"
-
-        motivo = "Análise técnica indisponível."
-        partes = re.split(r'ANÁLISE:|Análise:|MOTIVO:|Motivo:', texto_raw, flags=re.IGNORECASE)
-        if len(partes) > 1:
-            motivo = partes[-1].strip()
-        else:
-            linhas = texto_raw.split('\n')
-            linhas_texto = []
-            for l in linhas:
-                l_up = l.upper()
-                if "VEREDICTO" not in l_up and "PROB" not in l_up and len(l) > 10:
-                    linhas_texto.append(l.strip())
-            if linhas_texto:
-                motivo = " ".join(linhas_texto)
-
-        motivo = motivo.lstrip(' :-,."\'')
-
-        if veredicto == "Aprovado" and prob_val < 60: veredicto = "Arriscado"
-        if prob_str == "N/A" and veredicto == "Aprovado": veredicto = "Arriscado"
-
-        emoji = "✅" if veredicto == "Aprovado" else "⚠️"
+        # Montagem Visual com os KPIs para você ver no Telegram
+        html_analise = f"\n🤖 <b>IA ANALYTICS:</b>\n{emoji} <b>{classe} ({prob_str})</b>\n"
+        html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | {quem_manda}</i>\n"
+        html_analise += f"📝 <i>{motivo}</i>"
         
-        return f"\n🤖 <b>ANÁLISE TÉCNICA:</b>\n{emoji} <b>{veredicto.upper()} ({prob_str})</b>\n📝 <i>{motivo}</i>", prob_str
-    except: return "", "N/A"
+        return html_analise, prob_str
+
+    except Exception as e: return "", "N/A"
 
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
