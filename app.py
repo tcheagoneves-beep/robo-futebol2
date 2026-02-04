@@ -1349,6 +1349,29 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
+# --- ESTRATÉGIA: CARTÃO IMINENTE (Sugerida pela IA) ---
+        # Lógica: Jogo tenso (placar apertado), final de jogo, muita agressividade (faltas/chutes)
+        
+        # 1. Filtro de Tempo e Placar
+        if 60 <= tempo <= 75 and abs(gh - ga) <= 1:
+            
+            # 2. Filtro de Intensidade (Chutes no Gol > 8 indica jogo corrido)
+            if total_chutes_gol >= 8:
+                
+                # 3. Filtro de Violência (Muitas faltas ou Cartões já saindo)
+                # Pega faltas da API (se disponível) ou usa cartões como proxy
+                faltas_totais = get_v(stats_h, 'Fouls') + get_v(stats_a, 'Fouls')
+                cartoes_totais = get_v(stats_h, 'Yellow Cards') + get_v(stats_a, 'Yellow Cards')
+                
+                # Gatilho: Mais de 12 faltas OU jogo já tem cartões (juiz rigoroso)
+                if faltas_totais >= 12 or cartoes_totais >= 2:
+                    SINAIS.append({
+                        "tag": "🟨 Cartão Iminente",
+                        "ordem": "👉 <b>FAZER:</b> Over Cartões\n✅ Mercado: <b>Próximo Cartão</b> ou <b>Over Limite</b>",
+                        "stats": f"🔥 Jogo Tenso: {faltas_totais} Faltas | {total_chutes_gol} Chutes no Gol",
+                        "rh": rh, "ra": ra, "favorito": "CARTAO"
+                    })
+
         return SINAIS
     except: return []
 
