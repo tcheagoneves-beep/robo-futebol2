@@ -175,42 +175,34 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     return chave
 
 # --- [MELHORIA] NOVA FUNÇÃO DE BUSCA DE ODD PRÉ-MATCH (ROBUSTA) ---
+# --- [CORREÇÃO] BUSCA ODD ESTRITA (SÓ BET365) ---
 def buscar_odd_pre_match(api_key, fid):
     try:
         url = "https://v3.football.api-sports.io/odds"
-        # Trazemos todas e filtramos no Python para garantir fallback
-        params = {"fixture": fid} 
+        params = {"fixture": fid, "bookmaker": "8"} # ID 8 = Bet365
         r = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         
-        if not r.get('response'): return 0.0, "N/A"
+        # Se não tiver resposta ou bookmakers, já retorna falso
+        if not r.get('response'): return 0.0, "Sem Bet365"
         
-        # Lista de Prioridade: 8=Bet365, 4=Pinnacle, 1=1xBet
-        prioridades = [8, 4, 1] 
         bookmakers = r['response'][0]['bookmakers']
-        
-        bookie_escolhida = None
-        
-        # 1. Tenta achar na ordem de prioridade
-        for p_id in prioridades:
-            bookie_escolhida = next((b for b in bookmakers if b['id'] == p_id), None)
-            if bookie_escolhida: break
+        if not bookmakers: return 0.0, "Sem Bet365"
+
+        # Como filtramos por bookmaker=8 na API, o primeiro item JÁ É a Bet365
+        bet365 = bookmakers[0]
             
-        # 2. Se não achou nenhuma das tops, pega a primeira que vier
-        if not bookie_escolhida and bookmakers:
-            bookie_escolhida = bookmakers[0]
-            
-        if bookie_escolhida:
-            # Procura Over 2.5 (ID 5 na API normalmente)
-            mercado_gols = next((m for m in bookie_escolhida['bets'] if m['id'] == 5), None)
+        if bet365:
+            # Procura Over 2.5 (ID 5 na API)
+            mercado_gols = next((m for m in bet365['bets'] if m['id'] == 5), None)
             if mercado_gols:
-                # Tenta pegar linha 2.5, se não tiver tenta 1.5 (jogos com poucos gols)
+                # Tenta pegar linha 2.5
                 odd_obj = next((v for v in mercado_gols['values'] if v['value'] == "Over 2.5"), None)
+                # Se não tiver 2.5, tenta 1.5 (fallback para jogos under)
                 if not odd_obj:
                      odd_obj = next((v for v in mercado_gols['values'] if v['value'] == "Over 1.5"), None)
                 
                 if odd_obj:
-                    # Retorna: Valor da Odd, Nome (ex: Over 2.5) e Nome da Casa
-                    return float(odd_obj['odd']), f"{odd_obj['value']} ({bookie_escolhida['name']})"
+                    return float(odd_obj['odd']), f"{odd_obj['value']} (Bet365)"
 
         return 0.0, "N/A"
     except: return 0.0, "N/A"
@@ -2761,4 +2753,5 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
 
