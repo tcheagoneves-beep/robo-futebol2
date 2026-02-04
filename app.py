@@ -921,17 +921,19 @@ def gerar_insights_matinais_ia(api_key):
 def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
+    
+    # IDs das Ligas onde a Bet365 costuma abrir mercado de Player Props (Defesas)
+    # 39=Premier, 140=LaLiga, 135=SerieA, 78=Bundesliga, 61=Ligue1, 2=UCL, 3=UEL, 71=BR-A, 72=BR-B
+    LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
+
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # Filtra apenas jogos NS (Não iniciados)
-        jogos_candidatos = [
-            j for j in jogos 
-            if j['fixture']['status']['short'] == 'NS'
-        ]
+        # Filtra jogos NS (Não iniciados)
+        jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
         
         if not jogos_candidatos: return []
         
@@ -941,84 +943,89 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         count_validos = 0
         
         for j in jogos_candidatos:
-            if count_validos >= 20: break # Reduzi um pouco para não estourar a cota na busca dupla
+            if count_validos >= 25: break 
             
             fid = j['fixture']['id']
+            lid = j['league']['id']
             
-            # 1. BLINDAGEM: Verifica se tem liquidez na Bet365 (Usa a função padrão)
+            # 1. BLINDAGEM BÁSICA (Tem odd na Bet365?)
             odd_check, _ = buscar_odd_pre_match(api_key, fid)
             if odd_check == 0: continue
 
-            # 2. BUSCA FAVORITO (Correção do Bug)
-            # Precisamos saber quem é o favorito para indicar defesa do goleiro oposto
+            # 2. DEFINIÇÃO DE CENÁRIO (Favorito ou Equilibrado)
+            cenario_tatico = "Indefinido"
+            pode_ter_prop = (lid in LIGAS_BIG_MARKETS) # Só busca defesa em liga grande
+            
             try:
+                # Busca Match Winner para ver desequilíbrio
                 url_odd = "https://v3.football.api-sports.io/odds"
-                # Market 1 = Match Winner
                 r_odd = requests.get(url_odd, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "8", "bet": "1"}).json()
-                
-                cenario_odd = "Indefinido"
-                odd_casa = 0
-                odd_fora = 0
                 
                 if r_odd.get('response'):
                     vals = r_odd['response'][0]['bookmakers'][0]['bets'][0]['values']
                     odd_casa = next((float(v['odd']) for v in vals if v['value'] == 'Home'), 0)
                     odd_fora = next((float(v['odd']) for v in vals if v['value'] == 'Away'), 0)
                     
-                    if odd_casa > 0 and odd_casa < 1.65: 
-                        cenario_odd = "MASSACRE CASA (Goleiro Visitante vai trabalhar)"
-                    elif odd_fora > 0 and odd_fora < 1.65: 
-                        cenario_odd = "MASSACRE VISITANTE (Goleiro Casa vai trabalhar)"
-                    elif odd_casa > 2.0 and odd_fora > 2.0:
-                        cenario_odd = "JOGO TENSO/EQUILIBRADO (Bom para Cartões)"
-                    else:
-                        cenario_odd = "Neutro"
+                    # Lógica de Massacre (Para Goleiros - Só em Ligas Grandes)
+                    if pode_ter_prop:
+                        if odd_casa > 0 and odd_casa < 1.55: 
+                            cenario_tatico = "MASSACRE CASA (Foco: Goleiro Visitante)"
+                        elif odd_fora > 0 and odd_fora < 1.55: 
+                            cenario_tatico = "MASSACRE VISITANTE (Foco: Goleiro Casa)"
+                    
+                    # Lógica de Cartões (Qualquer Liga com Juiz)
+                    if "MASSACRE" not in cenario_tatico:
+                        if abs(odd_casa - odd_fora) < 0.5 or (odd_casa > 2.0 and odd_fora > 2.0):
+                            cenario_tatico = "JOGO TENSO/EQUILIBRADO (Foco: Cartões)"
+                        else:
+                            cenario_tatico = "Jogo Normal (Avaliar apenas se Juiz for Rigoroso)"
             except:
-                cenario_odd = "Sem dados de Favorito"
-
-            # Só adiciona se tiver um cenário claro (Favorito ou Tenso) para economizar token
-            if "Neutro" in cenario_odd and "Indefinido" in cenario_odd: continue
+                cenario_tatico = "Sem Odds Winner"
 
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             referee = j['fixture'].get('referee', 'Desconhecido')
             liga_nome = j['league']['name']
             
-            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Juiz: {referee} | Cenário Tático: {cenario_odd} | ID: {fid}\n"
-            count_validos += 1
+            # Adiciona ao prompt apenas se tiver um cenário interessante ou juiz
+            if referee or "MASSACRE" in cenario_tatico or "TENSO" in cenario_tatico:
+                dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Juiz: {referee} | Cenário: {cenario_tatico}\n"
+                count_validos += 1
 
         if not dados_analise: return []
 
         prompt = f"""
-        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (PROP BETS).
+        ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS (BET365).
         
-        Analise a lista de jogos abaixo. Os dados já foram filtrados pela Bet365.
-        Foque estritamente no "Cenário Tático" informado.
-
-        LISTA DE JOGOS:
+        Analise a lista abaixo e selecione AS 3 MELHORES OPORTUNIDADES.
+        
+        LISTA DE JOGOS E CENÁRIOS:
         {dados_analise}
         
-        REGRAS DE SELEÇÃO (TOP 3):
+        REGRAS DE OURO (OBRIGATÓRIO):
         
-        1. 🧤 MURALHA (DEFESAS DE GOLEIRO):
-           - GATILHO: Jogos marcados como "MASSACRE".
-           - LÓGICA: Se é "MASSACRE CASA", o "Goleiro Visitante" vai sofrer muitos chutes. Indique a aposta nele.
-           - Se é "MASSACRE VISITANTE", indique o "Goleiro Casa".
+        1. 🧤 PARA DEFESAS (MURALHA):
+           - SÓ INDIQUE se o cenário for "MASSACRE".
+           - NÃO USE "Over X". Você DEVE estimar a linha.
+           - Se for massacre absurdo (Odd < 1.30), indique "Over 3.5 Defesas".
+           - Se for massacre normal (Odd < 1.55), indique "Over 2.5 Defesas".
+           - Indique o nome do GOLEIRO DO TIME FRACO (ou "Goleiro do [Nome do Time]").
         
-        2. 🟨 SNIPER DE CARTÕES:
-           - GATILHO: Jogos marcados como "JOGO TENSO/EQUILIBRADO".
-           - LÓGICA: Se o jogo é pegado e o Juiz for conhecido (ou liga for violenta como Libertadores/Sulamericana), indique Over Cartões.
+        2. 🟨 PARA CARTÕES (SNIPER):
+           - SÓ INDIQUE se o cenário for "TENSO" ou se você (IA) souber que o Juiz é rigoroso.
+           - Linha padrão: "Over 3.5 Cartões" (jogo normal) ou "Over 4.5 Cartões" (clássico/tenso).
+           - Evite ligas sub-19 ou amistosos para cartões.
         
-        SAÍDA OBRIGATÓRIA (JSON):
+        SAÍDA JSON:
         {{
             "sinais": [
                 {{
-                    "fid": "12345",
+                    "fid": "...",
                     "tipo": "GOLEIRO" ou "CARTAO",
-                    "titulo": "🧤 MURALHA" ou "🟨 AÇOUGUEIRO",
+                    "titulo": "🧤 MURALHA" ou "🟨 SNIPER",
                     "jogo": "Time A x Time B",
-                    "destaque": "Explique usando o cenário. Ex: 'Favoritismo extremo do Time A força o goleiro B'.",
-                    "indicacao": "Over X Defesas Goleiro [Nome do Time] ou Over Cartões"
+                    "destaque": "Motivo tático (Ex: Massacre do mandante obriga goleiro a trabalhar)",
+                    "indicacao": "Over 2.5 Defesas do Goleiro do [Time] (Odd Est. @1.80)"
                 }}
             ]
         }}
