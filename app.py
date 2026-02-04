@@ -2277,23 +2277,28 @@ if st.session_state.ROBO_LIGADO:
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
                         
-                        # --- [MELHORIA] SEMÁFORO DE ODDS ---
+                        # --- [CORREÇÃO] SEMÁFORO DE ODDS (SEM APAGAR AÇÃO) ---
                         destaque_odd = ""
+                        
+                        # 1. Título e Emoji Base (Sempre mostra o nome da estratégia)
                         emoji_sinal = "✅"
                         titulo_sinal = f"SINAL {s['tag'].upper()}"
-                        box_instrucao = s['ordem']
+                        
+                        # 2. Texto da Ação (O que fazer) - Sempre presente
+                        texto_acao_original = s['ordem']
+                        
+                        # 3. Aviso de Odd (O Semáforo) - Começa vazio
+                        bloco_aviso_odd = ""
 
                         if odd_val > 0 and odd_val < ODD_CRITICA_LIVE:
-                            # ZONA DE PERIGO (Ex: 1.15)
+                            # ZONA DE PERIGO (Ex: 1.15) -> Muda emoji e adiciona aviso
                             emoji_sinal = "⛔"
-                            titulo_sinal = "ALERTA DE ODD BAIXA"
-                            box_instrucao = f"⚠️ <b>NÃO ENTRE AGORA!</b> Odd @{odd_val:.2f} sem valor.\n⏳ <i>Aguarde valorizar ou ignore.</i>"
+                            bloco_aviso_odd = f"⚠️ <b>ALERTA: ODD BAIXA (@{odd_val:.2f})</b>\n⏳ <i>Não entre agora. Aguarde ou ignore.</i>\n────────────────\n"
                         
                         elif odd_val >= ODD_CRITICA_LIVE and odd_val < ODD_MINIMA_LIVE:
-                            # ZONA DE ATENÇÃO (Ex: 1.45)
+                            # ZONA DE ATENÇÃO (Ex: 1.45) -> Muda emoji e adiciona aviso
                             emoji_sinal = "⏳"
-                            titulo_sinal = "AGUARDE VALORIZAR"
-                            box_instrucao = f"👀 <b>SEGURE A MÃO!</b> Odd @{odd_val:.2f}.\n🎯 <i>Meta: Entrar acima de @{ODD_MINIMA_LIVE:.2f}</i>"
+                            bloco_aviso_odd = f"👀 <b>AGUARDE VALORIZAR (@{odd_val:.2f})</b>\n🎯 <i>Meta: Entrar acima de @{ODD_MINIMA_LIVE:.2f}</i>\n────────────────\n"
                         
                         # -----------------------------------
 
@@ -2360,11 +2365,18 @@ if st.session_state.ROBO_LIGADO:
                                         txt_stats_extras += f"\n🔎 <b>Raio-X (50 Jogos):</b>\nFreq. Over 1.5: Casa <b>{dados_50['home']['over15_ft']}%</b> | Fora <b>{dados_50['away']['over15_ft']}%</b>"
                                 except: pass
 
-                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
+                                # --- MONTAGEM FINAL DA MENSAGEM ---
+                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n" # Título Original (com nome da estratégia)
                                 msg += f"🏆 {liga_safe}\n"
                                 msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
                                 msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
-                                msg += f"{box_instrucao}\n" # AQUI ENTRA O TEXTO DO SEMÁFORO
+                                
+                                # AQUI ESTÁ A CORREÇÃO:
+                                # 1. Primeiro mostramos o AVISO (se houver)
+                                msg += f"{bloco_aviso_odd}" 
+                                # 2. Depois mostramos a AÇÃO (O que fazer)
+                                msg += f"{texto_acao_original}\n" 
+                                
                                 if destaque_odd: msg += f"{destaque_odd}\n"
                                 
                                 msg += f"{txt_stats_extras}\n" 
