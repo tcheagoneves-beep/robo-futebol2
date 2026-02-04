@@ -1299,81 +1299,71 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
-        # --- CORREÇÃO: FALLBACK DE DADOS (Se faltar Ataque Perigoso, usa Chutes) ---
+        # --- CORREÇÃO: FALLBACK DE DADOS (CALIBRAGEM REALISTA) ---
         usou_estimativa = False
+        # Se não tem ataques perigosos registrados, mas tem chutes...
         if atq_perigo_total == 0 and chutes_totais > 0:
-            # Estima que cada chute surgiu de pelo menos 1 ataque perigoso
-            # Multiplicamos por 1.5 para simular uma intensidade realista
-            atq_perigo_total = int(chutes_totais * 1.5)
-            # Distribui proporcionalmente (só para cálculo)
-            atq_perigo_h = int(chutes_h * 1.5)
-            atq_perigo_a = int(chutes_a * 1.5)
+            # CORREÇÃO: Multiplicador 5x (1 Chute costuma vir de ~5 ataques)
+            atq_perigo_total = int(chutes_totais * 5)
+            atq_perigo_h = int(chutes_h * 5)
+            atq_perigo_a = int(chutes_a * 5)
             usou_estimativa = True
 
         # --- 2. ENGENHARIA DE DADOS (KPIs AVANÇADOS) ---
         
-        # A. Precisão (Qualidade do Chute)
         precisao_h = (gol_h / chutes_h * 100) if chutes_h > 0 else 0
         precisao_a = (gol_a / chutes_a * 100) if chutes_a > 0 else 0
         
-        # B. Intensidade (Ataques Perigosos por Minuto) - O Termômetro
         intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
-        status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.2 else "❄️ BAIXA" if intensidade_jogo < 0.7 else "😐 MÉDIA"
+        status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.0 else "❄️ BAIXA" if intensidade_jogo < 0.6 else "😐 MÉDIA"
 
-        # C. Dominância (Quem manda no jogo?)
         soma_atq = atq_perigo_h + atq_perigo_a
         dominancia_h = (atq_perigo_h / soma_atq * 100) if soma_atq > 0 else 50
         
         quem_manda = "EQUILIBRADO"
-        if dominancia_h > 65: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
-        elif dominancia_h < 35: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
+        if dominancia_h > 60: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
+        elif dominancia_h < 40: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
 
-        # --- FILTRO PRÉVIO ---
-        if "Under" not in estrategia and "Morno" not in estrategia:
-            if intensidade_jogo < 0.5 and tempo > 20: 
-                 return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> - Jogo muito lento para operar.", "15%"
+        # --- FILTRO PRÉVIO (SEGURANÇA) ---
+        # Só veta se NÃO estiver usando estimativa. Se for dado estimado, deixa a IA julgar.
+        if not usou_estimativa and "Under" not in estrategia and "Morno" not in estrategia:
+            if intensidade_jogo < 0.5 and tempo > 15: 
+                 return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> (Dados Reais) - Jogo muito lento.", "15%"
 
-        # Aviso para o Prompt se o dado foi estimado
         aviso_dados = ""
         if usou_estimativa:
-            aviso_dados = "(NOTA: A API não forneceu 'Ataques Perigosos', a Intensidade foi estimada baseada nos Chutes)."
+            aviso_dados = "(NOTA TÉCNICA: API sem 'Ataques Perigosos'. Intensidade projetada via Volume de Chutes)."
 
-        # --- 3. O PROMPT ENRIQUECIDO ---
+        # --- 3. O PROMPT ---
         prompt = f"""
         ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL (Data-Driven Decisions).
         
-        Eu calculei os KPIs avançados do jogo. Use-os para classificar a oportunidade.
-        {aviso_dados}
+        Analise os KPIs abaixo. {aviso_dados}
 
-        DADOS DO CONFRONTO:
+        DADOS:
         - Jogo: {dados_jogo['jogo']} ({dados_jogo['placar']}) aos {tempo} min.
-        - Estratégia Sinalizada: {estrategia}
+        - Estratégia: {estrategia}
         
-        KPIs AVANÇADOS (Calculados):
-        1. 🔥 Intensidade do Jogo: {intensidade_jogo:.2f} atq/min ({status_intensidade}).
-        2. ⚖️ Cenário Tático: {quem_manda}.
-        3. 🎯 Precisão de Chutes: Casa {precisao_h:.0f}% vs Fora {precisao_a:.0f}%.
-        4. 🛡️ Pressão (Momentum): Casa {rh} x {ra} Fora.
+        KPIs:
+        1. Intensidade: {intensidade_jogo:.2f} atq/min ({status_intensidade}).
+        2. Tática: {quem_manda}.
+        3. Precisão Chutes: Casa {precisao_h:.0f}% vs Fora {precisao_a:.0f}%.
+        4. Pressão (Momentum): Casa {rh} x {ra} Fora.
         
-        ESTATÍSTICAS BRUTAS:
-        - Ataques Perigosos (Ref): {atq_perigo_h} x {atq_perigo_a}
+        STATS BRUTAS:
+        - Ataques (Ref): {atq_perigo_h} x {atq_perigo_a}
         - Chutes no Gol: {gol_h} x {gol_a}
         - Escanteios: {cantos_h} x {cantos_a}
         
-        CONTEXTO HISTÓRICO (Big Data):
-        {extra_context}
+        CONTEXTO: {extra_context}
         
-        SUA MISSÃO - CLASSIFIQUE:
-        💎 DIAMANTE (Top 1%): Intensidade > 1.2, Dominância clara de quem precisa do gol OU jogo lá e cá (trocação) com alta precisão.
-        ✅ PADRÃO (Normal): Intensidade média, números coerentes com a estratégia. Segue o fluxo.
-        ⚠️ ARRISCADO (Evitar): Intensidade Baixa (<0.7), Dominância estéril (muita posse, zero chute) ou números contraditórios.
+        CLASSIFIQUE:
+        💎 DIAMANTE: Intensidade > 1.0, Dominância clara e Precisão alta.
+        ✅ PADRÃO: Intensidade média, volume de jogo aceitável.
+        ⚠️ ARRISCADO: Jogo travado, sem chutes ou dados contraditórios.
 
-        SAÍDA JSON:
-        {{
-            "classe": "DIAMANTE" ou "PADRAO" ou "ARRISCADO",
-            "probabilidade": "0-100",
-            "motivo_tecnico": "Use os KPIs para justificar. Ex: 'Intensidade alta (1.5) com domínio total do Casa'."
-        }}
+        JSON:
+        {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
         """
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
@@ -1385,21 +1375,15 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         motivo = r_json.get('motivo_tecnico', 'Análise baseada em KPIs.')
         
         emoji = "✅"
-        
-        # Ajuste Fino Pós-IA
-        if classe == "DIAMANTE" or (prob_val >= 85 and intensidade_jogo > 1.0):
-            emoji = "💎"
-            classe = "DIAMANTE"
+        if classe == "DIAMANTE" or (prob_val >= 85 and intensidade_jogo > 0.8):
+            emoji = "💎"; classe = "DIAMANTE"
         elif classe == "ARRISCADO" or prob_val < 60:
-            emoji = "⚠️"
-            classe = "ARRISCADO"
+            emoji = "⚠️"; classe = "ARRISCADO"
         else:
-            emoji = "✅"
-            classe = "APROVADO"
+            emoji = "✅"; classe = "APROVADO"
 
         prob_str = f"{prob_val}%"
         
-        # Montagem Visual
         html_analise = f"\n🤖 <b>IA ANALYTICS:</b>\n{emoji} <b>{classe} ({prob_str})</b>\n"
         html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | {quem_manda}</i>\n"
         html_analise += f"📝 <i>{motivo}</i>"
@@ -2945,5 +2929,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
-
 
