@@ -1349,26 +1349,31 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-# --- ESTRATÉGIA: CARTÃO IMINENTE (Sugerida pela IA) ---
-        # Lógica: Jogo tenso (placar apertado), final de jogo, muita agressividade (faltas/chutes)
+# --- ESTRATÉGIA: CARTÃO IMINENTE (Sugerida pela IA - AJUSTADA) ---
+        # Lógica: Jogo tenso (placar apertado), final de jogo, muita agressividade
         
-        # 1. Filtro de Tempo e Placar
-        if 60 <= tempo <= 75 and abs(gh - ga) <= 1:
+        # 1. Filtro de Tempo e Placar (60 a 85 min)
+        if 60 <= tempo <= 85 and abs(gh - ga) <= 1:
             
-            # 2. Filtro de Intensidade (Chutes no Gol > 8 indica jogo corrido)
-            if total_chutes_gol >= 8:
+            # 2. Filtro de Intensidade (Chutes no Gol > 6 indica jogo vivo)
+            if total_chutes_gol >= 6: 
                 
-                # 3. Filtro de Violência (Muitas faltas ou Cartões já saindo)
-                # Pega faltas da API (se disponível) ou usa cartões como proxy
+                # 3. Filtro de Violência (Faltas e Cartões)
                 faltas_totais = get_v(stats_h, 'Fouls') + get_v(stats_a, 'Fouls')
                 cartoes_totais = get_v(stats_h, 'Yellow Cards') + get_v(stats_a, 'Yellow Cards')
                 
-                # Gatilho: Mais de 12 faltas OU jogo já tem cartões (juiz rigoroso)
+                # Gatilho: Jogo picado (>12 faltas) ou Juiz já mostrou serviço (>2 cartões)
                 if faltas_totais >= 12 or cartoes_totais >= 2:
+                    
+                    # Definição de quem está batendo mais para sugerir o alvo
+                    time_faltoso = "Visitante"
+                    if get_v(stats_h, 'Fouls') > get_v(stats_a, 'Fouls'): time_faltoso = "Casa"
+                    
                     SINAIS.append({
                         "tag": "🟨 Cartão Iminente",
-                        "ordem": "👉 <b>FAZER:</b> Over Cartões\n✅ Mercado: <b>Próximo Cartão</b> ou <b>Over Limite</b>",
-                        "stats": f"🔥 Jogo Tenso: {faltas_totais} Faltas | {total_chutes_gol} Chutes no Gol",
+                        # AQUI ESTÁ A CORREÇÃO DA MENSAGEM:
+                        "ordem": f"👉 <b>FAZER:</b> Over Cartões (Asiático) OU Cartão p/ {time_faltoso}\n⚠️ <b>Cuidado:</b> Se a linha pedir +2 cartões, NÃO ENTRE.",
+                        "stats": f"🔥 Jogo Tenso: {faltas_totais} Faltas | Quem bate mais: {time_faltoso}",
                         "rh": rh, "ra": ra, "favorito": "CARTAO"
                     })
 
