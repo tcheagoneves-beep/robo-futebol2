@@ -2583,63 +2583,86 @@ if st.session_state.ROBO_LIGADO:
             else: st.warning("⚠️ Firebase não conectado.")
 
         with abas[9]: 
-            st.markdown("### 💬 Chat Intelligence (Auditor de Algoritmo)")
+            st.markdown("### 💬 Chat Intelligence (Data Driven)")
+            st.caption("Agora a IA tem acesso aos cálculos reais do seu Big Data.")
+            
             if "messages" not in st.session_state:
-                st.session_state["messages"] = [{"role": "assistant", "content": "Olá! Estou pronto para auditar seu código. Se houver Reds, me avise que eu gero a correção."}]
+                st.session_state["messages"] = [{"role": "assistant", "content": "Olá Tiago! Já processei seus dados. Pergunte sobre Escanteios, Gols ou Estratégias que eu calculo a probabilidade baseada no histórico."}]
             if len(st.session_state["messages"]) > 6:
                 st.session_state["messages"] = st.session_state["messages"][-6:]
 
             for msg in st.session_state.messages: 
                 st.chat_message(msg["role"]).write(msg["content"])
             
-            if prompt := st.chat_input("Ex: Crie um filtro para evitar o Red de hoje."):
+            if prompt := st.chat_input("Ex: Qual a melhor estratégia de Escanteios com base nos dados?"):
                 if not IA_ATIVADA: st.error("IA Desconectada. Verifique a API Key.")
                 else:
                     st.session_state.messages.append({"role": "user", "content": prompt})
                     st.chat_message("user").write(prompt)
 
-                    txt_radar = "RADAR VAZIO."
-                    if radar: txt_radar = pd.DataFrame(radar).to_string(index=False)
-
-                    txt_hoje = "SEM DADOS HOJE."
-                    if 'historico_sinais' in st.session_state and st.session_state['historico_sinais']:
-                        df_hj = pd.DataFrame(st.session_state['historico_sinais'])
-                        cols = ['Liga', 'Jogo', 'Estrategia', 'Resultado', 'Placar_Sinal', 'Opiniao_IA']
-                        cols_exist = [c for c in cols if c in df_hj.columns]
-                        txt_hoje = df_hj[cols_exist].head(20).to_string(index=False) 
-
-                    txt_bigdata = "BIG DATA OFFLINE."
-                    total_bd = st.session_state.get('total_bigdata_count', 0)
+                    # --- 1. PREPARAÇÃO DOS DADOS (O CÉREBRO MATEMÁTICO) ---
+                    txt_bigdata_resumo = "BIG DATA: Sem dados carregados."
                     dados_bd = st.session_state.get('cache_firebase_view', [])
+                    total_bd = st.session_state.get('total_bigdata_count', 0)
                     
-                    if dados_bd or total_bd > 0:
-                         txt_bigdata = f"TOTAL REAL DE JOGOS NO BANCO: {total_bd} JOGOS.\n"
-                         txt_bigdata += "Amostra visual (últimos 50): \n"
-                         try:
-                             df_bd = pd.DataFrame(dados_bd)
-                             if 'estatisticas' in df_bd.columns:
-                                 txt_bigdata += f"Exemplo de Estrutura de Dados: {df_bd.iloc[0]['estatisticas']}"
-                         except: pass
+                    if dados_bd:
+                        try:
+                            # Converte JSON para DataFrame para fazer contas reais
+                            df_calc = pd.DataFrame(dados_bd)
+                            
+                            # Extração de colunas aninhadas (Estatísticas)
+                            def extrair_stats(row, chave):
+                                return float(row.get('estatisticas', {}).get(chave, 0))
+                            
+                            df_calc['Cantos_Total'] = df_calc.apply(lambda x: extrair_stats(x, 'escanteios_total'), axis=1)
+                            df_calc['Chutes_Total'] = df_calc.apply(lambda x: extrair_stats(x, 'chutes_total'), axis=1)
+                            df_calc['Gols_Total'] = df_calc['placar_final'].apply(lambda x: sum(map(int, x.split('x'))) if 'x' in str(x) else 0)
+                            
+                            # CÁLCULOS REAIS
+                            media_cantos = df_calc['Cantos_Total'].mean()
+                            media_chutes = df_calc['Chutes_Total'].mean()
+                            max_cantos = df_calc['Cantos_Total'].max()
+                            
+                            # Correlação Simples (Chutes geram Escanteios?)
+                            correlacao = df_calc['Chutes_Total'].corr(df_calc['Cantos_Total'])
+                            txt_corr = "Alta" if correlacao > 0.7 else "Média" if correlacao > 0.4 else "Baixa"
 
+                            # Top Ligas para Cantos
+                            top_ligas_cantos = df_calc.groupby('liga')['Cantos_Total'].mean().sort_values(ascending=False).head(3)
+                            txt_top_ligas = ", ".join([f"{l} ({m:.1f})" for l, m in top_ligas_cantos.items()])
+
+                            txt_bigdata_resumo = f"""
+                            📊 DADOS REAIS PROCESSADOS ({len(df_calc)} jogos recentes):
+                            - Média Global de Escanteios: {media_cantos:.2f} por jogo.
+                            - Média de Chutes: {media_chutes:.2f} por jogo.
+                            - Máximo Registrado: {max_cantos} escanteios.
+                            - Correlação Chutes/Cantos: {correlacao:.2f} ({txt_corr}).
+                            - Ligas com Mais Cantos: {txt_top_ligas}.
+                            """
+                        except Exception as e:
+                            txt_bigdata_resumo = f"Erro ao calcular dados: {e}"
+
+                    # --- 2. CONTEXTO DO PROMPT (A ORDEM PARA A IA) ---
                     contexto_chat = f"""
-                    ATUE COMO: Engenheiro Sênior Python e Cientista de Dados do "Neves Analytics".
-                    IMPORTANTE:
-                    - O usuário possui um Big Data com {total_bd} jogos armazenados.
-                    - Não diga que a amostra é pequena se o total for alto.
+                    ATUE COMO: Cientista de Dados Sênior do 'Neves Analytics'.
                     
-                    CONTEXTO ATUAL:
-                    1. PERFORMANCE HOJE (Google Sheets): 
-                    {txt_hoje}
-                    2. BIG DATA (Firebase): 
-                    {txt_bigdata}
-                    3. RADAR (Ao Vivo): 
-                    {txt_radar}
+                    SUA MISSÃO: 
+                    Não dê aulas teóricas. Use os DADOS REAIS abaixo para responder.
+                    Se o usuário pedir estratégia, crie uma baseada nos NÚMEROS apresentados.
                     
-                    USUÁRIO PERGUNTOU: "{prompt}"
+                    {txt_bigdata_resumo}
+                    
+                    PERGUNTA DO TIAGO: "{prompt}"
+                    
+                    FORMATO DA RESPOSTA:
+                    1. 🔢 **Os Números:** (Cite a média e a correlação calculada acima).
+                    2. 🎯 **O Veredicto:** (Vale a pena operar? Sim/Não).
+                    3. 🛠️ **Estratégia Sugerida:** (Ex: "Como a média é {media_cantos:.1f}, busque a linha de Over X...").
+                    Seja objetivo e numérico.
                     """
 
                     try:
-                        with st.spinner("Gerando solução de código..."):
+                        with st.spinner("🤖 Calculando estatísticas e gerando resposta..."):
                             response = model_ia.generate_content(contexto_chat)
                             st.session_state['gemini_usage']['used'] += 1
                             msg_ia = response.text
@@ -2683,3 +2706,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
