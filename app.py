@@ -2493,6 +2493,7 @@ if st.session_state.ROBO_LIGADO:
                         
                         opiniao_txt = ""; prob_txt = "..."; opiniao_db = "Neutro"
                         
+                        # --- INICIO DO BLOCO NOVO (COM VETO DA IA) ---
                         if IA_ATIVADA:
                             try:
                                 time.sleep(0.2) 
@@ -2505,16 +2506,23 @@ if st.session_state.ROBO_LIGADO:
                                 else: opiniao_db = "Neutro"
                             except: pass
                         
+                        # MÁGICA DO BI: Se a IA não aprovar, marca como VETADO
+                        status_inicial = "Pendente"
+                        if opiniao_db == "Neutro": 
+                            status_inicial = "⛔ VETADO"
+
                         item = {
                             "FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'),
                             "Liga": j['league']['name'], "Jogo": f"{home} x {away} ({placar})", "Placar_Sinal": placar,
-                            "Estrategia": s['tag'], "Resultado": "Pendente",
+                            "Estrategia": s['tag'], 
+                            "Resultado": status_inicial, # <--- AQUI MUDOU
                             "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "",
                             "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db, "Probabilidade": prob_txt 
                         }
                         
                         if adicionar_historico(item):
                             try:
+                                # --- MONTAGEM DA MENSAGEM (Manteve igual) ---
                                 txt_winrate_historico = ""
                                 if txt_pessoal != "Neutro": txt_winrate_historico = f" | 👤 {txt_pessoal}"
 
@@ -2550,31 +2558,24 @@ if st.session_state.ROBO_LIGADO:
                                         txt_stats_extras += f"\n🔎 <b>Raio-X (50 Jogos):</b>\nFreq. Over 1.5: Casa <b>{dados_50['home']['over15_ft']}%</b> | Fora <b>{dados_50['away']['over15_ft']}%</b>"
                                 except: pass
 
-                                # --- MONTAGEM FINAL DA MENSAGEM ---
-                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n" # Título Original (com nome da estratégia)
+                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
                                 msg += f"🏆 {liga_safe}\n"
                                 msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
                                 msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
-                                
-                                # AQUI ESTÁ A CORREÇÃO:
-                                # 1. Primeiro mostramos o AVISO (se houver)
-                                msg += f"{bloco_aviso_odd}" 
-                                # 2. Depois mostramos a AÇÃO (O que fazer)
-                                msg += f"{texto_acao_original}\n" 
-                                
+                                msg += f"{bloco_aviso_odd}"
+                                msg += f"{texto_acao_original}\n"
                                 if destaque_odd: msg += f"{destaque_odd}\n"
-                                
-                                msg += f"{txt_stats_extras}\n" 
-                                msg += "──────────────\n" 
-                                
+                                msg += f"{txt_stats_extras}\n"
+                                msg += "──────────────\n"
                                 msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
                                 msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
                                 msg += linha_bd
-                                msg += "\n" 
-                                msg += f"{opiniao_txt}" 
+                                msg += "\n"
+                                msg += f"{opiniao_txt}"
                                 
                                 sent_status = False
                                 
+                                # --- NOVA LÓGICA DE ENVIO (SÓ ENVIA SE APROVADO) ---
                                 if opiniao_db == "Aprovado":
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
@@ -2584,9 +2585,12 @@ if st.session_state.ROBO_LIGADO:
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
                                     st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
-                                else: st.toast(f"🛑 Sinal Retido: {s['tag']}")
+                                else:
+                                    # Se foi VETADO (Neutro), não envia nada
+                                    st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
 
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
+                        # --- FIM DO BLOCO NOVO ---
 
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
