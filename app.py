@@ -927,6 +927,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
+        # Filtra apenas jogos NS (Não iniciados) que tenham Árbitro definido
         jogos_candidatos = [
             j for j in jogos 
             if j['fixture'].get('referee') and j['fixture']['status']['short'] == 'NS'
@@ -934,44 +935,75 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         
         if not jogos_candidatos: return []
         
-        amostra = jogos_candidatos[:60] 
+        # Embaralha para não pegar sempre as mesmas ligas
+        random.shuffle(jogos_candidatos)
         
         dados_analise = ""
-        for j in amostra:
+        count_validos = 0
+        
+        for j in jogos_candidatos:
+            if count_validos >= 30: break # Limita para não estourar tokens
+            
             fid = j['fixture']['id']
+            
+            # --- BLINDAGEM BET365 ---
+            # Só analisa se tiver odd na Bet365. Isso garante que o jogo existe na casa.
+            odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
+            if odd_val == 0: continue
+            # ------------------------
+
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             referee = j['fixture']['referee']
             liga_nome = j['league']['name']
-            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Árbitro: {referee} | ID: {fid}\n"
+            
+            # Engenharia de Prompt para Defesas:
+            # Se a Odd for baixa (<1.40) ou alta (>2.50), indica desequilíbrio (bom para Goleiro)
+            cenario_odd = "Equilibrado"
+            if odd_val < 1.50 and "Home" in odd_nome: cenario_odd = "Favorito Casa (Goleiro Visitante trabalha)"
+            elif odd_val < 1.50 and "Away" in odd_nome: cenario_odd = "Favorito Fora (Goleiro Casa trabalha)"
+            elif odd_val > 2.20: cenario_odd = "Jogo Tenso/Equilibrado"
+
+            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Juiz: {referee} | Cenario Odds: {cenario_odd} | ID: {fid}\n"
+            count_validos += 1
+
+        if not dados_analise: return []
 
         prompt = f"""
         ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (SMALL & BIG MARKETS).
         
-        Eu liberei o filtro de ligas. Você tem acesso a jogos do mundo todo abaixo.
-        Sua missão é encontrar OPORTUNIDADES DE OURO, não importa se é Champions League ou 2ª Divisão.
-        
-        LISTA DE JOGOS E ÁRBITROS (HOJE):
+        Eu já filtrei e confirmei que estes jogos estão na Bet365.
+        Analise a lista abaixo focando em dois cenários lógicos:
+
+        LISTA DE JOGOS:
         {dados_analise}
         
-        CRITÉRIOS DE ANÁLISE:
-        1. CARTÕES: Procure a combinação "Árbitro Rigoroso" + "Jogo Equilibrado/Tenso".
-        2. GOLEIROS (DEFESAS): Jogos onde há um desnível técnico claro (o goleiro do time pior vai trabalhar).
+        CRITÉRIOS RIGOROSOS DE ANÁLISE:
         
-        SAÍDA OBRIGATÓRIA (JSON):
+        1. 🟨 CARTÕES (Sniper):
+           - Busque a combinação: Árbitro Rigoroso (conhecido por cartões) + Jogo Tenso/Equilibrado.
+           - Evite jogos amistosos ou de ligas muito "suaves".
+        
+        2. 🧤 DEFESAS DE GOLEIRO (Muralha):
+           - Busque APENAS jogos onde há um "Favorito Claro" (Cenario Odds indica isso).
+           - Indique a aposta no goleiro do TIME MAIS FRACO (que vai sofrer pressão).
+           - Exemplo: Se o "Favorito é Casa", o "Goleiro Visitante" é a aposta.
+        
+        SAÍDA OBRIGATÓRIA (JSON) - Selecione TOP 3 oportunidades:
         {{
             "sinais": [
                 {{
-                    "fid": "12345",
+                    "fid": "ID_DO_JOGO",
                     "tipo": "CARTAO" ou "GOLEIRO",
                     "titulo": "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA (DEFESAS)",
                     "jogo": "Time A x Time B",
-                    "destaque": "Árbitro com média alta em liga under",
-                    "indicacao": "Over 4.5 Cartões"
+                    "destaque": "Explique a lógica (Ex: Juiz média alta ou Favorito amassando)",
+                    "indicacao": "Over 4.5 Cartões ou Over 3.5 Defesas Goleiro [Time]"
                 }}
             ]
         }}
         """
+        
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         return json.loads(response.text).get('sinais', [])
