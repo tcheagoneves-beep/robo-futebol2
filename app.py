@@ -769,6 +769,7 @@ def gerar_multipla_matinal_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
+        # Filtra jogos não iniciados
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
         
         if len(jogos_candidatos) < 2: return None, []
@@ -777,57 +778,64 @@ def gerar_multipla_matinal_ia(api_key):
         mapa_jogos = {}
         
         count_validos = 0
+        random.shuffle(jogos_candidatos)
+
         for j in jogos_candidatos:
-            if count_validos >= 40: break
+            if count_validos >= 30: break
             
             fid = j['fixture']['id']
             
-            # --- [NOVO] VALIDA SE TEM NA BET365 ANTES DE MANDAR P/ IA ---
+            # 1. Filtro Bet365 (Obrigatório)
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
-            if odd_val == 0: continue # Pula se não tiver na Bet365
-            # ------------------------------------------------------------
+            if odd_val == 0: continue 
 
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             
-            try:
-                stats_h = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-                if stats_h and stats_h['home']['qtd'] > 0:
-                    mapa_jogos[fid] = f"{home} x {away}"
-                    # Adicionei a Odd no texto para a IA saber que existe liquidez
-                    lista_jogos_txt += f"- ID {fid}: {home} x {away} ({j['league']['name']}) | Odd Ref: {odd_val} | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
-                    count_validos += 1
-            except: pass
+            # 2. Usa a NOVA função de Tendência (Macro/Micro)
+            stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
+            
+            if stats and stats['home']['qtd'] > 0:
+                # Regra para Múltipla: Queremos segurança. 
+                # Evita times com média recente muito baixa (<40% de over)
+                if stats['home']['micro'] < 40 and stats['away']['micro'] < 40: continue
+                
+                # Formata os dados para a IA
+                h_mac = stats['home']['macro']; h_mic = stats['home']['micro']
+                a_mac = stats['away']['macro']; a_mic = stats['away']['micro']
+                
+                mapa_jogos[fid] = f"{home} x {away}"
+                lista_jogos_txt += f"""
+                - ID {fid}: {home} x {away} ({j['league']['name']})
+                  Odd: {odd_val} ({odd_nome})
+                  Casa: Histórico {h_mac}% / Recente {h_mic}%
+                  Fora: Histórico {a_mac}% / Recente {a_mic}%
+                """
+                count_validos += 1
 
         if not lista_jogos_txt: return None, []
         
-        # ... Resto da função continua igual ...
+        # Contexto extra
         contexto_firebase = carregar_contexto_global_firebase()
-        df_sheets = st.session_state.get('historico_full', pd.DataFrame())
-        winrate_sheets = "N/A"
-        # ... (mantém o restante do código original daqui para baixo)
-        if not df_sheets.empty:
-            greens = len(df_sheets[df_sheets['Resultado'].str.contains('GREEN', na=False)])
-            total = len(df_sheets[df_sheets['Resultado'].isin(['✅ GREEN', '❌ RED'])])
-            if total > 0: winrate_sheets = f"{(greens/total)*100:.1f}%"
 
         prompt = f"""
-        Atue como GESTOR DE RISCO E ESTRATÉGIA.
-        OBJETIVO: Criar uma "Múltipla de Segurança" (Bingo Matinal) com 2 ou 3 jogos para HOJE.
+        ATUE COMO UM GESTOR DE RISCO (MONTAGEM DE BILHETE PRONTO).
+        OBJETIVO: Criar uma DUPLA (2 jogos) ou TRIPLA (3 jogos) de Alta Segurança (Odds @1.80 a @2.50 combinadas).
         
-        DADOS GLOBAIS: Winrate Pessoal: {winrate_sheets}. {contexto_firebase}.
-        
-        LISTA DE CANDIDATOS (JÁ FILTRADOS NA BET365):
+        DADOS (JOGOS FILTRADOS NA BET365):
         {lista_jogos_txt}
         
-        TAREFA: 
-        Escolha os 2 ou 3 jogos estatisticamente MAIS SEGUROS para Over 0.5 Gols ou Over 1.5 Gols.
+        CRITÉRIOS:
+        1. Escolha jogos onde a "Recente" (Forma atual) sustenta a aposta.
+        2. Foco em mercados de GOLS (Over 0.5 HT, Over 1.5 FT).
+        3. Se não houver 2 jogos CONFITÁVEIS, não force.
         
-        FORMATO JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
+        SAÍDA JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
         """
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         return json.loads(response.text), mapa_jogos
+
     except Exception as e: return None, []
 
 def gerar_insights_matinais_ia(api_key):
