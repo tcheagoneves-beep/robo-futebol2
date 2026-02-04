@@ -856,10 +856,11 @@ def gerar_insights_matinais_ia(api_key):
             liga = j['league']['name']
             
             # --- FILTRO 1: ODD NA BET365 ---
+            # Aqui pegamos o VALOR e o NOME (Ex: 'Over 2.5')
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
             if odd_val == 0 or odd_val < 1.45: continue 
             
-            # --- FILTRO 2: MACRO VS MICRO (A Lógica Nova) ---
+            # --- FILTRO 2: MACRO VS MICRO ---
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
             if stats and stats['home']['qtd'] > 0:
@@ -869,18 +870,19 @@ def gerar_insights_matinais_ia(api_key):
                 # Regra de Corte: Ignorar times que morreram recentemente (Micro < 40%)
                 if h_mic < 40 and a_mic < 40: continue
 
-                # Identificação de Tendência para a IA
                 def get_trend(mac, mic):
                     diff = mic - mac
-                    if diff >= 20: return "📈 AQUECENDO (Melhorou muito)"
-                    if diff <= -20: return "📉 ESFRIANDO (Cuidado)"
+                    if diff >= 20: return "📈 AQUECENDO"
+                    if diff <= -20: return "📉 ESFRIANDO"
                     return "➡️ ESTÁVEL"
 
                 trend_h = get_trend(h_mac, h_mic)
                 trend_a = get_trend(a_mac, a_mic)
 
+                # --- CORREÇÃO AQUI: PASSAMOS O 'odd_nome' (O MERCADO EXATO) PARA A IA ---
                 lista_para_ia += f"""
-                - Jogo: {home} x {away} ({liga}) | ODD: @{odd_val:.2f}
+                - Jogo: {home} x {away} ({liga})
+                  MERCADO DISPONÍVEL: {odd_nome} | ODD: @{odd_val:.2f}
                   CASA: Histórico {h_mac}% -> Recente {h_mic}% ({trend_h})
                   FORA: Histórico {a_mac}% -> Recente {a_mic}% ({trend_a})
                 """
@@ -889,28 +891,28 @@ def gerar_insights_matinais_ia(api_key):
         if not lista_para_ia: return "Nenhum jogo com valor e tendência positiva encontrado hoje."
 
         prompt = f"""
-        ATUE COMO UM ANALISTA DE PERFORMANCE (PRÉ-MATCH).
+        ATUE COMO UM ANALISTA DE PERFORMANCE E ODDS (SNIPER).
         
-        Eu filtrei os jogos com Odd na Bet365. Agora preciso que você analise o "MOMENTO" dos times.
-        Não olhe apenas o histórico geral. Dê peso total para a FORMA RECENTE (Micro).
+        Eu busquei na Bet365 e filtrei jogos com liquidez.
+        Abaixo estão os jogos e EXATAMENTE qual mercado está pagando a Odd informada.
         
-        LISTA DE CANDIDATOS (Com Tendências):
+        DADOS:
         {lista_para_ia}
         
-        CRITÉRIOS DE ESCOLHA (TOP 3):
-        1. PREFIRA times com etiqueta "📈 AQUECENDO" ou "➡️ ESTÁVEL" com % alta.
-        2. EVITE times com "📉 ESFRIANDO" (Armadilha de estatística antiga).
-        3. O confronto ideal é: Casa Aquecendo x Fora Aquecendo (Chuva de gols).
+        SUA MISSÃO (TOP 3 ESCOLHAS):
+        1. Analise se a "MERCADO DISPONÍVEL" bate com a "Tendência Recente" dos times.
+        2. REGRA CRÍTICA: Se a Bet365 está oferecendo "Over 2.5", seu palpite TEM QUE SER "Over 2.5". Não sugira "Over 1.5" usando a odd de 2.5. Seja preciso.
+        3. Priorize confrontos "Aquecendo x Aquecendo".
         
         SAÍDA (Formato de Relatório):
         
         ⚽ Jogo: [Nome]
-        🔥 Tendência: [Ex: Casa Aquecendo muito nos últimos 5 jogos]
-        🎯 Palpite: [Over 1.5 / Over 2.5]
-        📝 Motivo: [Explique cruzando a odd com a forma recente. Ex: "A odd @1.70 é valor pois o time melhorou 30% nas últimas semanas..."]
+        🔥 Tendência: [Ex: Casa Aquecendo muito]
+        🎯 Palpite: [Copie EXATAMENTE o texto do 'MERCADO DISPONÍVEL']
+        📝 Motivo: [Justifique se a odd vale o risco para essa linha específica. Ex: "A linha é alta (2.5), mas como os times estão aquecendo, @2.30 tem valor."]
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.4))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3)) # Temp mais baixa para evitar alucinação
         st.session_state['gemini_usage']['used'] += 1
         return response.text
         
