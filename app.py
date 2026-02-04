@@ -1415,33 +1415,62 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-# --- ESTRATÉGIA: CARTÃO IMINENTE (Sugerida pela IA - AJUSTADA) ---
-        # Lógica: Jogo tenso (placar apertado), final de jogo, muita agressividade
+# --- ESTRATÉGIA: AÇOUGUEIRO (Cartão para o Time) - CORRIGIDO PARA BET365 ---
+        # Lógica: Não buscar Over Geral (Bet fecha). Buscar quem está batendo.
         
-        # 1. Filtro de Tempo e Placar (60 a 85 min)
-        if 60 <= tempo <= 85 and abs(gh - ga) <= 1:
+        # 1. Filtro de Tempo (Deixar o jogo esquentar, mas antes do fim)
+        if 55 <= tempo <= 88:
             
-            # 2. Filtro de Intensidade (Chutes no Gol > 6 indica jogo vivo)
-            if total_chutes_gol >= 6: 
+            # 2. Extração de Faltas
+            faltas_h = get_v(stats_h, 'Fouls')
+            faltas_a = get_v(stats_a, 'Fouls')
+            cartoes_h = get_v(stats_h, 'Yellow Cards') + get_v(stats_h, 'Red Cards')
+            cartoes_a = get_v(stats_a, 'Yellow Cards') + get_v(stats_a, 'Red Cards')
+            
+            # 3. Identificar o "Açougueiro" (Quem bate mais)
+            diff_faltas = abs(faltas_h - faltas_a)
+            total_faltas = faltas_h + faltas_a
+            
+            # Gatilho: Jogo tenso (>12 faltas) E placar apertado
+            if total_faltas >= 12 and abs(gh - ga) <= 1:
                 
-                # 3. Filtro de Violência (Faltas e Cartões)
-                faltas_totais = get_v(stats_h, 'Fouls') + get_v(stats_a, 'Fouls')
-                cartoes_totais = get_v(stats_h, 'Yellow Cards') + get_v(stats_a, 'Yellow Cards')
+                alvo_cartao = None
+                motivo_cartao = ""
                 
-                # Gatilho: Jogo picado (>12 faltas) ou Juiz já mostrou serviço (>2 cartões)
-                if faltas_totais >= 12 or cartoes_totais >= 2:
+                # Cenário A: Time Perdendo e Batendo (Frustração)
+                if (gh < ga and faltas_h >= faltas_a):
+                    alvo_cartao = "Casa"
+                    motivo_cartao = "Perdendo + Agressivo"
+                elif (ga < gh and faltas_a >= faltas_h):
+                    alvo_cartao = "Visitante"
+                    motivo_cartao = "Perdendo + Agressivo"
                     
-                    # Definição de quem está batendo mais para sugerir o alvo
-                    time_faltoso = "Visitante"
-                    if get_v(stats_h, 'Fouls') > get_v(stats_a, 'Fouls'): time_faltoso = "Casa"
+                # Cenário B: Time Ganhando Apertado e Fazendo Cera/Falta Tática (Segurando)
+                elif (gh > ga and faltas_h >= 8 and tempo >= 80):
+                    alvo_cartao = "Casa"
+                    motivo_cartao = "Segurando Resultado (Cera)"
+                elif (ga > gh and faltas_a >= 8 and tempo >= 80):
+                    alvo_cartao = "Visitante"
+                    motivo_cartao = "Segurando Resultado (Cera)"
+
+                # Cenário C: O Açougueiro Puro (Bate muito mais que o outro)
+                elif diff_faltas >= 4:
+                    alvo_cartao = "Casa" if faltas_h > faltas_a else "Visitante"
+                    motivo_cartao = f"Bate muito mais (+{diff_faltas} faltas)"
+
+                # Se encontrou um alvo claro
+                if alvo_cartao:
+                    nome_time = j['teams']['home']['name'] if alvo_cartao == "Casa" else j['teams']['away']['name']
                     
-                    SINAIS.append({
-                        "tag": "🟨 Cartão Iminente",
-                        # AQUI ESTÁ A CORREÇÃO DA MENSAGEM:
-                        "ordem": f"👉 <b>FAZER:</b> Over Cartões (Asiático) OU Cartão p/ {time_faltoso}\n⚠️ <b>Cuidado:</b> Se a linha pedir +2 cartões, NÃO ENTRE.",
-                        "stats": f"🔥 Jogo Tenso: {faltas_totais} Faltas | Quem bate mais: {time_faltoso}",
-                        "rh": rh, "ra": ra, "favorito": "CARTAO"
-                    })
+                    # Evitar indicar se o time já tem muitos cartões (risco de vermelho direto ou mercado fechado)
+                    qtd_atual = cartoes_h if alvo_cartao == "Casa" else cartoes_a
+                    if qtd_atual <= 3: 
+                        SINAIS.append({
+                            "tag": "🟨 Cartão no Time",
+                            "ordem": f"👉 <b>FAZER:</b> Cartão para {alvo_cartao} ({nome_time})\n✅ Opções: <b>Próximo Cartão</b> ou <b>Total Time Over</b>",
+                            "stats": f"🪓 {motivo_cartao} | Faltas: {faltas_h}x{faltas_a}",
+                            "rh": rh, "ra": ra, "favorito": "CARTAO"
+                        })
 
         return SINAIS
     except: return []
