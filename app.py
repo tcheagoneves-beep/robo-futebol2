@@ -749,6 +749,12 @@ def gerar_multipla_matinal_ia(api_key):
             if count_validos >= 40: break
             
             fid = j['fixture']['id']
+            
+            # --- [NOVO] VALIDA SE TEM NA BET365 ANTES DE MANDAR P/ IA ---
+            odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
+            if odd_val == 0: continue # Pula se não tiver na Bet365
+            # ------------------------------------------------------------
+
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             
@@ -756,15 +762,18 @@ def gerar_multipla_matinal_ia(api_key):
                 stats_h = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
                 if stats_h and stats_h['home']['qtd'] > 0:
                     mapa_jogos[fid] = f"{home} x {away}"
-                    lista_jogos_txt += f"- ID {fid}: {home} x {away} ({j['league']['name']}) | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
+                    # Adicionei a Odd no texto para a IA saber que existe liquidez
+                    lista_jogos_txt += f"- ID {fid}: {home} x {away} ({j['league']['name']}) | Odd Ref: {odd_val} | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
                     count_validos += 1
             except: pass
 
         if not lista_jogos_txt: return None, []
         
+        # ... Resto da função continua igual ...
         contexto_firebase = carregar_contexto_global_firebase()
         df_sheets = st.session_state.get('historico_full', pd.DataFrame())
         winrate_sheets = "N/A"
+        # ... (mantém o restante do código original daqui para baixo)
         if not df_sheets.empty:
             greens = len(df_sheets[df_sheets['Resultado'].str.contains('GREEN', na=False)])
             total = len(df_sheets[df_sheets['Resultado'].isin(['✅ GREEN', '❌ RED'])])
@@ -776,12 +785,11 @@ def gerar_multipla_matinal_ia(api_key):
         
         DADOS GLOBAIS: Winrate Pessoal: {winrate_sheets}. {contexto_firebase}.
         
-        LISTA DE CANDIDATOS (DIVERSAS LIGAS):
+        LISTA DE CANDIDATOS (JÁ FILTRADOS NA BET365):
         {lista_jogos_txt}
         
         TAREFA: 
         Escolha os 2 ou 3 jogos estatisticamente MAIS SEGUROS para Over 0.5 Gols ou Over 1.5 Gols.
-        Não tenha preconceito com ligas menores, foque nos NÚMEROS (Porcentagem alta de Over).
         
         FORMATO JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
         """
