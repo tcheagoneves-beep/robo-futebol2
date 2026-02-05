@@ -839,7 +839,7 @@ def gerar_multipla_matinal_ia(api_key):
     except Exception as e: return None, []
 
 def gerar_insights_matinais_ia(api_key):
-    if not IA_ATIVADA: return "IA Offline.", {} # Retorna tupla agora
+    if not IA_ATIVADA: return "IA Offline."
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
         url = "https://v3.football.api-sports.io/fixtures"
@@ -849,26 +849,22 @@ def gerar_insights_matinais_ia(api_key):
         
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
         
-        if not jogos_candidatos: return "Sem jogos para analisar hoje.", {}
+        if not jogos_candidatos: return "Sem jogos para analisar hoje."
         
         lista_para_ia = ""
-        mapa_jogos = {} # <--- NOVO: Guarda os IDs reais
         count = 0
         random.shuffle(jogos_candidatos) 
         
         for j in jogos_candidatos:
-            if count >= 80: break 
+            if count >= 30: break 
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga = j['league']['name']
             
-            # Monta a chave exata que vai aparecer no texto
-            nome_jogo = f"{home} x {away}"
-            mapa_jogos[nome_jogo] = str(fid) # <--- Salva o ID Real
-
             # --- FILTRO 1: ODD NA BET365 ---
+            # Aqui pegamos o VALOR e o NOME (Ex: 'Over 2.5')
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
             if odd_val == 0 or odd_val < 1.45: continue 
             
@@ -879,6 +875,7 @@ def gerar_insights_matinais_ia(api_key):
                 h_mac = stats['home']['macro']; h_mic = stats['home']['micro']
                 a_mac = stats['away']['macro']; a_mic = stats['away']['micro']
                 
+                # Regra de Corte: Ignorar times que morreram recentemente (Micro < 40%)
                 if h_mic < 40 and a_mic < 40: continue
 
                 def get_trend(mac, mic):
@@ -890,6 +887,7 @@ def gerar_insights_matinais_ia(api_key):
                 trend_h = get_trend(h_mac, h_mic)
                 trend_a = get_trend(a_mac, a_mic)
 
+                # --- CORREÇÃO AQUI: PASSAMOS O 'odd_nome' (O MERCADO EXATO) PARA A IA ---
                 lista_para_ia += f"""
                 - Jogo: {home} x {away} ({liga})
                   MERCADO DISPONÍVEL: {odd_nome} | ODD: @{odd_val:.2f}
@@ -898,9 +896,8 @@ def gerar_insights_matinais_ia(api_key):
                 """
                 count += 1
         
-        if not lista_para_ia: return "Nenhum jogo com valor e tendência positiva encontrado hoje.", {}
+        if not lista_para_ia: return "Nenhum jogo com valor e tendência positiva encontrado hoje."
 
-        # MANTIVE SEU PROMPT ORIGINAL EXATAMENTE IGUAL
         prompt = f"""
         ATUE COMO UM ANALISTA DE PERFORMANCE E ODDS (SNIPER).
         
@@ -910,12 +907,10 @@ def gerar_insights_matinais_ia(api_key):
         DADOS:
         {lista_para_ia}
         
-        SUA MISSÃO (TOP ESCOLHAS):
+        SUA MISSÃO (TOP 3 ESCOLHAS):
         1. Analise se a "MERCADO DISPONÍVEL" bate com a "Tendência Recente" dos times.
         2. REGRA CRÍTICA: Se a Bet365 está oferecendo "Over 2.5", seu palpite TEM QUE SER "Over 2.5". Não sugira "Over 1.5" usando a odd de 2.5. Seja preciso.
         3. Priorize confrontos "Aquecendo x Aquecendo".
-        4. Analise TODOS os jogos da lista.
-        5. NÃO SE LIMITE A 3. Se houver 15 oportunidades boas (EV+), liste as 15.
         
         SAÍDA (Formato de Relatório):
         
@@ -925,18 +920,18 @@ def gerar_insights_matinais_ia(api_key):
         📝 Motivo: [Justifique se a odd vale o risco para essa linha específica. Ex: "A linha é alta (2.5), mas como os times estão aquecendo, @2.30 tem valor."]
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3)) # Temp mais baixa para evitar alucinação
         st.session_state['gemini_usage']['used'] += 1
+        return response.text
         
-        return response.text, mapa_jogos # Retorna o texto E o mapa de IDs
-
-    except Exception as e: return f"Erro na análise: {str(e)}", {}
+    except Exception as e: return f"Erro na análise: {str(e)}"
 
 def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
     
-    # Focamos apenas nas Ligas onde a Bet365 abre mercado de Jogador (Chutes/Defesas)
+    # IDs das Ligas onde a Bet365 costuma abrir mercado de Player Props (Defesas)
+    # 39=Premier, 140=LaLiga, 135=SerieA, 78=Bundesliga, 61=Ligue1, 2=UCL, 3=UEL, 71=BR-A, 72=BR-B
     LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
 
     try:
@@ -956,23 +951,21 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         count_validos = 0
         
         for j in jogos_candidatos:
-            if count_validos >= 20: break 
+            if count_validos >= 25: break 
             
             fid = j['fixture']['id']
             lid = j['league']['id']
             
-            # Só analisa ligas grandes (onde tem mercado de jogador)
-            if lid not in LIGAS_BIG_MARKETS: continue
-            
-            # 1. BLINDAGEM BÁSICA
+            # 1. BLINDAGEM BÁSICA (Tem odd na Bet365?)
             odd_check, _ = buscar_odd_pre_match(api_key, fid)
             if odd_check == 0: continue
 
-            # 2. DEFINIÇÃO DE CENÁRIO (Player Props)
+            # 2. DEFINIÇÃO DE CENÁRIO (Favorito ou Equilibrado)
             cenario_tatico = "Indefinido"
+            pode_ter_prop = (lid in LIGAS_BIG_MARKETS) # Só busca defesa em liga grande
             
             try:
-                # Busca Match Winner para ver quem vai amassar
+                # Busca Match Winner para ver desequilíbrio
                 url_odd = "https://v3.football.api-sports.io/odds"
                 r_odd = requests.get(url_odd, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "8", "bet": "1"}).json()
                 
@@ -981,59 +974,66 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     odd_casa = next((float(v['odd']) for v in vals if v['value'] == 'Home'), 0)
                     odd_fora = next((float(v['odd']) for v in vals if v['value'] == 'Away'), 0)
                     
-                    # Lógica para CHUTES (Artilheiro do Favorito)
-                    if odd_casa > 0 and odd_casa < 1.50: 
-                        cenario_tatico = "DOMÍNIO TOTAL CASA (Oportunidade: Chutes do Atacante Casa + Defesas Goleiro Visitante)"
-                    elif odd_fora > 0 and odd_fora < 1.50: 
-                        cenario_tatico = "DOMÍNIO TOTAL VISITANTE (Oportunidade: Chutes do Atacante Visitante + Defesas Goleiro Casa)"
-                    # Lógica para Jogo Aberto (Ambos Chutam)
-                    elif odd_casa < 2.50 and odd_fora < 2.50:
-                         cenario_tatico = "JOGO ABERTO/TROCAÇÃO (Oportunidade: Chutes dos dois lados)"
+                    # Lógica de Massacre (Para Goleiros - Só em Ligas Grandes)
+                    if pode_ter_prop:
+                        if odd_casa > 0 and odd_casa < 1.55: 
+                            cenario_tatico = "MASSACRE CASA (Foco: Goleiro Visitante)"
+                        elif odd_fora > 0 and odd_fora < 1.55: 
+                            cenario_tatico = "MASSACRE VISITANTE (Foco: Goleiro Casa)"
+                    
+                    # Lógica de Cartões (Qualquer Liga com Juiz)
+                    if "MASSACRE" not in cenario_tatico:
+                        if abs(odd_casa - odd_fora) < 0.5 or (odd_casa > 2.0 and odd_fora > 2.0):
+                            cenario_tatico = "JOGO TENSO/EQUILIBRADO (Foco: Cartões)"
+                        else:
+                            cenario_tatico = "Jogo Normal (Avaliar apenas se Juiz for Rigoroso)"
             except:
                 cenario_tatico = "Sem Odds Winner"
 
-            if "Indefinido" in cenario_tatico or "Sem" in cenario_tatico: continue
-
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
+            referee = j['fixture'].get('referee', 'Desconhecido')
             liga_nome = j['league']['name']
             
-            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Cenário: {cenario_tatico}\n"
-            count_validos += 1
+            # Adiciona ao prompt apenas se tiver um cenário interessante ou juiz
+            if referee or "MASSACRE" in cenario_tatico or "TENSO" in cenario_tatico:
+                dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Juiz: {referee} | Cenário: {cenario_tatico}\n"
+                count_validos += 1
 
         if not dados_analise: return []
 
         prompt = f"""
-        ATUE COMO UM ANALISTA DE "PLAYER PROPS" (MERCADO DE JOGADORES BET365).
+        ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS (BET365).
         
-        Analise os jogos abaixo. Você tem conhecimento sobre os elencos e artilheiros dos times.
+        Analise a lista abaixo e selecione AS 3 MELHORES OPORTUNIDADES.
         
-        LISTA DE JOGOS:
+        LISTA DE JOGOS E CENÁRIOS:
         {dados_analise}
         
-        SUA MISSÃO (TOP 3 OPORTUNIDADES):
-        Encontre valor em CHUTES (Finalizações) ou DEFESAS (Goleiro).
+        REGRAS DE OURO (OBRIGATÓRIO):
         
-        REGRAS DE OURO:
-        1. 🎯 CHUTES (FINALIZAÇÃO):
-           - Se o cenário for "DOMÍNIO", indique o Principal Atacante (Camisa 9) do time favorito.
-           - Mercado Alvo: "Over 0.5 Chutes ao Gol" (Segurança) ou "Over 1.5 Chutes" (Volume).
-           - Cite o NOME do jogador.
-           
-        2. 🧤 DEFESAS (MURALHA):
-           - Se o cenário for "DOMÍNIO", indique o Goleiro do time que vai sofrer pressão.
-           - Indique "Over 2.5 Defesas" ou "Over 3.5 Defesas".
+        1. 🧤 PARA DEFESAS (MURALHA):
+           - SÓ INDIQUE se o cenário for "MASSACRE".
+           - NÃO USE "Over X". Você DEVE estimar a linha.
+           - Se for massacre absurdo (Odd < 1.30), indique "Over 3.5 Defesas".
+           - Se for massacre normal (Odd < 1.55), indique "Over 2.5 Defesas".
+           - Indique o nome do GOLEIRO DO TIME FRACO (ou "Goleiro do [Nome do Time]").
+        
+        2. 🟨 PARA CARTÕES (SNIPER):
+           - SÓ INDIQUE se o cenário for "TENSO" ou se você (IA) souber que o Juiz é rigoroso.
+           - Linha padrão: "Over 3.5 Cartões" (jogo normal) ou "Over 4.5 Cartões" (clássico/tenso).
+           - Evite ligas sub-19 ou amistosos para cartões.
         
         SAÍDA JSON:
         {{
             "sinais": [
                 {{
                     "fid": "...",
-                    "tipo": "JOGADOR",
-                    "titulo": "🎯 SNIPER DE JOGADOR",
+                    "tipo": "GOLEIRO" ou "CARTAO",
+                    "titulo": "🧤 MURALHA" ou "🟨 SNIPER",
                     "jogo": "Time A x Time B",
-                    "destaque": "Ex: O Time A é muito favorito, Haaland deve ter muitas chances.",
-                    "indicacao": "Erling Haaland - Over 1.5 Chutes ao Gol"
+                    "destaque": "Motivo tático (Ex: Massacre do mandante obriga goleiro a trabalhar)",
+                    "indicacao": "Over 2.5 Defesas do Goleiro do [Time] (Odd Est. @1.80)"
                 }}
             ]
         }}
@@ -1283,88 +1283,97 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         # Casa
         chutes_h = gv(s1, 'Total Shots'); gol_h = gv(s1, 'Shots on Goal')
         cantos_h = gv(s1, 'Corner Kicks'); atq_perigo_h = gv(s1, 'Dangerous Attacks')
-        faltas_h = gv(s1, 'Fouls'); cards_h = gv(s1, 'Yellow Cards') + gv(s1, 'Red Cards')
-        
+        posse_h = str(gv(s1, 'Ball Possession')).replace('%','')
+        try: posse_h = int(posse_h)
+        except: posse_h = 50
+
         # Fora
         chutes_a = gv(s2, 'Total Shots'); gol_a = gv(s2, 'Shots on Goal')
         cantos_a = gv(s2, 'Corner Kicks'); atq_perigo_a = gv(s2, 'Dangerous Attacks')
-        faltas_a = gv(s2, 'Fouls'); cards_a = gv(s2, 'Yellow Cards') + gv(s2, 'Red Cards')
         
         # Totais
         chutes_totais = chutes_h + chutes_a
+        chutes_gol_total = gol_h + gol_a
         atq_perigo_total = atq_perigo_h + atq_perigo_a
-        total_faltas = faltas_h + faltas_a
         
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
-        # --- FALLBACK DE DADOS (Se faltar Ataque Perigoso, usa Chutes) ---
+        # --- CORREÇÃO: FALLBACK DE DADOS (Se faltar Ataque Perigoso, usa Chutes) ---
         usou_estimativa = False
         if atq_perigo_total == 0 and chutes_totais > 0:
-            atq_perigo_total = int(chutes_totais * 5)
-            atq_perigo_h = int(chutes_h * 5); atq_perigo_a = int(chutes_a * 5)
+            # Estima que cada chute surgiu de pelo menos 1 ataque perigoso
+            # Multiplicamos por 1.5 para simular uma intensidade realista
+            atq_perigo_total = int(chutes_totais * 1.5)
+            # Distribui proporcionalmente (só para cálculo)
+            atq_perigo_h = int(chutes_h * 1.5)
+            atq_perigo_a = int(chutes_a * 1.5)
             usou_estimativa = True
 
-        # --- 2. ENGENHARIA DE DADOS (KPIs) ---
+        # --- 2. ENGENHARIA DE DADOS (KPIs AVANÇADOS) ---
+        
+        # A. Precisão (Qualidade do Chute)
         precisao_h = (gol_h / chutes_h * 100) if chutes_h > 0 else 0
         precisao_a = (gol_a / chutes_a * 100) if chutes_a > 0 else 0
         
+        # B. Intensidade (Ataques Perigosos por Minuto) - O Termômetro
         intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
-        status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.0 else "❄️ BAIXA" if intensidade_jogo < 0.6 else "😐 MÉDIA"
+        status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.2 else "❄️ BAIXA" if intensidade_jogo < 0.7 else "😐 MÉDIA"
 
+        # C. Dominância (Quem manda no jogo?)
         soma_atq = atq_perigo_h + atq_perigo_a
         dominancia_h = (atq_perigo_h / soma_atq * 100) if soma_atq > 0 else 50
         
         quem_manda = "EQUILIBRADO"
-        if dominancia_h > 60: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
-        elif dominancia_h < 40: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
+        if dominancia_h > 65: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
+        elif dominancia_h < 35: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
 
-        # --- 3. FILTRO PRÉVIO INTELIGENTE (SEMÁFORO) ---
-        # Lista de estratégias onde "Jogo Parado" é BOM (Não vetar por baixa intensidade)
-        strats_low_intensity = ["Under", "Morno", "Vovô", "Back", "Segurar"]
-        eh_strat_low = any(x in estrategia for x in strats_low_intensity)
-        eh_strat_card = "Cartão" in estrategia
+        # --- FILTRO PRÉVIO ---
+        if "Under" not in estrategia and "Morno" not in estrategia:
+            if intensidade_jogo < 0.5 and tempo > 20: 
+                 return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> - Jogo muito lento para operar.", "15%"
 
-        # Só veta por "jogo parado" se a estratégia EXIGIR ataque (Gols/Cantos)
-        if not usou_estimativa and not eh_strat_low and not eh_strat_card:
-            if intensidade_jogo < 0.5 and tempo > 15: 
-                 return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> (Dados Reais) - Jogo muito lento.", "15%"
-
+        # Aviso para o Prompt se o dado foi estimado
         aviso_dados = ""
-        if usou_estimativa: aviso_dados = "(NOTA: Intensidade projetada via Chutes)."
+        if usou_estimativa:
+            aviso_dados = "(NOTA: A API não forneceu 'Ataques Perigosos', a Intensidade foi estimada baseada nos Chutes)."
 
-        # --- 4. O PROMPT (Instruindo a IA sobre o objetivo) ---
+        # --- 3. O PROMPT ENRIQUECIDO ---
         prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL.
-        Analise os KPIs abaixo para validar a entrada '{estrategia}'.
+        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL (Data-Driven Decisions).
+        
+        Eu calculei os KPIs avançados do jogo. Use-os para classificar a oportunidade.
         {aviso_dados}
 
-        DADOS DO JOGO:
-        - Placar/Tempo: {dados_jogo['placar']} aos {tempo} min.
+        DADOS DO CONFRONTO:
+        - Jogo: {dados_jogo['jogo']} ({dados_jogo['placar']}) aos {tempo} min.
+        - Estratégia Sinalizada: {estrategia}
         
-        KPIs:
-        1. Intensidade (Ataque): {intensidade_jogo:.2f}/min ({status_intensidade}).
-        2. Disciplina (Faltas): {total_faltas} totais (Casa {faltas_h} x {faltas_a} Fora).
-        3. Cartões Atuais: Casa {cards_h} x {cards_a} Fora.
-        4. Tática: {quem_manda}.
+        KPIs AVANÇADOS (Calculados):
+        1. 🔥 Intensidade do Jogo: {intensidade_jogo:.2f} atq/min ({status_intensidade}).
+        2. ⚖️ Cenário Tático: {quem_manda}.
+        3. 🎯 Precisão de Chutes: Casa {precisao_h:.0f}% vs Fora {precisao_a:.0f}%.
+        4. 🛡️ Pressão (Momentum): Casa {rh} x {ra} Fora.
         
-        STATS EXTRAS:
-        - Chutes Gol: {gol_h} x {gol_a}
+        ESTATÍSTICAS BRUTAS:
+        - Ataques Perigosos (Ref): {atq_perigo_h} x {atq_perigo_a}
+        - Chutes no Gol: {gol_h} x {gol_a}
         - Escanteios: {cantos_h} x {cantos_a}
         
-        CONTEXTO: {extra_context}
+        CONTEXTO HISTÓRICO (Big Data):
+        {extra_context}
         
-        REGRAS DE DECISÃO (IMPORTANTE):
-        - SE A ESTRATÉGIA FOR 'CARTÃO': Ignore a intensidade de ataque baixa. Foque se há muitas faltas ({total_faltas}+) ou desequilíbrio emocional.
-        - SE A ESTRATÉGIA FOR 'UNDER/MORNO/VOVÔ': Baixa intensidade (<0.6) é SINAL DE APROVAÇÃO (DIAMANTE). Jogo parado é bom aqui.
-        - SE FOR GOLS/CANTOS: Exija intensidade alta (>0.8).
-        
-        CLASSIFIQUE:
-        💎 DIAMANTE: Dados perfeitos para o OBJETIVO da estratégia (Seja ele atacar ou defender).
-        ✅ PADRÃO: Dados aceitáveis.
-        ⚠️ ARRISCADO: Dados contraditórios (ex: pedir gol em jogo parado, ou pedir under em jogo frenético).
+        SUA MISSÃO - CLASSIFIQUE:
+        💎 DIAMANTE (Top 1%): Intensidade > 1.2, Dominância clara de quem precisa do gol OU jogo lá e cá (trocação) com alta precisão.
+        ✅ PADRÃO (Normal): Intensidade média, números coerentes com a estratégia. Segue o fluxo.
+        ⚠️ ARRISCADO (Evitar): Intensidade Baixa (<0.7), Dominância estéril (muita posse, zero chute) ou números contraditórios.
 
-        JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
+        SAÍDA JSON:
+        {{
+            "classe": "DIAMANTE" ou "PADRAO" ou "ARRISCADO",
+            "probabilidade": "0-100",
+            "motivo_tecnico": "Use os KPIs para justificar. Ex: 'Intensidade alta (1.5) com domínio total do Casa'."
+        }}
         """
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
@@ -1376,14 +1385,23 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         motivo = r_json.get('motivo_tecnico', 'Análise baseada em KPIs.')
         
         emoji = "✅"
-        if classe == "DIAMANTE" or (prob_val >= 85): emoji = "💎"; classe = "DIAMANTE"
-        elif classe == "ARRISCADO" or prob_val < 60: emoji = "⚠️"; classe = "ARRISCADO"
-        else: emoji = "✅"; classe = "APROVADO"
+        
+        # Ajuste Fino Pós-IA
+        if classe == "DIAMANTE" or (prob_val >= 85 and intensidade_jogo > 1.0):
+            emoji = "💎"
+            classe = "DIAMANTE"
+        elif classe == "ARRISCADO" or prob_val < 60:
+            emoji = "⚠️"
+            classe = "ARRISCADO"
+        else:
+            emoji = "✅"
+            classe = "APROVADO"
 
         prob_str = f"{prob_val}%"
         
+        # Montagem Visual
         html_analise = f"\n🤖 <b>IA ANALYTICS:</b>\n{emoji} <b>{classe} ({prob_str})</b>\n"
-        html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | Faltas: {total_faltas}</i>\n"
+        html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | {quem_manda}</i>\n"
         html_analise += f"📝 <i>{motivo}</i>"
         
         return html_analise, prob_str
@@ -1482,11 +1500,65 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-        return SINAIS  # <--- (IMPORTANTE) Dê 8 espaços (ou 2 Tabs) antes dessa linha
+# --- ESTRATÉGIA: AÇOUGUEIRO (Cartão para o Time) - CORRIGIDO PARA BET365 ---
+        # Lógica: Não buscar Over Geral (Bet fecha). Buscar quem está batendo.
         
-    except: return []  # <--- (IMPORTANTE) Dê 4 espaços (ou 1 Tab) antes dessa linha
+        # 1. Filtro de Tempo (Deixar o jogo esquentar, mas antes do fim)
+        if 55 <= tempo <= 88:
+            
+            # 2. Extração de Faltas
+            faltas_h = get_v(stats_h, 'Fouls')
+            faltas_a = get_v(stats_a, 'Fouls')
+            cartoes_h = get_v(stats_h, 'Yellow Cards') + get_v(stats_h, 'Red Cards')
+            cartoes_a = get_v(stats_a, 'Yellow Cards') + get_v(stats_a, 'Red Cards')
+            
+            # 3. Identificar o "Açougueiro" (Quem bate mais)
+            diff_faltas = abs(faltas_h - faltas_a)
+            total_faltas = faltas_h + faltas_a
+            
+            # Gatilho: Jogo tenso (>12 faltas) E placar apertado
+            if total_faltas >= 12 and abs(gh - ga) <= 1:
+                
+                alvo_cartao = None
+                motivo_cartao = ""
+                
+                # Cenário A: Time Perdendo e Batendo (Frustração)
+                if (gh < ga and faltas_h >= faltas_a):
+                    alvo_cartao = "Casa"
+                    motivo_cartao = "Perdendo + Agressivo"
+                elif (ga < gh and faltas_a >= faltas_h):
+                    alvo_cartao = "Visitante"
+                    motivo_cartao = "Perdendo + Agressivo"
+                    
+                # Cenário B: Time Ganhando Apertado e Fazendo Cera/Falta Tática (Segurando)
+                elif (gh > ga and faltas_h >= 8 and tempo >= 80):
+                    alvo_cartao = "Casa"
+                    motivo_cartao = "Segurando Resultado (Cera)"
+                elif (ga > gh and faltas_a >= 8 and tempo >= 80):
+                    alvo_cartao = "Visitante"
+                    motivo_cartao = "Segurando Resultado (Cera)"
 
+                # Cenário C: O Açougueiro Puro (Bate muito mais que o outro)
+                elif diff_faltas >= 4:
+                    alvo_cartao = "Casa" if faltas_h > faltas_a else "Visitante"
+                    motivo_cartao = f"Bate muito mais (+{diff_faltas} faltas)"
 
+                # Se encontrou um alvo claro
+                if alvo_cartao:
+                    nome_time = j['teams']['home']['name'] if alvo_cartao == "Casa" else j['teams']['away']['name']
+                    
+                    # Evitar indicar se o time já tem muitos cartões (risco de vermelho direto ou mercado fechado)
+                    qtd_atual = cartoes_h if alvo_cartao == "Casa" else cartoes_a
+                    if qtd_atual <= 3: 
+                        SINAIS.append({
+                            "tag": "🟨 Cartão no Time",
+                            "ordem": f"👉 <b>FAZER:</b> Cartão para {alvo_cartao} ({nome_time})\n✅ Opções: <b>Próximo Cartão</b> ou <b>Total Time Over</b>",
+                            "stats": f"🪓 {motivo_cartao} | Faltas: {faltas_h}x{faltas_a}",
+                            "rh": rh, "ra": ra, "favorito": "CARTAO"
+                        })
+
+        return SINAIS
+    except: return []
 
 # ==============================================================================
 # 5. FUNÇÕES DE SUPORTE, AUTOMAÇÃO E INTERFACE (O CORPO)
@@ -1644,51 +1716,6 @@ def criar_estrategia_nova_ia():
         return response.text.strip()
     except Exception as e: return f"Erro na criação: {str(e)}"
 
-
-def otimizar_estrategias_existentes_ia():
-    if not IA_ATIVADA: return "IA Offline."
-    
-    # 1. Carrega o histórico
-    df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Você precisa de histórico (Greens/Reds) para eu poder otimizar algo."
-    
-    try:
-        # 2. Prepara os dados matemáticos para a IA
-        # Conta quantos Greens e Reds cada estratégia teve
-        resumo = df[df['Resultado'].isin(['✅ GREEN', '❌ RED', 'GREEN', 'RED'])].copy()
-        
-        if resumo.empty: return "Sem operações finalizadas para analisar."
-        
-        stats_str = ""
-        grupos = resumo.groupby('Estrategia')
-        
-        for nome, grupo in grupos:
-            greens = len(grupo[grupo['Resultado'].str.contains('GREEN', na=False)])
-            reds = len(grupo[grupo['Resultado'].str.contains('RED', na=False)])
-            total = greens + reds
-            winrate = (greens / total * 100) if total > 0 else 0
-            stats_str += f"- {nome}: {greens}G / {reds}R ({winrate:.1f}% Winrate)\n"
-
-        # 3. O Prompt de Consultoria
-        prompt = f"""
-        ATUE COMO UM GESTOR DE ALTA PERFORMANCE (BETTING QUANT).
-        
-        Analise a performance real das minhas estratégias atuais:
-        {stats_str}
-        
-        SUA MISSÃO (DIAGNÓSTICO E CURA):
-        1. 🚨 **O Ponto Fraco:** Qual estratégia está dando prejuízo ou tem winrate perigoso (<60%)? O que podemos ajustar nela? (Ex: ser mais rígido no tempo ou chutes).
-        2. 💎 **A Mina de Ouro:** Qual estratégia está voando (>80%)? Como podemos explorar mais ela?
-        
-        Responda com bullet points diretos e acionáveis.
-        """
-        
-        # 4. Chama a IA
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
-        st.session_state['gemini_usage']['used'] += 1
-        return response.text.strip()
-        
-    except Exception as e: return f"Erro na análise: {str(e)}"
 # ==============================================================================
 
 def enviar_analise_estrategia(token, chat_ids):
@@ -1769,28 +1796,9 @@ def _worker_telegram(token, chat_id, msg):
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
-    
-    # --- LÓGICA DE FATIAMENTO (SPLITTER) ---
-    msgs_para_enviar = []
-    if len(msg) <= 4090:
-        msgs_para_enviar.append(msg)
-    else:
-        # Se for muito grande, quebra linha a linha para não cortar HTML no meio
-        buffer = ""
-        linhas = msg.split('\n')
-        for linha in linhas:
-            if len(buffer) + len(linha) + 1 > 4000:
-                msgs_para_enviar.append(buffer)
-                buffer = linha + "\n"
-            else:
-                buffer += linha + "\n"
-        if buffer: msgs_para_enviar.append(buffer)
-
     for cid in ids:
-        for m in msgs_para_enviar:
-            t = threading.Thread(target=_worker_telegram, args=(token, cid, m))
-            t.daemon = True; t.start()
-            time.sleep(0.3) # Delay anti-spam do Telegram
+        t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
+        t.daemon = True; t.start()
 
 def salvar_snipers_do_texto(texto_ia):
     if not texto_ia or "Sem jogos" in texto_ia: return
@@ -1901,7 +1909,7 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     # 1. Sniper Matinal
-    if 7 <= agora.hour < 11:
+    if 8 <= agora.hour < 11:
         if not st.session_state['matinal_enviado']:
             # A função gerar_insights_matinais_ia JÁ FAZ O FILTRO DE ODDS internamente agora
             insights = gerar_insights_matinais_ia(api_key)
@@ -2001,57 +2009,27 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
 
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
-    # Filtra tudo que é Sniper (Matinal ou Jogador) e está Pendente
-    snipers = [s for s in hist if ("Sniper" in s['Estrategia'] or "JOGADOR" in s['Estrategia'] or "Mercado" in s['Liga']) and s['Resultado'] == "Pendente"]
-    
+    snipers = [s for s in hist if "Sniper" in s['Estrategia'] and s['Resultado'] == "Pendente"]
     if not snipers: return
-    
     updates = []
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
-    
     for s in snipers:
-        if "SNIPER_" in str(s['FID']): continue # Ignora IDs falsos de teste
-        
-        fid = str(s['FID']).replace("ALT_", "") # Limpa prefixos se houver
-        jogo = ids_live.get(fid)
-        
-        # Se não tá no Live, busca na API (Pode ter acabado)
-        if not jogo:
-            try:
-                res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
-                if res.get('response'): jogo = res['response'][0]
-            except: pass
-            
-        if jogo:
-            status = jogo['fixture']['status']['short']
-            
-            # Só processa se acabou (FT) ou foi cancelado/adiado
-            if status in ['FT', 'AET', 'PEN', 'INT', 'ABD', 'PST']:
-                gh = jogo['goals']['home'] or 0
-                ga = jogo['goals']['away'] or 0
-                placar_final = f"{gh}x{ga}"
-                
-                res_final = "❌ RED" # Padrão
-                
-                # Regra 1: Sniper Matinal (Over Gols Geral)
-                if "Sniper Matinal" in s['Estrategia']:
-                     # Se saiu pelo menos 1 gol, geralmente é Green em Over ou deu chance de Cashout
-                     # Mas se a aposta for Over 2.5, precisamos ser específicos. 
-                     # Como o Sniper Matinal da IA geralmente indica valor, vamos considerar:
-                     if (gh + ga) >= 1: res_final = "✅ GREEN" # Simplificação para Over 0.5/1.5
-                
-                # Regra 2: Player Props (Chutes) - Requer leitura manual ou API avançada de jogadores
-                # Como a API padrão free/basic as vezes não dá dados de jogadores no endpoint de fixture simples,
-                # vamos focar no Resultado do Jogo/Gols para fechar o status ou manter Pendente para auditoria manual
-                elif "JOGADOR" in s['Estrategia'] or "Mercado Alternativo" in s['Liga']:
-                    # Aqui é complexo validar automaticamente sem endpoint de players.
-                    # Vamos marcar como "Finalizado (Auditar)" para você saber que o jogo acabou
-                    res_final = f"🏁 FIM ({placar_final})"
-
-                s['Resultado'] = res_final
-                s['Placar_Sinal'] = f"Final: {placar_final}"
-                updates.append(s)
-                
+        if "SNIPER_" in str(s['FID']): pass
+        else:
+            fid = str(s['FID'])
+            jogo = ids_live.get(fid)
+            if not jogo:
+                try:
+                    res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
+                    if res.get('response'): jogo = res['response'][0]
+                except: pass
+            if jogo:
+                status = jogo['fixture']['status']['short']
+                if status in ['FT', 'AET', 'PEN']:
+                    gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0
+                    res = '✅ GREEN' if (gh+ga) > 0 else '❌ RED'
+                    s['Resultado'] = res
+                    updates.append(s)
     if updates: atualizar_historico_ram(updates)
 
 def verificar_var_rollback(jogos_live, token, chats):
@@ -2507,21 +2485,14 @@ if st.session_state.ROBO_LIGADO:
                             emoji_sinal = "⏳"
                             bloco_aviso_odd = f"👀 <b>AGUARDE VALORIZAR (@{odd_val:.2f})</b>\n🎯 <i>Meta: Entrar acima de @{ODD_MINIMA_LIVE:.2f}</i>\n────────────────\n"
                         
-                        # --- AQUI ESTAVA FALTANDO ---
-                        elif odd_val >= ODD_MINIMA_LIVE:
-                            # ZONA DE VALOR (Ex: 1.65+) -> Apenas mostra a Odd bonita
-                            emoji_sinal = "✅"
-                            bloco_aviso_odd = f"🔥 <b>ODD DE VALOR: @{odd_val:.2f}</b>\n────────────────\n"
-
                         # -----------------------------------
-                        # MANTIVE O SEU CÓDIGO ORIGINAL DAQUI PRA BAIXO:
+
                         if odd_val >= 1.80:
                             destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
                             st.session_state['alertas_enviados'].add(uid_super)
                         
                         opiniao_txt = ""; prob_txt = "..."; opiniao_db = "Neutro"
                         
-                        # --- INICIO DO BLOCO NOVO (COM VETO DA IA) ---
                         if IA_ATIVADA:
                             try:
                                 time.sleep(0.2) 
@@ -2534,23 +2505,16 @@ if st.session_state.ROBO_LIGADO:
                                 else: opiniao_db = "Neutro"
                             except: pass
                         
-                        # MÁGICA DO BI: Se a IA não aprovar, marca como VETADO
-                        status_inicial = "Pendente"
-                        if opiniao_db == "Neutro": 
-                            status_inicial = "⛔ VETADO"
-
                         item = {
                             "FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'),
                             "Liga": j['league']['name'], "Jogo": f"{home} x {away} ({placar})", "Placar_Sinal": placar,
-                            "Estrategia": s['tag'], 
-                            "Resultado": status_inicial, # <--- AQUI MUDOU
+                            "Estrategia": s['tag'], "Resultado": "Pendente",
                             "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "",
                             "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db, "Probabilidade": prob_txt 
                         }
                         
                         if adicionar_historico(item):
                             try:
-                                # --- MONTAGEM DA MENSAGEM (Manteve igual) ---
                                 txt_winrate_historico = ""
                                 if txt_pessoal != "Neutro": txt_winrate_historico = f" | 👤 {txt_pessoal}"
 
@@ -2586,24 +2550,31 @@ if st.session_state.ROBO_LIGADO:
                                         txt_stats_extras += f"\n🔎 <b>Raio-X (50 Jogos):</b>\nFreq. Over 1.5: Casa <b>{dados_50['home']['over15_ft']}%</b> | Fora <b>{dados_50['away']['over15_ft']}%</b>"
                                 except: pass
 
-                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
+                                # --- MONTAGEM FINAL DA MENSAGEM ---
+                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n" # Título Original (com nome da estratégia)
                                 msg += f"🏆 {liga_safe}\n"
                                 msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
                                 msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
-                                msg += f"{bloco_aviso_odd}"
-                                msg += f"{texto_acao_original}\n"
+                                
+                                # AQUI ESTÁ A CORREÇÃO:
+                                # 1. Primeiro mostramos o AVISO (se houver)
+                                msg += f"{bloco_aviso_odd}" 
+                                # 2. Depois mostramos a AÇÃO (O que fazer)
+                                msg += f"{texto_acao_original}\n" 
+                                
                                 if destaque_odd: msg += f"{destaque_odd}\n"
-                                msg += f"{txt_stats_extras}\n"
-                                msg += "──────────────\n"
+                                
+                                msg += f"{txt_stats_extras}\n" 
+                                msg += "──────────────\n" 
+                                
                                 msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
                                 msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
                                 msg += linha_bd
-                                msg += "\n"
-                                msg += f"{opiniao_txt}"
+                                msg += "\n" 
+                                msg += f"{opiniao_txt}" 
                                 
                                 sent_status = False
                                 
-                                # --- NOVA LÓGICA DE ENVIO (SÓ ENVIA SE APROVADO) ---
                                 if opiniao_db == "Aprovado":
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
@@ -2613,12 +2584,9 @@ if st.session_state.ROBO_LIGADO:
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
                                     st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
-                                else:
-                                    # Se foi VETADO (Neutro), não envia nada
-                                    st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
+                                else: st.toast(f"🛑 Sinal Retido: {s['tag']}")
 
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
-                        # --- FIM DO BLOCO NOVO ---
 
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
