@@ -2675,7 +2675,7 @@ if st.session_state.ROBO_LIGADO:
                                 opiniao_txt, prob_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context=extra_ctx, time_favoravel=time_fav_ia)
                                 
                                 # Classifica a resposta
-                                if "aprovado" in opiniao_txt.lower(): 
+                                if "aprovado" in opiniao_txt.lower() or "diamante" in opiniao_txt.lower(): 
                                     opiniao_db = "Aprovado"
                                 elif "arriscado" in opiniao_txt.lower(): 
                                     opiniao_db = "Arriscado"
