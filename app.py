@@ -1752,7 +1752,7 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     
     # 1. Sniper Matinal (07h as 11h)
-    if 7 <= agora.hour < 11:
+    if 7 <= agora.hour < 12:
         if not st.session_state['matinal_enviado']:
             
             # Chama a função nova que retorna a LISTA e o Status
