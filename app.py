@@ -745,11 +745,11 @@ def carregar_contexto_global_firebase():
         return f"BIG DATA (Base Massiva {stats_gerais['total']} jogos): Média de Gols {media_gols:.2f} | Taxa Over 0.5 Global: {pct_over05:.1f}%."
     except Exception as e: return f"Erro Firebase: {e}"
 
-# --- FUNÇÃO: BUSCA O NOME DO CRAQUE (ELENCO) ---
+# --- FUNÇÃO NOVA: BUSCA O NOME DO CRAQUE (ELENCO) ---
 @st.cache_data(ttl=86400)
 def buscar_artilheiro_top(api_key, team_id, league_id):
     try:
-        # Tenta pegar do elenco (Squad) para ser preciso
+        # Tenta pegar do elenco (Squad) para ser preciso e econômico
         url_squad = "https://v3.football.api-sports.io/players/squads"
         r = requests.get(url_squad, headers={"x-apisports-key": api_key}, params={"team": team_id}).json()
         
@@ -760,7 +760,7 @@ def buscar_artilheiro_top(api_key, team_id, league_id):
             if atacantes:
                 return atacantes[0]['name'] # Pega o primeiro atacante da lista
             elif players:
-                return players[0]['name'] # Fallback
+                return players[0]['name'] # Fallback: qualquer jogador se não achar atacante
                 
         return "Camisa 9"
     except: return "Artilheiro"
@@ -835,7 +835,7 @@ def gerar_insights_matinais_ia(api_key):
         
         if not lista_para_ia: return [], "Filtro eliminou tudo."
         
-        # PROMPT DETALHADO (VISUAL PRESERVADO)
+        # PROMPT DETALHADO (PERSUASIVO - MANTENDO SEU GOSTO VISUAL)
         prompt = f"""
         ATUE COMO UM ANALISTA DE PERFORMANCE E ODDS (SNIPER).
         
@@ -892,7 +892,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             if count_validos >= 20: break 
             fid = j['fixture']['id']; lid = j['league']['id']
             
-            # --- EXTRAI O JUIZ ---
+            # --- EXTRAI O JUIZ (CRUCIAL PARA CARTÕES) ---
             juiz_nome = j['fixture'].get('referee')
             if not juiz_nome: juiz_nome = "Desconhecido"
             
@@ -913,10 +913,12 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     
                     # 1. CENÁRIO MASSACRE (CHUTES ou MURALHA)
                     if lid in LIGAS_BIG_MARKETS:
+                        # Se Casa é super favorita (Odd < 1.90)
                         if odd_casa > 0 and odd_casa < 1.90: 
                             nome_craque = buscar_artilheiro_top(api_key, j['teams']['home']['id'], lid)
                             cenario_tatico = f"MASSACRE CASA (Foco: Chutes de {nome_craque} ou Defesas do Goleiro Visitante)"
                             odd_referencia = 1.57
+                        # Se Visitante é super favorito
                         elif odd_fora > 0 and odd_fora < 1.90: 
                             nome_craque = buscar_artilheiro_top(api_key, j['teams']['away']['id'], lid)
                             cenario_tatico = f"MASSACRE VISITANTE (Foco: Chutes de {nome_craque} ou Defesas do Goleiro Casa)"
@@ -924,7 +926,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     
                     # 2. CENÁRIO GUERRA (CARTÕES)
                     if "MASSACRE" not in cenario_tatico:
-                        # Se as odds são altas, o jogo é parelho e tenso
+                        # Se as odds são altas (> 2.00 para ambos), o jogo é parelho e tenso
                         if odd_casa > 2.00 and odd_fora > 2.00:
                             cenario_tatico = "GUERRA/TRUNCADO (Foco: Over Cartões)"
                             odd_referencia = 1.83 
@@ -941,6 +943,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
 
         if not dados_analise: return []
 
+        # PROMPT ANALISTA DE MERCADOS ESPECIAIS
         prompt = f"""
         ATUE COMO UM ANALISTA DE MERCADOS ESPECIAIS (PLAYER PROPS & CARDS).
         
@@ -964,7 +967,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
            
         3. SE FOR "MASSACRE" (Muralha/Defesas):
            - Se o favorito chuta muito, o goleiro rival trabalha.
-           - Indique "Goleiro do [Time Azarão] Over 2.5 Defesas".
+           - Indique "Goleiro do [Time Azarão] Over 2.5 Defesas" (ou 3.5 se o massacre for grande).
            - TIPO: "MURALHA"
         
         SAÍDA JSON:
@@ -987,11 +990,74 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         return json.loads(response.text).get('sinais', [])
     except: return []
 
-# [MÓDULO] ALAVANCAGEM (Simplificado para manter compatibilidade)
+# [MÓDULO] ALAVANCAGEM SNIPER (TOP 3)
 def gerar_bet_builder_alavancagem(api_key):
     if not IA_ATIVADA: return []
-    # (Lógica original de alavancagem mantida para economizar espaço aqui, já está no sistema)
-    return []
+    hoje = get_time_br().strftime('%Y-%m-%d')
+    try:
+        url = "https://v3.football.api-sports.io/fixtures"
+        params = {"date": hoje, "timezone": "America/Sao_Paulo"}
+        res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
+        jogos = res.get('response', [])
+        
+        LIGAS_ALAVANCAGEM = [39, 140, 78, 135, 61, 71, 72, 2, 3] 
+        candidatos = [j for j in jogos if j['league']['id'] in LIGAS_ALAVANCAGEM]
+        
+        if not candidatos: return []
+        
+        lista_provaveis = []
+        df_historico = st.session_state.get('historico_full', pd.DataFrame())
+
+        for j in candidatos:
+            try:
+                home_nm = j['teams']['home']['name']; away_nm = j['teams']['away']['name']
+                home_id = j['teams']['home']['id']; away_id = j['teams']['away']['id']
+                dados_bd = consultar_bigdata_cenario_completo(home_id, away_id)
+                txt_historico_pessoal = "Sem histórico recente."
+                wr_h = 0; wr_a = 0
+                if not df_historico.empty:
+                    f_h = df_historico[df_historico['Jogo'].str.contains(home_nm, na=False, case=False)]
+                    f_a = df_historico[df_historico['Jogo'].str.contains(away_nm, na=False, case=False)]
+                    if len(f_h) > 0: wr_h = len(f_h[f_h['Resultado'].str.contains('GREEN', na=False)]) / len(f_h) * 100
+                    if len(f_a) > 0: wr_a = len(f_a[f_a['Resultado'].str.contains('GREEN', na=False)]) / len(f_a) * 100
+                    if len(f_h) > 0 or len(f_a) > 0:
+                        txt_historico_pessoal = f"Histórico: {home_nm} ({wr_h:.0f}%) | {away_nm} ({wr_a:.0f}%)."
+
+                score = 0
+                if "7" in dados_bd or "8" in dados_bd or "9" in dados_bd: score += 2 
+                if (len(f_h) > 2 and wr_h < 40) or (len(f_a) > 2 and wr_a < 40): score -= 5
+                
+                if score >= 2:
+                    lista_provaveis.append({
+                        "jogo": j, "bigdata": dados_bd, "historico": txt_historico_pessoal,
+                        "referee": j['fixture'].get('referee', 'Desconhecido'), "score": score
+                    })
+            except: pass
+            
+        if not lista_provaveis: return []
+        lista_provaveis.sort(key=lambda x: x['score'], reverse=True)
+        top_picks = lista_provaveis[:3]
+        
+        resultados_finais = []
+        for pick in top_picks:
+            j = pick['jogo']; home = j['teams']['home']['name']; away = j['teams']['away']['name']; fid = j['fixture']['id']
+            prompt = f"""
+            ATUE COMO ANALISTA SÊNIOR DE ALAVANCAGEM.
+            MONTE UM BET BUILDER PARA ESTE JOGO.
+            DADOS: {home} x {away} ({j['league']['name']}) | BD: {pick['bigdata']} | HIST: {pick['historico']} | JUIZ: {pick['referee']}
+            SAÍDA JSON: {{ "titulo": "🚀 ALAVANCAGEM {home} vs {away}", "selecoes": ["Vencedor...", "Gols...", "Cartões..."], "analise_ia": "Explicação técnica.", "confianca": "Alta" }}
+            """
+            try:
+                time.sleep(1)
+                response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
+                st.session_state['gemini_usage']['used'] += 1
+                r_json = json.loads(response.text)
+                r_json['fid'] = fid
+                r_json['jogo'] = f"{home} x {away}"
+                resultados_finais.append(r_json)
+            except: pass
+        return resultados_finais
+    except: return []
 # ==============================================================================
 # 4. INTELIGÊNCIA ARTIFICIAL, CÁLCULOS E ESTRATÉGIAS (O CÉREBRO)
 # ==============================================================================
@@ -1126,81 +1192,88 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
         return valor
     except: return 1.50
 
+# --- CÉREBRO AO VIVO: CRUZAMENTO API + BIG DATA + SHEETS ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
     if not IA_ATIVADA: return "", "N/A"
     try:
+        # --- 1. Extração de Dados Brutos ---
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
-        # Dados brutos
+        # Casa
         chutes_h = gv(s1, 'Total Shots'); gol_h = gv(s1, 'Shots on Goal')
         cantos_h = gv(s1, 'Corner Kicks'); atq_perigo_h = gv(s1, 'Dangerous Attacks')
         faltas_h = gv(s1, 'Fouls'); cards_h = gv(s1, 'Yellow Cards') + gv(s1, 'Red Cards')
+        
+        # Fora
         chutes_a = gv(s2, 'Total Shots'); gol_a = gv(s2, 'Shots on Goal')
         cantos_a = gv(s2, 'Corner Kicks'); atq_perigo_a = gv(s2, 'Dangerous Attacks')
         faltas_a = gv(s2, 'Fouls'); cards_a = gv(s2, 'Yellow Cards') + gv(s2, 'Red Cards')
         
+        # Totais e Tempo
         chutes_totais = chutes_h + chutes_a
         atq_perigo_total = atq_perigo_h + atq_perigo_a
         total_faltas = faltas_h + faltas_a
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
-        # Fallback de dados
+        # Fallback de dados (Se API falhar em ataques perigosos)
         usou_estimativa = False
         if atq_perigo_total == 0 and chutes_totais > 0:
             atq_perigo_total = int(chutes_totais * 5)
             atq_perigo_h = int(chutes_h * 5); atq_perigo_a = int(chutes_a * 5)
             usou_estimativa = True
 
-        precisao_h = (gol_h / chutes_h * 100) if chutes_h > 0 else 0
-        precisao_a = (gol_a / chutes_a * 100) if chutes_a > 0 else 0
+        # --- 2. ENGENHARIA DE DADOS (KPIs) ---
         intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
         status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.0 else "❄️ BAIXA" if intensidade_jogo < 0.6 else "😐 MÉDIA"
+
         soma_atq = atq_perigo_h + atq_perigo_a
         dominancia_h = (atq_perigo_h / soma_atq * 100) if soma_atq > 0 else 50
         quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)" if dominancia_h > 60 else f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)" if dominancia_h < 40 else "EQUILIBRADO"
 
-        # Veto por baixa intensidade (exceto estratégias de defesa/cartão)
+        # --- 3. FILTRO DE INTENSIDADE (Semáforo Inicial) ---
         strats_low_intensity = ["Under", "Morno", "Vovô", "Back", "Segurar"]
         eh_strat_low = any(x in estrategia for x in strats_low_intensity)
         eh_strat_card = "Cartão" in estrategia
+
+        # Só veta por "jogo parado" se a estratégia EXIGIR ataque
         if not usou_estimativa and not eh_strat_low and not eh_strat_card:
             if intensidade_jogo < 0.5 and tempo > 15: 
                  return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> (Dados Reais) - Jogo muito lento.", "15%"
 
         aviso_dados = "(NOTA: Intensidade projetada via Chutes)." if usou_estimativa else ""
 
-        # O PROMPT DATA DRIVEN (TRIANGULAÇÃO)
+        # --- 4. O PROMPT DATA DRIVEN (TRIANGULAÇÃO OBRIGATÓRIA) ---
         prompt = f"""
         ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL SÊNIOR.
         Sua missão é validar a entrada '{estrategia}' cruzando TRÊS FONTES DE DADOS:
-        1. MOMENTO (Live API): O que está acontecendo AGORA.
+        1. MOMENTO (Live API): O que está acontecendo AGORA (Pressão, Chutes).
         2. CONTEXTO (Big Data/Histórico): O que costuma acontecer (passado no texto abaixo).
-        3. ESTRATÉGIA: O objetivo do sinal (Ex: Gol, Cantos, Cartões).
+        3. ESTRATÉGIA: O objetivo do sinal (Ex: Gol, Cantos, Cartões, Defesas).
 
         DADOS AO VIVO:
         - Tempo: {dados_jogo['placar']} aos {tempo} min.
         - Intensidade: {intensidade_jogo:.2f}/min ({status_intensidade}).
         - Tática: {quem_manda}.
         - Disciplina: {total_faltas} faltas, {cards_h}x{cards_a} cartões.
-        - Ataque: Chutes {chutes_h}x{chutes_a} | Cantos {cantos_h}x{cantos_a}.
+        - Ataque: Chutes {chutes_h}x{chutes_a} (Gol: {gol_h}x{gol_a}) | Cantos {cantos_h}x{cantos_a}.
         {aviso_dados}
         
-        CONTEXTO HISTÓRICO (IMPORTANTE): 
+        CONTEXTO HISTÓRICO (IMPORTANTE - USE ISSO PARA DECIDIR): 
         {extra_context}
         
         REGRAS DE VALIDAÇÃO (CRUZAMENTO):
-        - Se a estratégia for GOLS/CANTOS: O Live tem que mostrar pressão (>0.8 intensidade) E o Histórico (Contexto) deve confirmar que os times marcam/sofrem gols. Se o Live estiver pegando fogo mas o Histórico for 0-0, alerta de risco.
-        - Se a estratégia for CARTÕES: Ignore o ataque. Foque em Faltas, Placar apertado e Histórico de cartões do Contexto.
-        - Se a estratégia for DEFESAS: Veja se o time que está sofrendo pressão (Live) tem histórico de sofrer chutes (Contexto).
+        - GOLS/CANTOS: O Live deve ter pressão (>0.8) E o Histórico deve confirmar tendência de gols. Se Live bom mas Histórico 0-0, é 'ARRISCADO'.
+        - CARTÕES: Ignore o ataque. Analise Faltas (>25 proj) e Histórico de cartões dos times/juiz.
+        - DEFESAS (MURALHA): O time que sofre pressão no Live tem histórico de sofrer muitos chutes? O goleiro tem boa média de defesas no Big Data? Se sim, é DIAMANTE.
         
         CLASSIFIQUE:
         💎 DIAMANTE: Dados Live e Histórico CONCORDAM plenamente.
         ✅ PADRÃO: Dados aceitáveis.
-        ⚠️ ARRISCADO: Dados Live e Histórico DISCORDAM (Ex: Pressão no live, mas histórico Under).
+        ⚠️ ARRISCADO: Dados Live e Histórico DISCORDAM ou intensidade insuficiente.
 
-        JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
+        JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "Explique o cruzamento dos dados." }}
         """
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
@@ -2222,10 +2295,15 @@ if st.session_state.ROBO_LIGADO:
                     if dados_50:
                         txt_history = (f"API (50j): Casa(Over1.5: {dados_50['home']['over15_ft']}%) | Fora(Over1.5: {dados_50['away']['over15_ft']}%)")
                     
+                    # --- CONTEXTO ENRIQUECIDO PARA IA (V5.5) ---
                     extra_ctx = f"""
                     FONTE 1 (API/SofaScore): {txt_history} | Rating: {nota_home}x{nota_away}
-                    FONTE 2 (BIG DATA): {txt_bigdata}
+                    FONTE 2 (BIG DATA GLOBAL): {txt_bigdata}
                     FONTE 3 (HISTÓRICO PESSOAL): {txt_pessoal}
+                    
+                    PARA O CIENTISTA DE DADOS:
+                    - Média de Gols Sofridos (50j): Veja 'API'.
+                    - Média de Defesas do Goleiro: Veja 'Big Data' (ChutesGol Sofridos).
                     """
 
                     for s in lista_sinais:
@@ -2289,6 +2367,7 @@ if st.session_state.ROBO_LIGADO:
                                 
                                 if "aprovado" in opiniao_txt.lower(): opiniao_db = "Aprovado"
                                 elif "arriscado" in opiniao_txt.lower(): opiniao_db = "Arriscado"
+                                elif "diamante" in opiniao_txt.lower(): opiniao_db = "Aprovado" # Diamante é aprovado
                                 else: opiniao_db = "Neutro"
                             except: pass
                         
