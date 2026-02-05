@@ -50,7 +50,7 @@ st.markdown("""
 # ==============================================================================
 # 2. INICIALIZAÇÃO DE VARIÁVEIS E CONSTANTES
 # ==============================================================================
-ODD_MINIMA_LIVE = 1.60  # Meta de valor
+ODD_MINIMA_LIVE = 1.60  # Meta de valor para exibir destaque
 ODD_CRITICA_LIVE = 1.30 # Abaixo disso é perigo
 
 if 'TG_TOKEN' not in st.session_state: st.session_state['TG_TOKEN'] = ""
@@ -172,38 +172,28 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     elif tipo_sinal == "RED": return f"RES_RED_{chave}"
     return chave
 
-# --- [MELHORIA] NOVA FUNÇÃO DE BUSCA DE ODD PRÉ-MATCH (ROBUSTA) ---
 def buscar_odd_pre_match(api_key, fid):
     try:
         url = "https://v3.football.api-sports.io/odds"
         params = {"fixture": fid, "bookmaker": "8"} # ID 8 = Bet365
         r = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         
-        # Se não tiver resposta ou bookmakers, já retorna falso
         if not r.get('response'): return 0.0, "Sem Bet365"
-        
         bookmakers = r['response'][0]['bookmakers']
         if not bookmakers: return 0.0, "Sem Bet365"
 
-        # Como filtramos por bookmaker=8 na API, o primeiro item JÁ É a Bet365
         bet365 = bookmakers[0]
-            
         if bet365:
-            # Procura Over 2.5 (ID 5 na API)
             mercado_gols = next((m for m in bet365['bets'] if m['id'] == 5), None)
             if mercado_gols:
-                # Tenta pegar linha 2.5
                 odd_obj = next((v for v in mercado_gols['values'] if v['value'] == "Over 2.5"), None)
-                # Se não tiver 2.5, tenta 1.5 (fallback para jogos under)
                 if not odd_obj:
                      odd_obj = next((v for v in mercado_gols['values'] if v['value'] == "Over 1.5"), None)
-                
                 if odd_obj:
                     return float(odd_obj['odd']), f"{odd_obj['value']} (Bet365)"
 
         return 0.0, "N/A"
     except: return 0.0, "N/A"
-# ----------------------------------------------------------------------
 
 def update_api_usage(headers):
     if not headers: return
@@ -248,7 +238,6 @@ def calcular_stats(df_raw):
     winrate = (greens / (greens + reds) * 100) if (greens + reds) > 0 else 0.0
     return total, greens, reds, winrate
 
-# [MÓDULO] ESTRATÉGIA CASHOUT / DROP ODDS (PRÉ-LIVE)
 def buscar_odds_comparativas(api_key, fixture_id):
     url = "https://v3.football.api-sports.io/odds"
     try:
@@ -258,7 +247,7 @@ def buscar_odds_comparativas(api_key, fixture_id):
         r365 = requests.get(url, headers={"x-apisports-key": api_key}, params=params_b365).json()
         rpin = requests.get(url, headers={"x-apisports-key": api_key}, params=params_pin).json()
         
-        odd_365 = 0; odd_pin = 0; time_alvo = ""
+        odd_365 = 0; odd_pin = 0;
         
         if r365.get('response'):
             mkts = r365['response'][0]['bookmakers'][0]['bets']
@@ -894,7 +883,7 @@ def gerar_insights_matinais_ia(api_key):
         DADOS:
         {lista_para_ia}
         
-        SUA MISSÃO (RELATÓRIO DE VOLUME):
+        SUA MISSÃO (RELATÓRIO DE VOLUME E PROFUNDIDADE):
         1. Analise TODOS os jogos da lista.
         2. NÃO SE LIMITE A 3. Se houver 15 oportunidades boas (EV+), liste as 15.
         3. Valide se a tendência confirma a aposta.
@@ -907,8 +896,8 @@ def gerar_insights_matinais_ia(api_key):
                     "jogo": "Time A x Time B",
                     "palpite": "Over 2.5",
                     "odd": "1.80",
-                    "motivo": "Explicação técnica curta.",
-                    "tendencia_observada": "Casa Aquecendo muito (Exemplo)"
+                    "motivo": "Escreva uma análise completa e persuasiva aqui. Explique por que o histórico do time e a tendência de aquecimento justificam essa entrada. Use dados (ex: '100% de over em casa') se disponíveis no texto acima.",
+                    "tendencia_observada": "Casa Aquecendo muito"
                 }}
             ]
         }}
@@ -926,6 +915,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
     hoje = get_time_br().strftime('%Y-%m-%d')
     
     # Focamos apenas nas Ligas onde a Bet365 abre mercado de Jogador (Chutes/Defesas)
+    # Mas como queremos CARTÕES também, mantemos o leque aberto
     LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
 
     try:
@@ -950,18 +940,15 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             fid = j['fixture']['id']
             lid = j['league']['id']
             
-            # Só analisa ligas grandes (onde tem mercado de jogador)
-            if lid not in LIGAS_BIG_MARKETS: continue
-            
             # 1. BLINDAGEM BÁSICA
             odd_check, _ = buscar_odd_pre_match(api_key, fid)
             if odd_check == 0: continue
 
-            # 2. DEFINIÇÃO DE CENÁRIO (Player Props)
+            # 2. DEFINIÇÃO DE CENÁRIO (HÍBRIDO: JOGADOR OU CARTÕES)
             cenario_tatico = "Indefinido"
             
             try:
-                # Busca Match Winner para ver quem vai amassar
+                # Busca Match Winner para ver o cenário
                 url_odd = "https://v3.football.api-sports.io/odds"
                 r_odd = requests.get(url_odd, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "8", "bet": "1"}).json()
                 
@@ -970,14 +957,19 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     odd_casa = next((float(v['odd']) for v in vals if v['value'] == 'Home'), 0)
                     odd_fora = next((float(v['odd']) for v in vals if v['value'] == 'Away'), 0)
                     
-                    # Lógica para CHUTES (Artilheiro do Favorito)
-                    if odd_casa > 0 and odd_casa < 1.50: 
-                        cenario_tatico = "DOMÍNIO TOTAL CASA (Oportunidade: Chutes do Atacante Casa + Defesas Goleiro Visitante)"
-                    elif odd_fora > 0 and odd_fora < 1.50: 
-                        cenario_tatico = "DOMÍNIO TOTAL VISITANTE (Oportunidade: Chutes do Atacante Visitante + Defesas Goleiro Casa)"
-                    # Lógica para Jogo Aberto (Ambos Chutam)
-                    elif odd_casa < 2.50 and odd_fora < 2.50:
-                         cenario_tatico = "JOGO ABERTO/TROCAÇÃO (Oportunidade: Chutes dos dois lados)"
+                    # Lógica para CHUTES (Massacre) - Só em Ligas Big
+                    if lid in LIGAS_BIG_MARKETS:
+                        if odd_casa > 0 and odd_casa < 1.70: # Afrouxei para 1.70 para pegar mais
+                            cenario_tatico = "MASSACRE CASA (Foco: Chutes do Artilheiro Casa)"
+                        elif odd_fora > 0 and odd_fora < 1.70: 
+                            cenario_tatico = "MASSACRE VISITANTE (Foco: Chutes do Artilheiro Visitante)"
+                    
+                    # Lógica para CARTÕES (Jogo Equilibrado/Pegado)
+                    # Se não caiu no massacre, e as odds são altas (> 2.00 para ambos), é jogo duro
+                    if "MASSACRE" not in cenario_tatico:
+                        if odd_casa > 1.90 and odd_fora > 1.90:
+                            cenario_tatico = "JOGO TRUNCADO/BRIGA (Foco: Cartões)"
+
             except:
                 cenario_tatico = "Sem Odds Winner"
 
@@ -993,36 +985,34 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         if not dados_analise: return []
 
         prompt = f"""
-        ATUE COMO UM ANALISTA DE "PLAYER PROPS" (MERCADO DE JOGADORES BET365).
+        ATUE COMO UM ANALISTA DE MERCADOS ALTERNATIVOS (PLAYER PROPS & CARDS).
         
-        Analise os jogos abaixo. Você tem conhecimento sobre os elencos e artilheiros dos times.
-        
-        LISTA DE JOGOS:
+        LISTA DE JOGOS E CENÁRIOS:
         {dados_analise}
         
-        SUA MISSÃO (TOP 3 OPORTUNIDADES):
-        Encontre valor em CHUTES (Finalizações) ou DEFESAS (Goleiro).
+        SUA MISSÃO (SELECIONE AS MELHORES OPORTUNIDADES):
+        Analise o "Cenário" de cada jogo e indique o melhor mercado.
         
-        REGRAS DE OURO:
-        1. 🎯 CHUTES (FINALIZAÇÃO):
-           - Se o cenário for "DOMÍNIO", indique o Principal Atacante (Camisa 9) do time favorito.
-           - Mercado Alvo: "Over 0.5 Chutes ao Gol" (Segurança) ou "Over 1.5 Chutes" (Volume).
-           - Cite o NOME do jogador.
+        REGRAS DE DECISÃO:
+        1. Se for "MASSACRE" (Favorito claro em liga grande):
+           - Indique "JOGADOR".
+           - Escolha o artilheiro do time favorito para "Over 1.5 Chutes" ou "0.5 Chutes ao Gol".
+           - Cite o nome do jogador.
            
-        2. 🧤 DEFESAS (MURALHA):
-           - Se o cenário for "DOMÍNIO", indique o Goleiro do time que vai sofrer pressão.
-           - Indique "Over 2.5 Defesas" ou "Over 3.5 Defesas".
+        2. Se for "JOGO TRUNCADO/BRIGA" (Jogo equilibrado):
+           - Indique "CARTÕES".
+           - Se for clássico ou jogo decisivo, indique "Over Cartões" para o jogo ou para o time que bate mais.
         
         SAÍDA JSON:
         {{
             "sinais": [
                 {{
                     "fid": "...",
-                    "tipo": "JOGADOR",
-                    "titulo": "🎯 SNIPER DE JOGADOR",
+                    "tipo": "JOGADOR",  <-- ou "CARTÕES"
+                    "titulo": "🎯 SNIPER DE JOGADOR", <-- ou "🟨 SNIPER DE CARTÕES"
                     "jogo": "Time A x Time B",
-                    "destaque": "Ex: O Time A é muito favorito, Haaland deve ter muitas chances.",
-                    "indicacao": "Erling Haaland - Over 1.5 Chutes ao Gol"
+                    "destaque": "Análise do motivo (ex: O time vai pressionar / O jogo será violento).",
+                    "indicacao": "Haaland Over 1.5 Chutes / Over 4.5 Cartões na Partida"
                 }}
             ]
         }}
@@ -1128,7 +1118,6 @@ def gerar_bet_builder_alavancagem(api_key):
         return resultados_finais
         
     except Exception as e: return []
-
 # ==============================================================================
 # 4. INTELIGÊNCIA ARTIFICIAL, CÁLCULOS E ESTRATÉGIAS (O CÉREBRO)
 # ==============================================================================
@@ -1379,6 +1368,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         return html_analise, prob_str
 
     except Exception as e: return "", "N/A"
+
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
     if 'sog_h' not in mem: mem = {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []}
@@ -1676,7 +1666,6 @@ def otimizar_estrategias_existentes_ia():
         return response.text.strip()
         
     except Exception as e: return f"Erro na análise: {str(e)}"
-
 # ==============================================================================
 
 def enviar_analise_estrategia(token, chat_ids):
@@ -1701,7 +1690,6 @@ def enviar_relatorio_bi(token, chat_ids):
         hoje = pd.to_datetime(agora)
         d_hoje = df[df['Data_DT'] == hoje]
         d_semana = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
-        d_mes = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
         
         def get_placar_str(d_slice):
             if d_slice.empty: return "Sem dados"
@@ -1739,7 +1727,6 @@ def enviar_relatorio_bi(token, chat_ids):
 
 🗓 <b>SEMANAL (7 Dias):</b>
 • Geral: {get_placar_str(d_semana)}
-• 🤖 IA Aprovados: {get_ia_stats(d_semana)}
 
 🏆 <b>TOP 5 ESTRATÉGIAS:</b>
 {top_strats_txt}
@@ -1781,19 +1768,8 @@ def enviar_telegram(token, chat_ids, msg):
             time.sleep(0.3) # Delay anti-spam do Telegram
 
 def salvar_snipers_do_texto(texto_ia):
-    if not texto_ia or "Sem jogos" in texto_ia: return
-    try:
-        padrao_jogo = re.findall(r'⚽ Jogo: (.*?)(?:\n|$)', texto_ia)
-        for i, jogo_nome in enumerate(padrao_jogo):
-            item_sniper = {
-                "FID": f"SNIPER_{random.randint(10000, 99999)}",
-                "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": "08:00", 
-                "Liga": "Sniper Matinal", "Jogo": jogo_nome.strip(), "Placar_Sinal": "0x0", 
-                "Estrategia": "Sniper Matinal", "Resultado": "Pendente", 
-                "Opiniao_IA": "Sniper", "Probabilidade": "Alta"
-            }
-            adicionar_historico(item_sniper)
-    except: pass
+    # Função mantida para compatibilidade, mas o salvamento principal agora é via JSON
+    pass 
 
 def enviar_multipla_matinal(token, chat_ids, api_key):
     if st.session_state.get('multipla_matinal_enviada'): return
@@ -1885,8 +1861,10 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
         multipla_obj = {"id_unico": id_dupla, "tipo": "LIVE", "fids": ids_save, "nomes": nomes_save, "gols_ref": gols_ref_save, "status": "Pendente", "data": get_time_br().strftime('%Y-%m-%d')}
         if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
         st.session_state['multiplas_pendentes'].append(multipla_obj)
+
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
+    
     # 1. Sniper Matinal (07h as 11h)
     if 7 <= agora.hour < 11:
         if not st.session_state['matinal_enviado']:
@@ -1896,9 +1874,10 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             
             if lista_sinais and len(lista_sinais) > 0:
                 msg_final = "🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n"
+                msg_final += "Aqui estão minhas principais escolhas, analisadas com precisão cirúrgica:\n"
                 
                 for s in lista_sinais:
-                    # --- MONTAGEM DA MENSAGEM ---
+                    # --- MONTAGEM DA MENSAGEM DETALHADA ---
                     msg_final += f"\n✅ <b>{s.get('jogo', 'Jogo')}</b>"
                     # Adiciona a linha da tendência que você queria:
                     msg_final += f"\n🔥 {s.get('tendencia_observada', 'Tendência Analisada')}" 
