@@ -1652,47 +1652,80 @@ def criar_estrategia_nova_ia():
 def otimizar_estrategias_existentes_ia():
     if not IA_ATIVADA: return "IA Offline."
     
-    # 1. Carrega o histórico
+    # 1. Carrega o histórico COMPLETO
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Você precisa de histórico (Greens/Reds) para eu poder otimizar algo."
     
     try:
-        # 2. Prepara os dados matemáticos para a IA
-        # Conta quantos Greens e Reds cada estratégia teve
-        resumo = df[df['Resultado'].isin(['✅ GREEN', '❌ RED', 'GREEN', 'RED'])].copy()
+        # 2. Prepara os dados: Separa TUDO o que já foi finalizado
+        # Filtrar apenas colunas relevantes para a IA não se perder com lixo
+        cols_uteis = ['Data', 'Hora', 'Liga', 'Jogo', 'Estrategia', 'Placar_Sinal', 'Resultado', 'Odd']
+        
+        # Garante que as colunas existam antes de filtrar
+        cols_existentes = [c for c in cols_uteis if c in df.columns]
+        resumo = df[df['Resultado'].isin(['✅ GREEN', '❌ RED', 'GREEN', 'RED'])][cols_existentes].copy()
         
         if resumo.empty: return "Sem operações finalizadas para analisar."
         
+        # Estatísticas Gerais (O "Placar" do Robô)
         stats_str = ""
         grupos = resumo.groupby('Estrategia')
+        lista_reds_csv = ""
         
         for nome, grupo in grupos:
             greens = len(grupo[grupo['Resultado'].str.contains('GREEN', na=False)])
             reds = len(grupo[grupo['Resultado'].str.contains('RED', na=False)])
             total = greens + reds
             winrate = (greens / total * 100) if total > 0 else 0
+            
             stats_str += f"- {nome}: {greens}G / {reds}R ({winrate:.1f}% Winrate)\n"
+            
+            # SE O WINRATE FOR RUIM (<60%) ou se tiver MUITOS Reds, mandamos TODOS os dados para a IA
+            if winrate < 65 and reds > 0:
+                # Pegamos TODOS os jogos que deram RED dessa estratégia
+                df_reds = grupo[grupo['Resultado'].str.contains('RED', na=False)]
+                
+                # Convertemos para CSV Texto para a IA ler linha a linha
+                csv_reds = df_reds.to_csv(index=False, sep=';')
+                lista_reds_csv += f"\n--- 🚨 DADOS BRUTOS DOS ERROS: {nome} ---\n{csv_reds}\n"
 
-        # 3. O Prompt de Consultoria
+        if not lista_reds_csv:
+            return "Suas estratégias estão todas acima de 65% de Winrate! Mantenha o que está fazendo."
+
+        # 3. O Prompt "DATA SCIENTIST" (Agora com FULL DATASET)
         prompt = f"""
-        ATUE COMO UM GESTOR DE ALTA PERFORMANCE (BETTING QUANT).
+        ATUE COMO UM CIENTISTA DE DADOS SÊNIOR (Especialista em Padrões e Algoritmos).
         
-        Analise a performance real das minhas estratégias atuais:
+        Eu vou te fornecer o HISTÓRICO COMPLETO de falhas (REDs) do meu robô de apostas.
+        Sua capacidade de leitura é alta, então analise TUDO.
+        
+        RESUMO GERAL:
         {stats_str}
         
-        SUA MISSÃO (DIAGNÓSTICO E CURA):
-        1. 🚨 **O Ponto Fraco:** Qual estratégia está dando prejuízo ou tem winrate perigoso (<60%)? O que podemos ajustar nela? (Ex: ser mais rígido no tempo ou chutes).
-        2. 💎 **A Mina de Ouro:** Qual estratégia está voando (>80%)? Como podemos explorar mais ela?
+        📂 BASE DE DADOS DOS ERROS (CSV COMPLETO):
+        {lista_reds_csv}
         
-        Responda com bullet points diretos e acionáveis.
+        SUA MISSÃO (DEEP LEARNING):
+        Cruze os dados. Não olhe apenas o jogo, olhe o CONTEXTO.
+        
+        1. 🕵️‍♂️ **Investigação de Padrão:**
+           - Existe alguma **LIGA** específica que está drenando o lucro? (Ex: Ligas Sub-20, Ligas Árabes, etc)
+           - Existe algum **HORÁRIO** maldito?
+           - Existe algum padrão de **PLACAR** na hora da entrada? (Ex: Entrar em 1x1 sempre dá errado?)
+           
+        2. 🛠️ **Correção de Código (AÇÃO):**
+           - Para cada estratégia com desempenho ruim, me dê uma REGRA DE FILTRO (IF) para adicionar no código.
+           - Exemplo: "Parece que a 'Golden Bet' falha 90% das vezes na Liga do Egito. Adicione: `if 'Egypt' not in liga`."
+           
+        Seja técnico, direto e baseado nos dados fornecidos.
         """
         
-        # 4. Chama a IA
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
+        # 4. Chama a IA (Gemini 2.0 aguenta o tranco)
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
         st.session_state['gemini_usage']['used'] += 1
         return response.text.strip()
         
-    except Exception as e: return f"Erro na análise: {str(e)}"
+    except Exception as e: return f"Erro na análise massiva: {str(e)}"
 # ==============================================================================
 
 def enviar_analise_estrategia(token, chat_ids):
