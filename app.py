@@ -907,10 +907,13 @@ def gerar_insights_matinais_ia(api_key):
         DADOS:
         {lista_para_ia}
         
-        SUA MISSÃO (TOP 3 ESCOLHAS):
+        SUA MISSÃO (TOP ESCOLHAS):
         1. Analise se a "MERCADO DISPONÍVEL" bate com a "Tendência Recente" dos times.
         2. REGRA CRÍTICA: Se a Bet365 está oferecendo "Over 2.5", seu palpite TEM QUE SER "Over 2.5". Não sugira "Over 1.5" usando a odd de 2.5. Seja preciso.
         3. Priorize confrontos "Aquecendo x Aquecendo".
+        4. Analise TODOS os jogos da lista.
+        5. NÃO SE LIMITE A 3. Se houver 15 oportunidades boas (EV+), liste as 15.
+
         
         SAÍDA (Formato de Relatório):
         
@@ -2456,8 +2459,14 @@ if st.session_state.ROBO_LIGADO:
                             emoji_sinal = "⏳"
                             bloco_aviso_odd = f"👀 <b>AGUARDE VALORIZAR (@{odd_val:.2f})</b>\n🎯 <i>Meta: Entrar acima de @{ODD_MINIMA_LIVE:.2f}</i>\n────────────────\n"
                         
-                        # -----------------------------------
+                        # --- AQUI ESTAVA FALTANDO ---
+                        elif odd_val >= ODD_MINIMA_LIVE:
+                            # ZONA DE VALOR (Ex: 1.65+) -> Apenas mostra a Odd bonita
+                            emoji_sinal = "✅"
+                            bloco_aviso_odd = f"🔥 <b>ODD DE VALOR: @{odd_val:.2f}</b>\n────────────────\n"
 
+                        # -----------------------------------
+                        # MANTIVE O SEU CÓDIGO ORIGINAL DAQUI PRA BAIXO:
                         if odd_val >= 1.80:
                             destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
                             st.session_state['alertas_enviados'].add(uid_super)
