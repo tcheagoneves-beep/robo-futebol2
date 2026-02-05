@@ -563,33 +563,35 @@ def atualizar_historico_ram(lista_atualizada_hoje):
 def consultar_bigdata_cenario_completo(home_id, away_id):
     if not db_firestore: return "Big Data Offline"
     try:
-        docs_h = db_firestore.collection("BigData_Futebol").where("home_id", "==", str(home_id)).limit(20).stream()
-        docs_a = db_firestore.collection("BigData_Futebol").where("away_id", "==", str(away_id)).limit(20).stream()
+        # Aumentei o limite para 50 jogos para ter amostra estatística relevante
+        docs_h = db_firestore.collection("BigData_Futebol").where("home_id", "==", str(home_id)).order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
+        docs_a = db_firestore.collection("BigData_Futebol").where("away_id", "==", str(away_id)).order_by("data_hora", direction=firestore.Query.DESCENDING).limit(50).stream()
+        
         def safe_get(stats_dict, key):
             try: return float(stats_dict.get(key, 0))
             except: return 0.0
-        h_data = {'qtd': 0, 'gols_pro': 0, 'cantos': 0, 'cards': 0, 'sog': 0, 'faltas': 0, 'imp': 0}
+            
+        # Listas para a IA analisar a variância (Consistência)
+        h_placares = []; h_cantos = []
         for d in docs_h:
-            dd = d.to_dict(); h_data['qtd'] += 1; st = dd.get('estatisticas', {})
-            try: h_data['gols_pro'] += int(dd['placar_final'].split('x')[0])
-            except: pass
-            h_data['cantos'] += safe_get(st, 'escanteios_casa')
-            h_data['cards'] += safe_get(st, 'cartoes_amarelos') + safe_get(st, 'cartoes_vermelhos')
-            h_data['sog'] += safe_get(st, 'chutes_gol')
-        a_data = {'qtd': 0, 'gols_pro': 0, 'cantos': 0, 'cards': 0, 'sog': 0, 'faltas': 0, 'imp': 0}
+            dd = d.to_dict(); st = dd.get('estatisticas', {})
+            h_placares.append(dd.get('placar_final', '?'))
+            h_cantos.append(int(safe_get(st, 'escanteios_casa')))
+            
+        a_placares = []; a_cantos = []
         for d in docs_a:
-            dd = d.to_dict(); a_data['qtd'] += 1; st = dd.get('estatisticas', {})
-            try: a_data['gols_pro'] += int(dd['placar_final'].split('x')[1]) 
-            except: pass
-            a_data['cantos'] += safe_get(st, 'escanteios_fora') 
-            a_data['cards'] += safe_get(st, 'cartoes_amarelos') + safe_get(st, 'cartoes_vermelhos')
-            a_data['sog'] += safe_get(st, 'chutes_gol')
-        if h_data['qtd'] == 0 and a_data['qtd'] == 0: return "Sem dados suficientes."
-        txt_h = "N/D"
-        if h_data['qtd'] > 0: q = h_data['qtd']; txt_h = (f"MANDANTE (Casa, {q}j): Gols {h_data['gols_pro']/q:.1f} | Cantos {h_data['cantos']/q:.1f} | ChutesGol {h_data['sog']/q:.1f}")
-        txt_a = "N/D"
-        if a_data['qtd'] > 0: q = a_data['qtd']; txt_a = (f"VISITANTE (Fora, {q}j): Gols {a_data['gols_pro']/q:.1f} | Cantos {a_data['cantos']/q:.1f} | ChutesGol {a_data['sog']/q:.1f}")
+            dd = d.to_dict(); st = dd.get('estatisticas', {})
+            a_placares.append(dd.get('placar_final', '?'))
+            a_cantos.append(int(safe_get(st, 'escanteios_fora')))
+
+        if not h_placares and not a_placares: return "Sem dados suficientes."
+
+        # Montamos a string RAW para a IA
+        txt_h = f"MANDANTE (Últimos {len(h_placares)}j): Placares {h_placares} | Cantos {h_cantos}"
+        txt_a = f"VISITANTE (Últimos {len(a_placares)}j): Placares {a_placares} | Cantos {a_cantos}"
+        
         return f"{txt_h} || {txt_a}"
+        
     except Exception as e: return f"Erro BD: {str(e)}"
 
 def salvar_bigdata(jogo_api, stats):
@@ -1526,27 +1528,52 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
 
 def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Offline."
+    
+    # 1. Carrega TUDO (Sem limites)
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados suficientes para análise de BI."
+    
     try:
         df = df.copy()
-        resumo_csv = df.tail(30).to_string(index=False) 
+        
+        # 2. Limpeza de Dados (Pra IA não ler lixo)
+        cols_uteis = ['Data', 'Hora', 'Liga', 'Jogo', 'Estrategia', 'Resultado', 'Odd']
+        cols_existentes = [c for c in cols_uteis if c in df.columns]
+        
+        # Filtra apenas jogos finalizados (Green/Red)
+        df_final = df[df['Resultado'].isin(['✅ GREEN', '❌ RED', 'GREEN', 'RED'])][cols_existentes]
+        
+        if df_final.empty: return "Sem operações finalizadas para analisar."
+
+        # 3. Transforma em CSV Texto (A IA ama ler CSV bruto)
+        csv_completo = df_final.to_csv(index=False, sep=';')
+        
+        # 4. Prompt "BIG DATA"
         prompt = f"""
-        ATUE COMO UM CONSULTOR DE DATA SCIENCE E TRADING ESPORTIVO.
-        Analise os últimos resultados do robô abaixo (CSV):
-        {resumo_csv}
-        SUA MISSÃO:
-        1. Identifique qual Estratégia está dando mais Green.
-        2. Identifique se há algum padrão nos Reds (ex: alguma liga específica ou horário).
-        3. Dê uma nota de 0 a 10 para o desempenho recente.
-        SAÍDA (Seja direto, máximo 4 linhas):
-        "Insight: [Sua análise aqui]"
+        ATUE COMO UM CIENTISTA DE DADOS SÊNIOR.
+        
+        Analise o histórico COMPLETO de operações deste Robô de Trading Esportivo:
+        
+        DADOS (CSV):
+        {csv_completo}
+        
+        SUA MISSÃO (INSIGHTS PROFUNDOS):
+        Não resuma o óbvio. Encontre correlações ocultas.
+        
+        Responda em 3 pontos curtos e diretos:
+        1. 🏆 **A Melhor Configuração:** (Qual estratégia + Liga tem a maior consistência?).
+        2. ☠️ **O Padrão do Prejuízo:** (Existe um horário, dia da semana ou liga específica que só dá RED?).
+        3. 💡 **Sugestão de Ajuste:** (Ex: "Pare de operar a estratégia X na liga Y").
+        
+        Seja numérico e direto.
         """
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
+        
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
         st.session_state['gemini_usage']['used'] += 1
         return response.text.strip()
+        
     except Exception as e:
-        return "Não foi possível gerar o insight da IA no momento."
+        return "Não foi possível processar o Big Data no momento."
 
 def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
     try:
