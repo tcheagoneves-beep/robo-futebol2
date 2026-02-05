@@ -702,33 +702,42 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
 @st.cache_data(ttl=86400)
 def analisar_tendencia_macro_micro(api_key, home_id, away_id):
     try:
-        def get_stats_advanced(team_id):
+        def get_form_string(team_id):
             url = "https://v3.football.api-sports.io/fixtures"
-            # Pedimos 50 jogos
-            params = {"team": team_id, "last": "50", "status": "FT"} 
+            # Pedimos os últimos 5 jogos encerrados
+            params = {"team": team_id, "last": "5", "status": "FT"} 
             res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
             jogos = res.get('response', [])
             
-            if not jogos: return {"qtd": 0, "macro": 0, "micro": 0}
+            if not jogos: return "Sem dados recentes.", 0
             
-            # --- CÁLCULO MICRO (Últimos 5 jogos - Momento Atual) ---
-            jogos_micro = jogos[:5] 
-            over_micro = 0
-            for j in jogos_micro:
-                gols = (j['goals']['home'] or 0) + (j['goals']['away'] or 0)
-                if gols >= 2: over_micro += 1 # Over 1.5
-            pct_micro = int((over_micro / len(jogos_micro)) * 100) if jogos_micro else 0
-
-            # --- CÁLCULO MACRO (Últimos 50 jogos - Histórico) ---
-            over_macro = 0
+            # Monta o "Diário de Bordo" dos últimos 5 jogos
+            resumo_txt = ""
+            over_count = 0
+            
             for j in jogos:
-                gols = (j['goals']['home'] or 0) + (j['goals']['away'] or 0)
-                if gols >= 2: over_macro += 1
-            pct_macro = int((over_macro / len(jogos)) * 100)
+                # Quem era o adversário?
+                adv_nome = j['teams']['away']['name'] if j['teams']['home']['id'] == team_id else j['teams']['home']['name']
+                placar = f"{j['goals']['home']}x{j['goals']['away']}"
+                data_jogo = j['fixture']['date'][:10]
+                
+                # O jogo foi Over 1.5?
+                gols_total = (j['goals']['home'] or 0) + (j['goals']['away'] or 0)
+                if gols_total >= 2: over_count += 1
+                
+                resumo_txt += f"[{data_jogo}: {placar} vs {adv_nome}] "
             
-            return {"qtd": len(jogos), "macro": pct_macro, "micro": pct_micro}
+            # Retorna o Texto Rico e a % Matemática
+            pct = int((over_count / len(jogos)) * 100)
+            return resumo_txt, pct
             
-        return {"home": get_stats_advanced(home_id), "away": get_stats_advanced(away_id)}
+        h_txt, h_pct = get_form_string(home_id)
+        a_txt, a_pct = get_form_string(away_id)
+        
+        return {
+            "home": {"resumo": h_txt, "micro": h_pct},
+            "away": {"resumo": a_txt, "micro": a_pct}
+        }
     except: return None
 
 @st.cache_data(ttl=120) 
@@ -859,79 +868,70 @@ def gerar_insights_matinais_ia(api_key):
         random.shuffle(jogos_candidatos) 
         
         for j in jogos_candidatos:
-            if count >= 80: break 
+            if count >= 60: break # Reduzi um pouco para caber mais detalhe no prompt
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga = j['league']['name']
             
-            nome_jogo = f"{home} x {away}"
-            mapa_jogos[nome_jogo] = str(fid)
+            mapa_jogos[f"{home} x {away}"] = str(fid)
 
             # --- FILTRO 1: ODD NA BET365 ---
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
             if odd_val == 0 or odd_val < 1.45: continue 
             
-            # --- FILTRO 2: MACRO VS MICRO ---
+            # --- FILTRO 2: CONTEXTO REAL (NOVO) ---
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
-            if stats and stats['home']['qtd'] > 0:
-                h_mac = stats['home']['macro']; h_mic = stats['home']['micro']
-                a_mac = stats['away']['macro']; a_mic = stats['away']['micro']
+            if stats:
+                # Aqui está o pulo do gato: Mandamos a LISTA DE JOGOS, não só a %
+                h_txt = stats['home']['resumo']
+                a_txt = stats['away']['resumo']
                 
-                # Se a forma recente for muito ruim, ignora
-                if h_mic < 40 and a_mic < 40: continue
-
-                def get_trend(mac, mic):
-                    diff = mic - mac
-                    if diff >= 20: return "📈 AQUECENDO"
-                    if diff <= -20: return "📉 ESFRIANDO"
-                    return "➡️ ESTÁVEL"
-
-                trend_h = get_trend(h_mac, h_mic)
-                trend_a = get_trend(a_mac, a_mic)
-
                 lista_para_ia += f"""
-                - Jogo: {home} x {away} ({liga})
-                  MERCADO: {odd_nome} | ODD: @{odd_val:.2f}
-                  CASA: Histórico {h_mac}% -> Recente {h_mic}% ({trend_h})
-                  FORA: Histórico {a_mac}% -> Recente {a_mic}% ({trend_a})
+                ---
+                ⚽ Jogo: {home} x {away} ({liga})
+                💰 Mercado: {odd_nome} @{odd_val:.2f}
+                🏠 CASA (Últimos 5): {h_txt}
+                ✈️ FORA (Últimos 5): {a_txt}
                 """
                 count += 1
         
         if not lista_para_ia: return "Nenhum jogo com valor encontrado hoje.", {}
 
-        # --- PROMPT ATUALIZADO PARA TOP 5 ---
+        # --- PROMPT ANALÍTICO DE VERDADE ---
         prompt = f"""
-        ATUE COMO UM ANALISTA DE PERFORMANCE DE ELITE (SNIPER).
+        ATUE COMO UM ANALISTA DE FUTEBOL SÊNIOR (CONTEXTUAL).
         
-        Eu tenho uma lista de jogos pré-filtrados com Odds e Tendências.
+        Abaixo estão os jogos de hoje com os RESULTADOS RECENTES DOS TIMES.
+        Não olhe apenas para vitórias/derrotas. Olhe para a QUALIDADE dos placares e Adversários.
         
-        DADOS BRUTOS:
+        DADOS:
         {lista_para_ia}
         
-        SUA MISSÃO (FILTRO FINAL):
-        1. Analise todos os jogos da lista.
-        2. Selecione APENAS OS 5 MELHORES (TOP 5) com maior valor matemático (EV+).
-        3. Critério: Times que estão "📈 AQUECENDO" (Recente > Histórico) são prioridade máxima.
-        4. Se o jogo for "Esfriando", DESCARTE.
+        SUA MISSÃO (TOP 5 DE OURO):
+        Escolha as 5 melhores apostas baseadas em MOMENTO REAL.
         
-        SAÍDA (Relatório Final):
+        Critérios de Desempate (Use sua inteligência):
+        1. Se o time ganhou de 1x0 suado de um time ruim -> DESCARTE.
+        2. Se o time vem goleando (3x0, 4x1) -> PRIORIZE (Sinal de ataque forte).
+        3. Se o confronto é "Ataque forte vs Defesa vazada" (muitos gols sofridos no histórico recente) -> OURO.
         
-        🌅 **SNIPER MATINAL (TOP 5 SELEÇÕES)**
+        SAÍDA (Relatório):
+        
+        🌅 **SNIPER MATINAL (ANÁLISE DE CONTEXTO)**
         
         1️⃣ ⚽ Jogo: [Nome]
-        🔥 Tendência: [Ex: Casa Aquecendo muito]
-        🎯 Palpite: [Nome do Mercado] (@[Odd])
-        📝 Motivo: [Por que esse é o melhor do dia?]
+        🎯 Palpite: [Mercado] (@[Odd])
+        🧠 Leitura IA: "O time da casa vem de 3 goleadas seguidas (4x1, 3x0), indicando ataque avassalador, enquanto o visitante tomou gols em todos os jogos..."
         
-        2️⃣ ... (Repita para os outros 4)
+        2️⃣ ...
         
-        ⚠️ *Não liste mais que 5 jogos. Seja cirúrgico.*
+        (Liste apenas o TOP 5)
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.2)) # Temperatura baixa para ser mais preciso
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
         st.session_state['gemini_usage']['used'] += 1
         
         return response.text, mapa_jogos
