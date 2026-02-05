@@ -930,8 +930,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
     
-    # IDs das Ligas onde a Bet365 costuma abrir mercado de Player Props (Defesas)
-    # 39=Premier, 140=LaLiga, 135=SerieA, 78=Bundesliga, 61=Ligue1, 2=UCL, 3=UEL, 71=BR-A, 72=BR-B
+    # Focamos apenas nas Ligas onde a Bet365 abre mercado de Jogador (Chutes/Defesas)
     LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
 
     try:
@@ -951,21 +950,23 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         count_validos = 0
         
         for j in jogos_candidatos:
-            if count_validos >= 25: break 
+            if count_validos >= 20: break 
             
             fid = j['fixture']['id']
             lid = j['league']['id']
             
-            # 1. BLINDAGEM BÁSICA (Tem odd na Bet365?)
+            # Só analisa ligas grandes (onde tem mercado de jogador)
+            if lid not in LIGAS_BIG_MARKETS: continue
+            
+            # 1. BLINDAGEM BÁSICA
             odd_check, _ = buscar_odd_pre_match(api_key, fid)
             if odd_check == 0: continue
 
-            # 2. DEFINIÇÃO DE CENÁRIO (Favorito ou Equilibrado)
+            # 2. DEFINIÇÃO DE CENÁRIO (Player Props)
             cenario_tatico = "Indefinido"
-            pode_ter_prop = (lid in LIGAS_BIG_MARKETS) # Só busca defesa em liga grande
             
             try:
-                # Busca Match Winner para ver desequilíbrio
+                # Busca Match Winner para ver quem vai amassar
                 url_odd = "https://v3.football.api-sports.io/odds"
                 r_odd = requests.get(url_odd, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "8", "bet": "1"}).json()
                 
@@ -974,66 +975,59 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     odd_casa = next((float(v['odd']) for v in vals if v['value'] == 'Home'), 0)
                     odd_fora = next((float(v['odd']) for v in vals if v['value'] == 'Away'), 0)
                     
-                    # Lógica de Massacre (Para Goleiros - Só em Ligas Grandes)
-                    if pode_ter_prop:
-                        if odd_casa > 0 and odd_casa < 1.55: 
-                            cenario_tatico = "MASSACRE CASA (Foco: Goleiro Visitante)"
-                        elif odd_fora > 0 and odd_fora < 1.55: 
-                            cenario_tatico = "MASSACRE VISITANTE (Foco: Goleiro Casa)"
-                    
-                    # Lógica de Cartões (Qualquer Liga com Juiz)
-                    if "MASSACRE" not in cenario_tatico:
-                        if abs(odd_casa - odd_fora) < 0.5 or (odd_casa > 2.0 and odd_fora > 2.0):
-                            cenario_tatico = "JOGO TENSO/EQUILIBRADO (Foco: Cartões)"
-                        else:
-                            cenario_tatico = "Jogo Normal (Avaliar apenas se Juiz for Rigoroso)"
+                    # Lógica para CHUTES (Artilheiro do Favorito)
+                    if odd_casa > 0 and odd_casa < 1.50: 
+                        cenario_tatico = "DOMÍNIO TOTAL CASA (Oportunidade: Chutes do Atacante Casa + Defesas Goleiro Visitante)"
+                    elif odd_fora > 0 and odd_fora < 1.50: 
+                        cenario_tatico = "DOMÍNIO TOTAL VISITANTE (Oportunidade: Chutes do Atacante Visitante + Defesas Goleiro Casa)"
+                    # Lógica para Jogo Aberto (Ambos Chutam)
+                    elif odd_casa < 2.50 and odd_fora < 2.50:
+                         cenario_tatico = "JOGO ABERTO/TROCAÇÃO (Oportunidade: Chutes dos dois lados)"
             except:
                 cenario_tatico = "Sem Odds Winner"
 
+            if "Indefinido" in cenario_tatico or "Sem" in cenario_tatico: continue
+
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
-            referee = j['fixture'].get('referee', 'Desconhecido')
             liga_nome = j['league']['name']
             
-            # Adiciona ao prompt apenas se tiver um cenário interessante ou juiz
-            if referee or "MASSACRE" in cenario_tatico or "TENSO" in cenario_tatico:
-                dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Juiz: {referee} | Cenário: {cenario_tatico}\n"
-                count_validos += 1
+            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Cenário: {cenario_tatico}\n"
+            count_validos += 1
 
         if not dados_analise: return []
 
         prompt = f"""
-        ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS (BET365).
+        ATUE COMO UM ANALISTA DE "PLAYER PROPS" (MERCADO DE JOGADORES BET365).
         
-        Analise a lista abaixo e selecione AS 3 MELHORES OPORTUNIDADES.
+        Analise os jogos abaixo. Você tem conhecimento sobre os elencos e artilheiros dos times.
         
-        LISTA DE JOGOS E CENÁRIOS:
+        LISTA DE JOGOS:
         {dados_analise}
         
-        REGRAS DE OURO (OBRIGATÓRIO):
+        SUA MISSÃO (TOP 3 OPORTUNIDADES):
+        Encontre valor em CHUTES (Finalizações) ou DEFESAS (Goleiro).
         
-        1. 🧤 PARA DEFESAS (MURALHA):
-           - SÓ INDIQUE se o cenário for "MASSACRE".
-           - NÃO USE "Over X". Você DEVE estimar a linha.
-           - Se for massacre absurdo (Odd < 1.30), indique "Over 3.5 Defesas".
-           - Se for massacre normal (Odd < 1.55), indique "Over 2.5 Defesas".
-           - Indique o nome do GOLEIRO DO TIME FRACO (ou "Goleiro do [Nome do Time]").
-        
-        2. 🟨 PARA CARTÕES (SNIPER):
-           - SÓ INDIQUE se o cenário for "TENSO" ou se você (IA) souber que o Juiz é rigoroso.
-           - Linha padrão: "Over 3.5 Cartões" (jogo normal) ou "Over 4.5 Cartões" (clássico/tenso).
-           - Evite ligas sub-19 ou amistosos para cartões.
+        REGRAS DE OURO:
+        1. 🎯 CHUTES (FINALIZAÇÃO):
+           - Se o cenário for "DOMÍNIO", indique o Principal Atacante (Camisa 9) do time favorito.
+           - Mercado Alvo: "Over 0.5 Chutes ao Gol" (Segurança) ou "Over 1.5 Chutes" (Volume).
+           - Cite o NOME do jogador.
+           
+        2. 🧤 DEFESAS (MURALHA):
+           - Se o cenário for "DOMÍNIO", indique o Goleiro do time que vai sofrer pressão.
+           - Indique "Over 2.5 Defesas" ou "Over 3.5 Defesas".
         
         SAÍDA JSON:
         {{
             "sinais": [
                 {{
                     "fid": "...",
-                    "tipo": "GOLEIRO" ou "CARTAO",
-                    "titulo": "🧤 MURALHA" ou "🟨 SNIPER",
+                    "tipo": "JOGADOR",
+                    "titulo": "🎯 SNIPER DE JOGADOR",
                     "jogo": "Time A x Time B",
-                    "destaque": "Motivo tático (Ex: Massacre do mandante obriga goleiro a trabalhar)",
-                    "indicacao": "Over 2.5 Defesas do Goleiro do [Time] (Odd Est. @1.80)"
+                    "destaque": "Ex: O Time A é muito favorito, Haaland deve ter muitas chances.",
+                    "indicacao": "Erling Haaland - Over 1.5 Chutes ao Gol"
                 }}
             ]
         }}
@@ -1482,65 +1476,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-# --- ESTRATÉGIA: AÇOUGUEIRO (Cartão para o Time) - CORRIGIDO PARA BET365 ---
-        # Lógica: Não buscar Over Geral (Bet fecha). Buscar quem está batendo.
-        
-        # 1. Filtro de Tempo (Deixar o jogo esquentar, mas antes do fim)
-        if 55 <= tempo <= 88:
-            
-            # 2. Extração de Faltas
-            faltas_h = get_v(stats_h, 'Fouls')
-            faltas_a = get_v(stats_a, 'Fouls')
-            cartoes_h = get_v(stats_h, 'Yellow Cards') + get_v(stats_h, 'Red Cards')
-            cartoes_a = get_v(stats_a, 'Yellow Cards') + get_v(stats_a, 'Red Cards')
-            
-            # 3. Identificar o "Açougueiro" (Quem bate mais)
-            diff_faltas = abs(faltas_h - faltas_a)
-            total_faltas = faltas_h + faltas_a
-            
-            # Gatilho: Jogo tenso (>12 faltas) E placar apertado
-            if total_faltas >= 12 and abs(gh - ga) <= 1:
-                
-                alvo_cartao = None
-                motivo_cartao = ""
-                
-                # Cenário A: Time Perdendo e Batendo (Frustração)
-                if (gh < ga and faltas_h >= faltas_a):
-                    alvo_cartao = "Casa"
-                    motivo_cartao = "Perdendo + Agressivo"
-                elif (ga < gh and faltas_a >= faltas_h):
-                    alvo_cartao = "Visitante"
-                    motivo_cartao = "Perdendo + Agressivo"
-                    
-                # Cenário B: Time Ganhando Apertado e Fazendo Cera/Falta Tática (Segurando)
-                elif (gh > ga and faltas_h >= 8 and tempo >= 80):
-                    alvo_cartao = "Casa"
-                    motivo_cartao = "Segurando Resultado (Cera)"
-                elif (ga > gh and faltas_a >= 8 and tempo >= 80):
-                    alvo_cartao = "Visitante"
-                    motivo_cartao = "Segurando Resultado (Cera)"
 
-                # Cenário C: O Açougueiro Puro (Bate muito mais que o outro)
-                elif diff_faltas >= 4:
-                    alvo_cartao = "Casa" if faltas_h > faltas_a else "Visitante"
-                    motivo_cartao = f"Bate muito mais (+{diff_faltas} faltas)"
-
-                # Se encontrou um alvo claro
-                if alvo_cartao:
-                    nome_time = j['teams']['home']['name'] if alvo_cartao == "Casa" else j['teams']['away']['name']
-                    
-                    # Evitar indicar se o time já tem muitos cartões (risco de vermelho direto ou mercado fechado)
-                    qtd_atual = cartoes_h if alvo_cartao == "Casa" else cartoes_a
-                    if qtd_atual <= 3: 
-                        SINAIS.append({
-                            "tag": "🟨 Cartão no Time",
-                            "ordem": f"👉 <b>FAZER:</b> Cartão para {alvo_cartao} ({nome_time})\n✅ Opções: <b>Próximo Cartão</b> ou <b>Total Time Over</b>",
-                            "stats": f"🪓 {motivo_cartao} | Faltas: {faltas_h}x{faltas_a}",
-                            "rh": rh, "ra": ra, "favorito": "CARTAO"
-                        })
-
-        return SINAIS
-    except: return []
 
 # ==============================================================================
 # 5. FUNÇÕES DE SUPORTE, AUTOMAÇÃO E INTERFACE (O CORPO)
@@ -2927,4 +2863,5 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
 
