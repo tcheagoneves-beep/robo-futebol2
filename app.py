@@ -1476,6 +1476,10 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
+        return SINAIS  # <--- (IMPORTANTE) Dê 8 espaços (ou 2 Tabs) antes dessa linha
+        
+    except: return []  # <--- (IMPORTANTE) Dê 4 espaços (ou 1 Tab) antes dessa linha
+
 
 
 # ==============================================================================
@@ -1827,7 +1831,7 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     # 1. Sniper Matinal
-    if 8 <= agora.hour < 11:
+    if 7 <= agora.hour < 11:
         if not st.session_state['matinal_enviado']:
             # A função gerar_insights_matinais_ia JÁ FAZ O FILTRO DE ODDS internamente agora
             insights = gerar_insights_matinais_ia(api_key)
