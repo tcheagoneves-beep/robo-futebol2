@@ -769,7 +769,6 @@ def gerar_multipla_matinal_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # Filtra jogos não iniciados
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
         
         if len(jogos_candidatos) < 2: return None, []
@@ -778,64 +777,57 @@ def gerar_multipla_matinal_ia(api_key):
         mapa_jogos = {}
         
         count_validos = 0
-        random.shuffle(jogos_candidatos)
-
         for j in jogos_candidatos:
-            if count_validos >= 30: break
+            if count_validos >= 40: break
             
             fid = j['fixture']['id']
             
-            # 1. Filtro Bet365 (Obrigatório)
+            # --- [NOVO] VALIDA SE TEM NA BET365 ANTES DE MANDAR P/ IA ---
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
-            if odd_val == 0: continue 
+            if odd_val == 0: continue # Pula se não tiver na Bet365
+            # ------------------------------------------------------------
 
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             
-            # 2. Usa a NOVA função de Tendência (Macro/Micro)
-            stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-            
-            if stats and stats['home']['qtd'] > 0:
-                # Regra para Múltipla: Queremos segurança. 
-                # Evita times com média recente muito baixa (<40% de over)
-                if stats['home']['micro'] < 40 and stats['away']['micro'] < 40: continue
-                
-                # Formata os dados para a IA
-                h_mac = stats['home']['macro']; h_mic = stats['home']['micro']
-                a_mac = stats['away']['macro']; a_mic = stats['away']['micro']
-                
-                mapa_jogos[fid] = f"{home} x {away}"
-                lista_jogos_txt += f"""
-                - ID {fid}: {home} x {away} ({j['league']['name']})
-                  Odd: {odd_val} ({odd_nome})
-                  Casa: Histórico {h_mac}% / Recente {h_mic}%
-                  Fora: Histórico {a_mac}% / Recente {a_mic}%
-                """
-                count_validos += 1
+            try:
+                stats_h = analisar_tendencia_50_jogos(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
+                if stats_h and stats_h['home']['qtd'] > 0:
+                    mapa_jogos[fid] = f"{home} x {away}"
+                    # Adicionei a Odd no texto para a IA saber que existe liquidez
+                    lista_jogos_txt += f"- ID {fid}: {home} x {away} ({j['league']['name']}) | Odd Ref: {odd_val} | Over 1.5 FT: Casa {stats_h['home']['over15_ft']}% / Fora {stats_h['away']['over15_ft']}%\n"
+                    count_validos += 1
+            except: pass
 
         if not lista_jogos_txt: return None, []
         
-        # Contexto extra
+        # ... Resto da função continua igual ...
         contexto_firebase = carregar_contexto_global_firebase()
+        df_sheets = st.session_state.get('historico_full', pd.DataFrame())
+        winrate_sheets = "N/A"
+        # ... (mantém o restante do código original daqui para baixo)
+        if not df_sheets.empty:
+            greens = len(df_sheets[df_sheets['Resultado'].str.contains('GREEN', na=False)])
+            total = len(df_sheets[df_sheets['Resultado'].isin(['✅ GREEN', '❌ RED'])])
+            if total > 0: winrate_sheets = f"{(greens/total)*100:.1f}%"
 
         prompt = f"""
-        ATUE COMO UM GESTOR DE RISCO (MONTAGEM DE BILHETE PRONTO).
-        OBJETIVO: Criar uma DUPLA (2 jogos) ou TRIPLA (3 jogos) de Alta Segurança (Odds @1.80 a @2.50 combinadas).
+        Atue como GESTOR DE RISCO E ESTRATÉGIA.
+        OBJETIVO: Criar uma "Múltipla de Segurança" (Bingo Matinal) com 2 ou 3 jogos para HOJE.
         
-        DADOS (JOGOS FILTRADOS NA BET365):
+        DADOS GLOBAIS: Winrate Pessoal: {winrate_sheets}. {contexto_firebase}.
+        
+        LISTA DE CANDIDATOS (JÁ FILTRADOS NA BET365):
         {lista_jogos_txt}
         
-        CRITÉRIOS:
-        1. Escolha jogos onde a "Recente" (Forma atual) sustenta a aposta.
-        2. Foco em mercados de GOLS (Over 0.5 HT, Over 1.5 FT).
-        3. Se não houver 2 jogos CONFITÁVEIS, não force.
+        TAREFA: 
+        Escolha os 2 ou 3 jogos estatisticamente MAIS SEGUROS para Over 0.5 Gols ou Over 1.5 Gols.
         
-        SAÍDA JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
+        FORMATO JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
         """
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         return json.loads(response.text), mapa_jogos
-
     except Exception as e: return None, []
 
 def gerar_insights_matinais_ia(api_key):
@@ -864,11 +856,10 @@ def gerar_insights_matinais_ia(api_key):
             liga = j['league']['name']
             
             # --- FILTRO 1: ODD NA BET365 ---
-            # Aqui pegamos o VALOR e o NOME (Ex: 'Over 2.5')
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
             if odd_val == 0 or odd_val < 1.45: continue 
             
-            # --- FILTRO 2: MACRO VS MICRO ---
+            # --- FILTRO 2: MACRO VS MICRO (A Lógica Nova) ---
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
             if stats and stats['home']['qtd'] > 0:
@@ -878,19 +869,18 @@ def gerar_insights_matinais_ia(api_key):
                 # Regra de Corte: Ignorar times que morreram recentemente (Micro < 40%)
                 if h_mic < 40 and a_mic < 40: continue
 
+                # Identificação de Tendência para a IA
                 def get_trend(mac, mic):
                     diff = mic - mac
-                    if diff >= 20: return "📈 AQUECENDO"
-                    if diff <= -20: return "📉 ESFRIANDO"
+                    if diff >= 20: return "📈 AQUECENDO (Melhorou muito)"
+                    if diff <= -20: return "📉 ESFRIANDO (Cuidado)"
                     return "➡️ ESTÁVEL"
 
                 trend_h = get_trend(h_mac, h_mic)
                 trend_a = get_trend(a_mac, a_mic)
 
-                # --- CORREÇÃO AQUI: PASSAMOS O 'odd_nome' (O MERCADO EXATO) PARA A IA ---
                 lista_para_ia += f"""
-                - Jogo: {home} x {away} ({liga})
-                  MERCADO DISPONÍVEL: {odd_nome} | ODD: @{odd_val:.2f}
+                - Jogo: {home} x {away} ({liga}) | ODD: @{odd_val:.2f}
                   CASA: Histórico {h_mac}% -> Recente {h_mic}% ({trend_h})
                   FORA: Histórico {a_mac}% -> Recente {a_mic}% ({trend_a})
                 """
@@ -899,28 +889,28 @@ def gerar_insights_matinais_ia(api_key):
         if not lista_para_ia: return "Nenhum jogo com valor e tendência positiva encontrado hoje."
 
         prompt = f"""
-        ATUE COMO UM ANALISTA DE PERFORMANCE E ODDS (SNIPER).
+        ATUE COMO UM ANALISTA DE PERFORMANCE (PRÉ-MATCH).
         
-        Eu busquei na Bet365 e filtrei jogos com liquidez.
-        Abaixo estão os jogos e EXATAMENTE qual mercado está pagando a Odd informada.
+        Eu filtrei os jogos com Odd na Bet365. Agora preciso que você analise o "MOMENTO" dos times.
+        Não olhe apenas o histórico geral. Dê peso total para a FORMA RECENTE (Micro).
         
-        DADOS:
+        LISTA DE CANDIDATOS (Com Tendências):
         {lista_para_ia}
         
-        SUA MISSÃO (TOP 3 ESCOLHAS):
-        1. Analise se a "MERCADO DISPONÍVEL" bate com a "Tendência Recente" dos times.
-        2. REGRA CRÍTICA: Se a Bet365 está oferecendo "Over 2.5", seu palpite TEM QUE SER "Over 2.5". Não sugira "Over 1.5" usando a odd de 2.5. Seja preciso.
-        3. Priorize confrontos "Aquecendo x Aquecendo".
+        CRITÉRIOS DE ESCOLHA (TOP 3):
+        1. PREFIRA times com etiqueta "📈 AQUECENDO" ou "➡️ ESTÁVEL" com % alta.
+        2. EVITE times com "📉 ESFRIANDO" (Armadilha de estatística antiga).
+        3. O confronto ideal é: Casa Aquecendo x Fora Aquecendo (Chuva de gols).
         
         SAÍDA (Formato de Relatório):
         
         ⚽ Jogo: [Nome]
-        🔥 Tendência: [Ex: Casa Aquecendo muito]
-        🎯 Palpite: [Copie EXATAMENTE o texto do 'MERCADO DISPONÍVEL']
-        📝 Motivo: [Justifique se a odd vale o risco para essa linha específica. Ex: "A linha é alta (2.5), mas como os times estão aquecendo, @2.30 tem valor."]
+        🔥 Tendência: [Ex: Casa Aquecendo muito nos últimos 5 jogos]
+        🎯 Palpite: [Over 1.5 / Over 2.5]
+        📝 Motivo: [Explique cruzando a odd com a forma recente. Ex: "A odd @1.70 é valor pois o time melhorou 30% nas últimas semanas..."]
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3)) # Temp mais baixa para evitar alucinação
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.4))
         st.session_state['gemini_usage']['used'] += 1
         return response.text
         
@@ -929,116 +919,57 @@ def gerar_insights_matinais_ia(api_key):
 def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
-    
-    # IDs das Ligas onde a Bet365 costuma abrir mercado de Player Props (Defesas)
-    # 39=Premier, 140=LaLiga, 135=SerieA, 78=Bundesliga, 61=Ligue1, 2=UCL, 3=UEL, 71=BR-A, 72=BR-B
-    LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
-
     try:
         url = "https://v3.football.api-sports.io/fixtures"
         params = {"date": hoje, "timezone": "America/Sao_Paulo"}
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # Filtra jogos NS (Não iniciados)
-        jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
+        jogos_candidatos = [
+            j for j in jogos 
+            if j['fixture'].get('referee') and j['fixture']['status']['short'] == 'NS'
+        ]
         
         if not jogos_candidatos: return []
         
-        random.shuffle(jogos_candidatos)
+        amostra = jogos_candidatos[:60] 
         
         dados_analise = ""
-        count_validos = 0
-        
-        for j in jogos_candidatos:
-            if count_validos >= 25: break 
-            
+        for j in amostra:
             fid = j['fixture']['id']
-            lid = j['league']['id']
-            
-            # 1. BLINDAGEM BÁSICA (Tem odd na Bet365?)
-            odd_check, _ = buscar_odd_pre_match(api_key, fid)
-            if odd_check == 0: continue
-
-            # 2. DEFINIÇÃO DE CENÁRIO (Favorito ou Equilibrado)
-            cenario_tatico = "Indefinido"
-            pode_ter_prop = (lid in LIGAS_BIG_MARKETS) # Só busca defesa em liga grande
-            
-            try:
-                # Busca Match Winner para ver desequilíbrio
-                url_odd = "https://v3.football.api-sports.io/odds"
-                r_odd = requests.get(url_odd, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "8", "bet": "1"}).json()
-                
-                if r_odd.get('response'):
-                    vals = r_odd['response'][0]['bookmakers'][0]['bets'][0]['values']
-                    odd_casa = next((float(v['odd']) for v in vals if v['value'] == 'Home'), 0)
-                    odd_fora = next((float(v['odd']) for v in vals if v['value'] == 'Away'), 0)
-                    
-                    # Lógica de Massacre (Para Goleiros - Só em Ligas Grandes)
-                    if pode_ter_prop:
-                        if odd_casa > 0 and odd_casa < 1.55: 
-                            cenario_tatico = "MASSACRE CASA (Foco: Goleiro Visitante)"
-                        elif odd_fora > 0 and odd_fora < 1.55: 
-                            cenario_tatico = "MASSACRE VISITANTE (Foco: Goleiro Casa)"
-                    
-                    # Lógica de Cartões (Qualquer Liga com Juiz)
-                    if "MASSACRE" not in cenario_tatico:
-                        if abs(odd_casa - odd_fora) < 0.5 or (odd_casa > 2.0 and odd_fora > 2.0):
-                            cenario_tatico = "JOGO TENSO/EQUILIBRADO (Foco: Cartões)"
-                        else:
-                            cenario_tatico = "Jogo Normal (Avaliar apenas se Juiz for Rigoroso)"
-            except:
-                cenario_tatico = "Sem Odds Winner"
-
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
-            referee = j['fixture'].get('referee', 'Desconhecido')
+            referee = j['fixture']['referee']
             liga_nome = j['league']['name']
-            
-            # Adiciona ao prompt apenas se tiver um cenário interessante ou juiz
-            if referee or "MASSACRE" in cenario_tatico or "TENSO" in cenario_tatico:
-                dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Juiz: {referee} | Cenário: {cenario_tatico}\n"
-                count_validos += 1
-
-        if not dados_analise: return []
+            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Árbitro: {referee} | ID: {fid}\n"
 
         prompt = f"""
-        ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS (BET365).
+        ATUE COMO UM ESPECIALISTA EM MERCADOS DE VALOR (SMALL & BIG MARKETS).
         
-        Analise a lista abaixo e selecione AS 3 MELHORES OPORTUNIDADES.
+        Eu liberei o filtro de ligas. Você tem acesso a jogos do mundo todo abaixo.
+        Sua missão é encontrar OPORTUNIDADES DE OURO, não importa se é Champions League ou 2ª Divisão.
         
-        LISTA DE JOGOS E CENÁRIOS:
+        LISTA DE JOGOS E ÁRBITROS (HOJE):
         {dados_analise}
         
-        REGRAS DE OURO (OBRIGATÓRIO):
+        CRITÉRIOS DE ANÁLISE:
+        1. CARTÕES: Procure a combinação "Árbitro Rigoroso" + "Jogo Equilibrado/Tenso".
+        2. GOLEIROS (DEFESAS): Jogos onde há um desnível técnico claro (o goleiro do time pior vai trabalhar).
         
-        1. 🧤 PARA DEFESAS (MURALHA):
-           - SÓ INDIQUE se o cenário for "MASSACRE".
-           - NÃO USE "Over X". Você DEVE estimar a linha.
-           - Se for massacre absurdo (Odd < 1.30), indique "Over 3.5 Defesas".
-           - Se for massacre normal (Odd < 1.55), indique "Over 2.5 Defesas".
-           - Indique o nome do GOLEIRO DO TIME FRACO (ou "Goleiro do [Nome do Time]").
-        
-        2. 🟨 PARA CARTÕES (SNIPER):
-           - SÓ INDIQUE se o cenário for "TENSO" ou se você (IA) souber que o Juiz é rigoroso.
-           - Linha padrão: "Over 3.5 Cartões" (jogo normal) ou "Over 4.5 Cartões" (clássico/tenso).
-           - Evite ligas sub-19 ou amistosos para cartões.
-        
-        SAÍDA JSON:
+        SAÍDA OBRIGATÓRIA (JSON):
         {{
             "sinais": [
                 {{
-                    "fid": "...",
-                    "tipo": "GOLEIRO" ou "CARTAO",
-                    "titulo": "🧤 MURALHA" ou "🟨 SNIPER",
+                    "fid": "12345",
+                    "tipo": "CARTAO" ou "GOLEIRO",
+                    "titulo": "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA (DEFESAS)",
                     "jogo": "Time A x Time B",
-                    "destaque": "Motivo tático (Ex: Massacre do mandante obriga goleiro a trabalhar)",
-                    "indicacao": "Over 2.5 Defesas do Goleiro do [Time] (Odd Est. @1.80)"
+                    "destaque": "Árbitro com média alta em liga under",
+                    "indicacao": "Over 4.5 Cartões"
                 }}
             ]
         }}
         """
-        
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         return json.loads(response.text).get('sinais', [])
@@ -1299,17 +1230,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
-        # --- CORREÇÃO: FALLBACK DE DADOS (Se faltar Ataque Perigoso, usa Chutes) ---
-        usou_estimativa = False
-        if atq_perigo_total == 0 and chutes_totais > 0:
-            # Estima que cada chute surgiu de pelo menos 1 ataque perigoso
-            # Multiplicamos por 1.5 para simular uma intensidade realista
-            atq_perigo_total = int(chutes_totais * 1.5)
-            # Distribui proporcionalmente (só para cálculo)
-            atq_perigo_h = int(chutes_h * 1.5)
-            atq_perigo_a = int(chutes_a * 1.5)
-            usou_estimativa = True
-
         # --- 2. ENGENHARIA DE DADOS (KPIs AVANÇADOS) ---
         
         # A. Precisão (Qualidade do Chute)
@@ -1330,20 +1250,15 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
         # --- FILTRO PRÉVIO ---
         if "Under" not in estrategia and "Morno" not in estrategia:
-            if intensidade_jogo < 0.5 and tempo > 20: 
+            if intensidade_jogo < 0.5 and tempo > 20: # Menos de 1 ataque perigoso a cada 2 min
                  return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> - Jogo muito lento para operar.", "15%"
-
-        # Aviso para o Prompt se o dado foi estimado
-        aviso_dados = ""
-        if usou_estimativa:
-            aviso_dados = "(NOTA: A API não forneceu 'Ataques Perigosos', a Intensidade foi estimada baseada nos Chutes)."
 
         # --- 3. O PROMPT ENRIQUECIDO ---
         prompt = f"""
         ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL (Data-Driven Decisions).
         
         Eu calculei os KPIs avançados do jogo. Use-os para classificar a oportunidade.
-        {aviso_dados}
+        Não ignore a 'Intensidade' e a 'Dominância'.
 
         DADOS DO CONFRONTO:
         - Jogo: {dados_jogo['jogo']} ({dados_jogo['placar']}) aos {tempo} min.
@@ -1356,7 +1271,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         4. 🛡️ Pressão (Momentum): Casa {rh} x {ra} Fora.
         
         ESTATÍSTICAS BRUTAS:
-        - Ataques Perigosos (Ref): {atq_perigo_h} x {atq_perigo_a}
+        - Ataques Perigosos: {atq_perigo_h} x {atq_perigo_a}
         - Chutes no Gol: {gol_h} x {gol_a}
         - Escanteios: {cantos_h} x {cantos_a}
         
@@ -1399,7 +1314,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
         prob_str = f"{prob_val}%"
         
-        # Montagem Visual
+        # Montagem Visual com os KPIs para você ver no Telegram
         html_analise = f"\n🤖 <b>IA ANALYTICS:</b>\n{emoji} <b>{classe} ({prob_str})</b>\n"
         html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | {quem_manda}</i>\n"
         html_analise += f"📝 <i>{motivo}</i>"
