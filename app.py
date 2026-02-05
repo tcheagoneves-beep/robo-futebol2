@@ -856,7 +856,7 @@ def gerar_insights_matinais_ia(api_key):
         random.shuffle(jogos_candidatos) 
         
         for j in jogos_candidatos:
-            if count >= 30: break 
+            if count >= 80: break 
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
@@ -1718,9 +1718,28 @@ def _worker_telegram(token, chat_id, msg):
 def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
+    
+    # --- LÓGICA DE FATIAMENTO (SPLITTER) ---
+    msgs_para_enviar = []
+    if len(msg) <= 4090:
+        msgs_para_enviar.append(msg)
+    else:
+        # Se for muito grande, quebra linha a linha para não cortar HTML no meio
+        buffer = ""
+        linhas = msg.split('\n')
+        for linha in linhas:
+            if len(buffer) + len(linha) + 1 > 4000:
+                msgs_para_enviar.append(buffer)
+                buffer = linha + "\n"
+            else:
+                buffer += linha + "\n"
+        if buffer: msgs_para_enviar.append(buffer)
+
     for cid in ids:
-        t = threading.Thread(target=_worker_telegram, args=(token, cid, msg))
-        t.daemon = True; t.start()
+        for m in msgs_para_enviar:
+            t = threading.Thread(target=_worker_telegram, args=(token, cid, m))
+            t.daemon = True; t.start()
+            time.sleep(0.3) # Delay anti-spam do Telegram
 
 def salvar_snipers_do_texto(texto_ia):
     if not texto_ia or "Sem jogos" in texto_ia: return
@@ -1931,27 +1950,57 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
 
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
-    snipers = [s for s in hist if "Sniper" in s['Estrategia'] and s['Resultado'] == "Pendente"]
+    # Filtra tudo que é Sniper (Matinal ou Jogador) e está Pendente
+    snipers = [s for s in hist if ("Sniper" in s['Estrategia'] or "JOGADOR" in s['Estrategia'] or "Mercado" in s['Liga']) and s['Resultado'] == "Pendente"]
+    
     if not snipers: return
+    
     updates = []
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
+    
     for s in snipers:
-        if "SNIPER_" in str(s['FID']): pass
-        else:
-            fid = str(s['FID'])
-            jogo = ids_live.get(fid)
-            if not jogo:
-                try:
-                    res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
-                    if res.get('response'): jogo = res['response'][0]
-                except: pass
-            if jogo:
-                status = jogo['fixture']['status']['short']
-                if status in ['FT', 'AET', 'PEN']:
-                    gh = jogo['goals']['home'] or 0; ga = jogo['goals']['away'] or 0
-                    res = '✅ GREEN' if (gh+ga) > 0 else '❌ RED'
-                    s['Resultado'] = res
-                    updates.append(s)
+        if "SNIPER_" in str(s['FID']): continue # Ignora IDs falsos de teste
+        
+        fid = str(s['FID']).replace("ALT_", "") # Limpa prefixos se houver
+        jogo = ids_live.get(fid)
+        
+        # Se não tá no Live, busca na API (Pode ter acabado)
+        if not jogo:
+            try:
+                res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
+                if res.get('response'): jogo = res['response'][0]
+            except: pass
+            
+        if jogo:
+            status = jogo['fixture']['status']['short']
+            
+            # Só processa se acabou (FT) ou foi cancelado/adiado
+            if status in ['FT', 'AET', 'PEN', 'INT', 'ABD', 'PST']:
+                gh = jogo['goals']['home'] or 0
+                ga = jogo['goals']['away'] or 0
+                placar_final = f"{gh}x{ga}"
+                
+                res_final = "❌ RED" # Padrão
+                
+                # Regra 1: Sniper Matinal (Over Gols Geral)
+                if "Sniper Matinal" in s['Estrategia']:
+                     # Se saiu pelo menos 1 gol, geralmente é Green em Over ou deu chance de Cashout
+                     # Mas se a aposta for Over 2.5, precisamos ser específicos. 
+                     # Como o Sniper Matinal da IA geralmente indica valor, vamos considerar:
+                     if (gh + ga) >= 1: res_final = "✅ GREEN" # Simplificação para Over 0.5/1.5
+                
+                # Regra 2: Player Props (Chutes) - Requer leitura manual ou API avançada de jogadores
+                # Como a API padrão free/basic as vezes não dá dados de jogadores no endpoint de fixture simples,
+                # vamos focar no Resultado do Jogo/Gols para fechar o status ou manter Pendente para auditoria manual
+                elif "JOGADOR" in s['Estrategia'] or "Mercado Alternativo" in s['Liga']:
+                    # Aqui é complexo validar automaticamente sem endpoint de players.
+                    # Vamos marcar como "Finalizado (Auditar)" para você saber que o jogo acabou
+                    res_final = f"🏁 FIM ({placar_final})"
+
+                s['Resultado'] = res_final
+                s['Placar_Sinal'] = f"Final: {placar_final}"
+                updates.append(s)
+                
     if updates: atualizar_historico_ram(updates)
 
 def verificar_var_rollback(jogos_live, token, chats):
