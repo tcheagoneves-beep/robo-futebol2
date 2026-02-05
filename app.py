@@ -2497,11 +2497,23 @@ if st.session_state.ROBO_LIGADO:
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
                     
-                    medias_gols = buscar_media_gols_ultimos_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
-                    dados_50 = analisar_tendencia_50_jogos(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
+                    # --- ATUALIZAÇÃO: DADOS DE ELITE PARA O LIVE ---
+                    # Em vez de pegar só % de 50 jogos, pegamos o RESUMO DETALHADO RECENTE
+                    # (Reaproveitando a função inteligente que criamos pro Sniper)
+                    dados_contextuais = analisar_tendencia_macro_micro(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
+                    
+                    txt_history = "Dados indisponíveis."
+                    if dados_contextuais:
+                        # Agora a IA vai ler: "[Vitória 2x0 vs City] [Derrota 0x1 vs Liverpool]..."
+                        txt_history = f"""
+                        CASA (Forma Real): {dados_contextuais['home']['resumo']}
+                        FORA (Forma Real): {dados_contextuais['away']['resumo']}
+                        """
+                    
                     nota_home = buscar_rating_inteligente(safe_api, j['teams']['home']['id'])
                     nota_away = buscar_rating_inteligente(safe_api, j['teams']['away']['id'])
                     
+                    # Big Data (Se você já atualizou a função, ele trará a lista de placares aqui também)
                     txt_bigdata = consultar_bigdata_cenario_completo(j['teams']['home']['id'], j['teams']['away']['id'])
 
                     df_sheets = st.session_state.get('historico_full', pd.DataFrame())
@@ -2513,15 +2525,22 @@ if st.session_state.ROBO_LIGADO:
                             wr = (greens/len(f_h))*100
                             txt_pessoal = f"Winrate Pessoal com {home}: {wr:.0f}%"
 
-                    txt_history = ""
-                    if dados_50:
-                        txt_history = (f"API (50j): Casa(Over1.5: {dados_50['home']['over15_ft']}%) | Fora(Over1.5: {dados_50['away']['over15_ft']}%)")
-                    
+                    # MONTAGEM DO CONTEXTO SUPREMO PARA A IA
                     extra_ctx = f"""
-                    FONTE 1 (API/SofaScore): {txt_history} | Rating: {nota_home}x{nota_away}
-                    FONTE 2 (BIG DATA): {txt_bigdata}
-                    FONTE 3 (HISTÓRICO PESSOAL): {txt_pessoal}
+                    --- RAIO-X PROFUNDO ---
+                    1. 🧬 DNA RECENTE (Últimos 5J): 
+                    {txt_history}
+                    
+                    2. 💾 BIG DATA (Histórico Confrontos/Liga): 
+                    {txt_bigdata}
+                    
+                    3. 👤 PERFIL DO USUÁRIO: 
+                    {txt_pessoal}
+                    
+                    4. ⭐ RATING (Força do Elenco): 
+                    {nota_home} (Casa) x {nota_away} (Fora)
                     """
+                    
 
                     for s in lista_sinais:
                         prob = "..." 
