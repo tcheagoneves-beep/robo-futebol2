@@ -702,43 +702,72 @@ def analisar_tendencia_50_jogos(api_key, home_id, away_id):
 @st.cache_data(ttl=86400)
 def analisar_tendencia_macro_micro(api_key, home_id, away_id):
     try:
-        def get_form_string(team_id):
+        # Função auxiliar para buscar stats de um jogo específico (Cartões)
+        def get_card_stats_single_game(fid, team_id):
+            try:
+                url = "https://v3.football.api-sports.io/fixtures/statistics"
+                r = requests.get(url, headers={"x-apisports-key": api_key}, params={"fixture": fid, "team": team_id}, timeout=2)
+                d = r.json()
+                if d.get('response'):
+                    stats = d['response'][0]['statistics']
+                    # Busca segura dos valores
+                    yc = next((x['value'] for x in stats if x['type'] == 'Yellow Cards'), 0) or 0
+                    rc = next((x['value'] for x in stats if x['type'] == 'Red Cards'), 0) or 0
+                    return int(yc), int(rc)
+                return 0, 0
+            except: return 0, 0
+
+        def get_team_stats_unified(team_id):
             url = "https://v3.football.api-sports.io/fixtures"
-            # Pedimos os últimos 5 jogos encerrados
-            params = {"team": team_id, "last": "5", "status": "FT"} 
+            # Pedimos os últimos 10 jogos
+            params = {"team": team_id, "last": "10", "status": "FT"} 
             res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
             jogos = res.get('response', [])
             
-            if not jogos: return "Sem dados recentes.", 0
+            if not jogos: return "Sem dados.", 0, 0, 0
             
-            # Monta o "Diário de Bordo" dos últimos 5 jogos
             resumo_txt = ""
-            over_count = 0
+            over_gols_count = 0
             
-            for j in jogos:
-                # Quem era o adversário?
-                adv_nome = j['teams']['away']['name'] if j['teams']['home']['id'] == team_id else j['teams']['home']['name']
+            # --- PARTE 1: GOLS (Últimos 5 Jogos - Texto) ---
+            for j in jogos[:5]: 
+                adv = j['teams']['away']['name'] if j['teams']['home']['id'] == team_id else j['teams']['home']['name']
                 placar = f"{j['goals']['home']}x{j['goals']['away']}"
                 data_jogo = j['fixture']['date'][:10]
+                resumo_txt += f"[{data_jogo}: {placar} vs {adv}] "
                 
-                # O jogo foi Over 1.5?
-                gols_total = (j['goals']['home'] or 0) + (j['goals']['away'] or 0)
-                if gols_total >= 2: over_count += 1
-                
-                resumo_txt += f"[{data_jogo}: {placar} vs {adv_nome}] "
+                if (j['goals']['home'] + j['goals']['away']) >= 2: over_gols_count += 1
+
+            pct_over_recent = int((over_gols_count / min(len(jogos), 5)) * 100)
+
+            # --- PARTE 2: CARTÕES (Últimos 10 Jogos - Heavy Work) ---
+            total_amarelos = 0
+            total_vermelhos = 0
+            fids_para_buscar = [j['fixture']['id'] for j in jogos] # IDs dos 10 jogos
             
-            # Retorna o Texto Rico e a % Matemática
-            pct = int((over_count / len(jogos)) * 100)
-            return resumo_txt, pct
+            # Executa em paralelo para ser rápido (não travar o robô)
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {executor.submit(get_card_stats_single_game, fid, team_id): fid for fid in fids_para_buscar}
+                for future in as_completed(futures):
+                    y, r = future.result()
+                    total_amarelos += y
+                    total_vermelhos += r
             
-        h_txt, h_pct = get_form_string(home_id)
-        a_txt, a_pct = get_form_string(away_id)
+            media_cards = total_amarelos / len(jogos)
+            
+            return resumo_txt, pct_over_recent, media_cards, total_vermelhos
+
+        # Processa Casa e Fora
+        h_txt, h_pct, h_med_cards, h_reds = get_team_stats_unified(home_id)
+        a_txt, a_pct, a_med_cards, a_reds = get_team_stats_unified(away_id)
         
         return {
-            "home": {"resumo": h_txt, "micro": h_pct},
-            "away": {"resumo": a_txt, "micro": a_pct}
+            "home": {"resumo": h_txt, "micro": h_pct, "avg_cards": h_med_cards, "reds": h_reds},
+            "away": {"resumo": a_txt, "micro": a_pct, "avg_cards": a_med_cards, "reds": a_reds}
         }
-    except: return None
+    except Exception as e: 
+        print(f"Erro MacroMicro: {e}")
+        return None
 
 @st.cache_data(ttl=120) 
 def buscar_agenda_cached(api_key, date_str):
@@ -868,67 +897,82 @@ def gerar_insights_matinais_ia(api_key):
         random.shuffle(jogos_candidatos) 
         
         for j in jogos_candidatos:
-            if count >= 60: break # Reduzi um pouco para caber mais detalhe no prompt
+            if count >= 60: break 
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga = j['league']['name']
+            juiz = j['fixture'].get('referee', 'Desconhecido') # Dados Novos
             
             mapa_jogos[f"{home} x {away}"] = str(fid)
 
-            # --- FILTRO 1: ODD NA BET365 ---
+            # Filtro de Odds
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
-            if odd_val == 0 or odd_val < 1.45: continue 
+            if odd_val == 0: continue 
             
-            # --- FILTRO 2: CONTEXTO REAL (NOVO) ---
+            # Busca Contexto Pesado (Gols + Cartões)
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
             if stats:
-                # Aqui está o pulo do gato: Mandamos a LISTA DE JOGOS, não só a %
                 h_txt = stats['home']['resumo']
                 a_txt = stats['away']['resumo']
+                
+                # Dados de Cartões (Novo)
+                h_cards = f"{stats['home']['avg_cards']:.1f}/jogo ({stats['home']['reds']} Vermelhos)"
+                a_cards = f"{stats['away']['avg_cards']:.1f}/jogo ({stats['away']['reds']} Vermelhos)"
                 
                 lista_para_ia += f"""
                 ---
                 ⚽ Jogo: {home} x {away} ({liga})
-                💰 Mercado: {odd_nome} @{odd_val:.2f}
-                🏠 CASA (Últimos 5): {h_txt}
-                ✈️ FORA (Últimos 5): {a_txt}
+                👮 Juiz: {juiz}
+                💰 Mercado Ref: {odd_nome} @{odd_val:.2f}
+                
+                📊 GOLS (Histórico Recente):
+                🏠 Casa: {h_txt}
+                ✈️ Fora: {a_txt}
+                
+                🟨 CARTÕES (Média 10j):
+                🏠 Casa: {h_cards}
+                ✈️ Fora: {a_cards}
                 """
                 count += 1
         
-        if not lista_para_ia: return "Nenhum jogo com valor encontrado hoje.", {}
+        if not lista_para_ia: return "Nenhum jogo qualificado.", {}
 
-        # --- PROMPT ANALÍTICO DE VERDADE ---
+        # --- O PROMPT HÍBRIDO PERFEITO (GOLS RIGOROSOS + CARTÕES) ---
         prompt = f"""
-        ATUE COMO UM ANALISTA DE FUTEBOL SÊNIOR (CONTEXTUAL).
+        ATUE COMO UM ANALISTA DE FUTEBOL SÊNIOR (ESPECIALISTA EM GOLS E DISCIPLINA).
         
-        Abaixo estão os jogos de hoje com os RESULTADOS RECENTES DOS TIMES.
-        Não olhe apenas para vitórias/derrotas. Olhe para a QUALIDADE dos placares e Adversários.
+        Analise a lista de jogos abaixo. Use os dados REAIS fornecidos.
         
         DADOS:
         {lista_para_ia}
         
         SUA MISSÃO (TOP 5 DE OURO):
-        Escolha as 5 melhores apostas baseadas em MOMENTO REAL.
+        Selecione as 5 melhores oportunidades do dia, seja em GOLS ou CARTÕES.
         
-        Critérios de Desempate (Use sua inteligência):
-        1. Se o time ganhou de 1x0 suado de um time ruim -> DESCARTE.
-        2. Se o time vem goleando (3x0, 4x1) -> PRIORIZE (Sinal de ataque forte).
-        3. Se o confronto é "Ataque forte vs Defesa vazada" (muitos gols sofridos no histórico recente) -> OURO.
+        ⚠️ CRITÉRIOS DE ELIMINAÇÃO (SEJA RIGOROSO):
         
-        SAÍDA (Relatório):
+        1. PARA GOLS (SNIPER):
+           - Se o time ganhou de 1x0 "chorado" contra time fraco -> DESCARTE.
+           - PRIORIZE times que vêm de goleadas (Ex: 3x0, 4x1) ou jogos muito abertos.
+           - PRIORIZE confrontos "Ataque Forte vs Defesa Vazada".
+           
+        2. PARA CARTÕES (AÇOUGUEIRO):
+           - SÓ INDIQUE se a média somada dos times for ALTA (> 5.0) E o Juiz for conhecido.
+           - Se houver Vermelhos recentes, é um forte indicador.
+           - Se os times vêm de placares magros (0x0, 1x0), a chance de jogo pegado é maior.
         
-        🌅 **SNIPER MATINAL (ANÁLISE DE CONTEXTO)**
+        SAÍDA (Relatório Final):
+        
+        🌅 **SNIPER MATINAL (IA + DADOS)**
         
         1️⃣ ⚽ Jogo: [Nome]
-        🎯 Palpite: [Mercado] (@[Odd])
-        🧠 Leitura IA: "O time da casa vem de 3 goleadas seguidas (4x1, 3x0), indicando ataque avassalador, enquanto o visitante tomou gols em todos os jogos..."
+        🎯 Palpite: [Mercado] (Ex: Over 2.5 Gols / Over Cartões)
+        💡 Motivo Técnico: [Explique baseado nos dados. Ex: "Casa vem de 3 goleadas seguidas" ou "Média de cartões somada é 7.0 e o juiz é rigoroso"]
         
-        2️⃣ ...
-        
-        (Liste apenas o TOP 5)
+        2️⃣ ... (Até 5 jogos)
         """
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
