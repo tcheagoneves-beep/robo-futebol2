@@ -1304,7 +1304,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
-        # --- FALLBACK DE DADOS (Se faltar Ataque Perigoso, usa Chutes) ---
+        # --- FALLBACK DE DADOS ---
         usou_estimativa = False
         if atq_perigo_total == 0 and chutes_totais > 0:
             atq_perigo_total = int(chutes_totais * 5)
@@ -1312,6 +1312,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
             usou_estimativa = True
 
         # --- 2. ENGENHARIA DE DADOS (KPIs) ---
+        # Precisão: O time chuta fofo ou chuta pra matar?
         precisao_h = (gol_h / chutes_h * 100) if chutes_h > 0 else 0
         precisao_a = (gol_a / chutes_a * 100) if chutes_a > 0 else 0
         
@@ -1325,13 +1326,11 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         if dominancia_h > 60: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
         elif dominancia_h < 40: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
 
-        # --- 3. FILTRO PRÉVIO INTELIGENTE (SEMÁFORO) ---
-        # Lista de estratégias onde "Jogo Parado" é BOM (Não vetar por baixa intensidade)
+        # --- 3. SEMÁFORO TÉCNICO ---
         strats_low_intensity = ["Under", "Morno", "Vovô", "Back", "Segurar"]
         eh_strat_low = any(x in estrategia for x in strats_low_intensity)
         eh_strat_card = "Cartão" in estrategia
 
-        # Só veta por "jogo parado" se a estratégia EXIGIR ataque (Gols/Cantos)
         if not usou_estimativa and not eh_strat_low and not eh_strat_card:
             if intensidade_jogo < 0.5 and tempo > 15: 
                  return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> (Dados Reais) - Jogo muito lento.", "15%"
@@ -1339,9 +1338,9 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         aviso_dados = ""
         if usou_estimativa: aviso_dados = "(NOTA: Intensidade projetada via Chutes)."
 
-        # --- 4. O PROMPT (Instruindo a IA sobre o objetivo) ---
+        # --- 4. O PROMPT (A NOVA INTELIGÊNCIA) ---
         prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL.
+        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL E TRADER ESPORTIVO.
         Analise os KPIs abaixo para validar a entrada '{estrategia}'.
         {aviso_dados}
 
@@ -1350,25 +1349,37 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         
         KPIs:
         1. Intensidade (Ataque): {intensidade_jogo:.2f}/min ({status_intensidade}).
-        2. Disciplina (Faltas): {total_faltas} totais (Casa {faltas_h} x {faltas_a} Fora).
-        3. Cartões Atuais: Casa {cards_h} x {cards_a} Fora.
-        4. Tática: {quem_manda}.
+        2. Tática: {quem_manda}.
+        3. Faltas: {total_faltas} | Cartões: {cards_h}x{cards_a}.
         
-        STATS EXTRAS:
-        - Chutes Gol: {gol_h} x {gol_a}
-        - Escanteios: {cantos_h} x {cantos_a}
+        STATS DETALHADAS:
+        - Casa: {chutes_h} Chutes ({gol_h} no gol) | {cantos_h} Cantos | {atq_perigo_h} Atq Perigosos.
+        - Fora: {chutes_a} Chutes ({gol_a} no gol) | {cantos_a} Cantos | {atq_perigo_a} Atq Perigosos.
         
-        CONTEXTO: {extra_context}
+        CONTEXTO HISTÓRICO: {extra_context}
         
-        REGRAS DE DECISÃO (IMPORTANTE):
-        - SE A ESTRATÉGIA FOR 'CARTÃO': Ignore a intensidade de ataque baixa. Foque se há muitas faltas ({total_faltas}+) ou desequilíbrio emocional.
-        - SE A ESTRATÉGIA FOR 'UNDER/MORNO/VOVÔ': Baixa intensidade (<0.6) é SINAL DE APROVAÇÃO (DIAMANTE). Jogo parado é bom aqui.
-        - SE FOR GOLS/CANTOS: Exija intensidade alta (>0.8).
+        -----------------------------------------------------------
+        ⚠️ REGRAS DE OURO (LEIA COM ATENÇÃO):
         
+        1. O OBJETIVO É LUCRO, NÃO IMPORTA QUEM MARCA.
+           - Se a estratégia for "GOLS" (Over/Golden/Limit), avalie o jogo como um todo.
+        
+        2. O CENÁRIO DE "ARAME LISO" (PRESSÃO INEFICIENTE):
+           - Se o Time A chuta muito (15+) mas não marca, NÃO VETE IMEDIATAMENTE.
+           - OLHE PARA O TIME B (O OPRIMIDO): Eles têm histórico de marcar gols? Eles têm chutes no gol hoje?
+           - SE SIM: Isso é cenário de "Gol de Contra-Ataque". APROVE (DIAMANTE). O Time A está exposto.
+           
+        3. O CENÁRIO DE DEFESA PENEIRA:
+           - Se o time que está sofrendo a pressão tem histórico de sofrer muitos gols no final (veja no Contexto Histórico), a pressão vai furar. APROVE.
+           
+        4. QUANDO VETAR (ARRISCADO/VETADO):
+           - Só vete GOLS se a intensidade for BAIXA ou se AMBOS os times estiverem errando tudo e satisfeitos com o empate (Jogo morto).
+        -----------------------------------------------------------
+
         CLASSIFIQUE:
-        💎 DIAMANTE: Dados perfeitos para o OBJETIVO da estratégia (Seja ele atacar ou defender).
-        ✅ PADRÃO: Dados aceitáveis.
-        ⚠️ ARRISCADO: Dados contraditórios (ex: pedir gol em jogo parado, ou pedir under em jogo frenético).
+        💎 DIAMANTE: Jogo aberto, pressão insustentável (de um lado ou dos dois) ou defesa prestes a falhar.
+        ✅ PADRÃO: Dados favoráveis.
+        ⛔ VETADO: Jogo travado, lento ou times retranqueiros.
 
         JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
         """
@@ -1383,13 +1394,13 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         
         emoji = "✅"
         if classe == "DIAMANTE" or (prob_val >= 85): emoji = "💎"; classe = "DIAMANTE"
-        elif classe == "ARRISCADO" or prob_val < 60: emoji = "⚠️"; classe = "ARRISCADO"
+        elif classe == "ARRISCADO" or "VETADO" in classe or prob_val < 60: emoji = "⛔"; classe = "ARRISCADO/VETADO"
         else: emoji = "✅"; classe = "APROVADO"
 
         prob_str = f"{prob_val}%"
         
         html_analise = f"\n🤖 <b>IA ANALYTICS:</b>\n{emoji} <b>{classe} ({prob_str})</b>\n"
-        html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | Faltas: {total_faltas}</i>\n"
+        html_analise += f"📊 <i>Intensidade: {intensidade_jogo:.1f}/min | Chutes: {chutes_totais}</i>\n"
         html_analise += f"📝 <i>{motivo}</i>"
         
         return html_analise, prob_str
