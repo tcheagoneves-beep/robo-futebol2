@@ -1644,6 +1644,51 @@ def criar_estrategia_nova_ia():
         return response.text.strip()
     except Exception as e: return f"Erro na criação: {str(e)}"
 
+
+def otimizar_estrategias_existentes_ia():
+    if not IA_ATIVADA: return "IA Offline."
+    
+    # 1. Carrega o histórico
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return "Você precisa de histórico (Greens/Reds) para eu poder otimizar algo."
+    
+    try:
+        # 2. Prepara os dados matemáticos para a IA
+        # Conta quantos Greens e Reds cada estratégia teve
+        resumo = df[df['Resultado'].isin(['✅ GREEN', '❌ RED', 'GREEN', 'RED'])].copy()
+        
+        if resumo.empty: return "Sem operações finalizadas para analisar."
+        
+        stats_str = ""
+        grupos = resumo.groupby('Estrategia')
+        
+        for nome, grupo in grupos:
+            greens = len(grupo[grupo['Resultado'].str.contains('GREEN', na=False)])
+            reds = len(grupo[grupo['Resultado'].str.contains('RED', na=False)])
+            total = greens + reds
+            winrate = (greens / total * 100) if total > 0 else 0
+            stats_str += f"- {nome}: {greens}G / {reds}R ({winrate:.1f}% Winrate)\n"
+
+        # 3. O Prompt de Consultoria
+        prompt = f"""
+        ATUE COMO UM GESTOR DE ALTA PERFORMANCE (BETTING QUANT).
+        
+        Analise a performance real das minhas estratégias atuais:
+        {stats_str}
+        
+        SUA MISSÃO (DIAGNÓSTICO E CURA):
+        1. 🚨 **O Ponto Fraco:** Qual estratégia está dando prejuízo ou tem winrate perigoso (<60%)? O que podemos ajustar nela? (Ex: ser mais rígido no tempo ou chutes).
+        2. 💎 **A Mina de Ouro:** Qual estratégia está voando (>80%)? Como podemos explorar mais ela?
+        
+        Responda com bullet points diretos e acionáveis.
+        """
+        
+        # 4. Chama a IA
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text.strip()
+        
+    except Exception as e: return f"Erro na análise: {str(e)}"
 # ==============================================================================
 
 def enviar_analise_estrategia(token, chat_ids):
