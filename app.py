@@ -839,7 +839,7 @@ def gerar_multipla_matinal_ia(api_key):
     except Exception as e: return None, []
 
 def gerar_insights_matinais_ia(api_key):
-    if not IA_ATIVADA: return "IA Offline.", {} # Retorna tupla agora
+    if not IA_ATIVADA: return [], "IA Offline"
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
         url = "https://v3.football.api-sports.io/fixtures"
@@ -848,14 +848,13 @@ def gerar_insights_matinais_ia(api_key):
         jogos = res.get('response', [])
         
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
-        
-        if not jogos_candidatos: return "Sem jogos para analisar hoje.", {}
+        if not jogos_candidatos: return [], "Sem jogos."
         
         lista_para_ia = ""
-        mapa_jogos = {} # <--- NOVO: Guarda os IDs reais
         count = 0
         random.shuffle(jogos_candidatos) 
         
+        # AUMENTAMOS O VOLUME PARA 80 JOGOS
         for j in jogos_candidatos:
             if count >= 80: break 
             
@@ -864,15 +863,10 @@ def gerar_insights_matinais_ia(api_key):
             away = j['teams']['away']['name']
             liga = j['league']['name']
             
-            # Monta a chave exata que vai aparecer no texto
-            nome_jogo = f"{home} x {away}"
-            mapa_jogos[nome_jogo] = str(fid) # <--- Salva o ID Real
-
-            # --- FILTRO 1: ODD NA BET365 ---
+            # Busca ODD Obrigatória
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
             if odd_val == 0 or odd_val < 1.45: continue 
             
-            # --- FILTRO 2: MACRO VS MICRO ---
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
             if stats and stats['home']['qtd'] > 0:
@@ -881,56 +875,66 @@ def gerar_insights_matinais_ia(api_key):
                 
                 if h_mic < 40 and a_mic < 40: continue
 
-                def get_trend(mac, mic):
-                    diff = mic - mac
-                    if diff >= 20: return "📈 AQUECENDO"
-                    if diff <= -20: return "📉 ESFRIANDO"
-                    return "➡️ ESTÁVEL"
+                # --- [CORREÇÃO] Lógica Completa de Momento (Quente/Frio/Estável) ---
+                def definir_momento(historico, recente):
+                    diff = recente - historico
+                    if diff >= 20: return "🔥 AQUECENDO (Melhorou muito)"
+                    elif diff >= 10: return "📈 Subindo"
+                    elif diff <= -20: return "❄️ ESFRIANDO (Piorou muito)"
+                    elif diff <= -10: return "📉 Caindo"
+                    else: return "➡️ ESTÁVEL"
 
-                trend_h = get_trend(h_mac, h_mic)
-                trend_a = get_trend(a_mac, a_mic)
+                trend_h = definir_momento(h_mac, h_mic)
+                trend_a = definir_momento(a_mac, a_mic)
 
+                # Passamos o ID, a ODD e o MOMENTO exato para a IA não alucinar
                 lista_para_ia += f"""
-                - Jogo: {home} x {away} ({liga})
-                  MERCADO DISPONÍVEL: {odd_nome} | ODD: @{odd_val:.2f}
-                  CASA: Histórico {h_mac}% -> Recente {h_mic}% ({trend_h})
-                  FORA: Histórico {a_mac}% -> Recente {a_mic}% ({trend_a})
+                - ID: {fid} | Jogo: {home} x {away} ({liga})
+                  MERCADO DISPONÍVEL NA BET365: {odd_nome} | ODD: {odd_val}
+                  CASA: Histórico {h_mac}% -> Recente {h_mic}% | Momento: {trend_h}
+                  FORA: Histórico {a_mac}% -> Recente {a_mic}% | Momento: {trend_a}
                 """
                 count += 1
         
-        if not lista_para_ia: return "Nenhum jogo com valor e tendência positiva encontrado hoje.", {}
+        if not lista_para_ia: return [], "Filtro eliminou tudo."
 
-        # MANTIVE SEU PROMPT ORIGINAL EXATAMENTE IGUAL
         prompt = f"""
         ATUE COMO UM ANALISTA DE PERFORMANCE E ODDS (SNIPER).
         
         Eu busquei na Bet365 e filtrei jogos com liquidez.
-        Abaixo estão os jogos e EXATAMENTE qual mercado está pagando a Odd informada.
+        Abaixo estão os jogos, seus IDs, o MOMENTO (Quente/Frio) e EXATAMENTE qual mercado está pagando a Odd informada.
         
         DADOS:
         {lista_para_ia}
         
-        SUA MISSÃO (TOP ESCOLHAS):
-        1. Analise se a "MERCADO DISPONÍVEL" bate com a "Tendência Recente" dos times.
-        2. REGRA CRÍTICA: Se a Bet365 está oferecendo "Over 2.5", seu palpite TEM QUE SER "Over 2.5". Não sugira "Over 1.5" usando a odd de 2.5. Seja preciso.
-        3. Priorize confrontos "Aquecendo x Aquecendo".
-        4. Analise TODOS os jogos da lista.
-        5. NÃO SE LIMITE A 3. Se houver 15 oportunidades boas (EV+), liste as 15.
+        SUA MISSÃO (RELATÓRIO DE VOLUME):
+        1. Analise TODOS os jogos da lista.
+        2. NÃO SE LIMITE A 3. Se houver 15 oportunidades boas (EV+), liste as 15.
+        3. Valide se a tendência (Momento) confirma a aposta. 
+           - Ex: Se o time está "❄️ ESFRIANDO", evite apostar a favor dele.
+           - Ex: Se está "🔥 AQUECENDO", é valor.
         
-        SAÍDA (Formato de Relatório):
-        
-        ⚽ Jogo: [Nome]
-        🔥 Tendência: [Ex: Casa Aquecendo muito]
-        🎯 Palpite: [Copie EXATAMENTE o texto do 'MERCADO DISPONÍVEL']
-        📝 Motivo: [Justifique se a odd vale o risco para essa linha específica. Ex: "A linha é alta (2.5), mas como os times estão aquecendo, @2.30 tem valor."]
+        SAÍDA OBRIGATÓRIA EM JSON:
+        {{
+            "sinais": [
+                {{
+                    "fid": 12345,
+                    "jogo": "Time A x Time B",
+                    "palpite": "Copie o Mercado Disponível",
+                    "odd": "Copie a Odd (Ex: 1.80)", 
+                    "motivo": "Ex: Casa Aquecendo (+30%) e Odd de valor."
+                }}
+            ]
+        }}
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         
-        return response.text, mapa_jogos # Retorna o texto E o mapa de IDs
-
-    except Exception as e: return f"Erro na análise: {str(e)}", {}
+        # Retorna a LISTA de sinais (JSON) conforme seu código original pedia
+        return json.loads(response.text).get('sinais', []), "Sucesso"
+        
+    except Exception as e: return [], f"Erro IA: {str(e)}"
 
 def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
@@ -992,48 +996,52 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             except:
                 cenario_tatico = "Sem Odds Winner"
 
-            if "Indefinido" in cenario_tatico or "Sem" in cenario_tatico: continue
+            # Se não tem cenário definido E não tem árbitro, pula
+            referee = j['fixture'].get('referee', 'Desconhecido')
+            if "Indefinido" in cenario_tatico and referee == 'Desconhecido': continue
 
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga_nome = j['league']['name']
             
-            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Cenário: {cenario_tatico}\n"
+            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Árbitro: {referee} | Cenário Tático: {cenario_tatico} | ID: {fid}\n"
             count_validos += 1
 
         if not dados_analise: return []
 
         prompt = f"""
-        ATUE COMO UM ANALISTA DE "PLAYER PROPS" (MERCADO DE JOGADORES BET365).
+        ATUE COMO UM ANALISTA DE "MERCADOS ESPECIAIS" (CARTÕES, CHUTES, DEFESAS).
         
-        Analise os jogos abaixo. Você tem conhecimento sobre os elencos e artilheiros dos times.
+        Analise os jogos abaixo. Use os dados fornecidos para encontrar as melhores oportunidades.
         
-        LISTA DE JOGOS:
+        LISTA DE DADOS:
         {dados_analise}
         
         SUA MISSÃO (TOP 3 OPORTUNIDADES):
-        Encontre valor em CHUTES (Finalizações) ou DEFESAS (Goleiro).
+        Encontre valor em um dos 3 mercados:
         
-        REGRAS DE OURO:
-        1. 🎯 CHUTES (FINALIZAÇÃO):
-           - Se o cenário for "DOMÍNIO", indique o Principal Atacante (Camisa 9) do time favorito.
-           - Mercado Alvo: "Over 0.5 Chutes ao Gol" (Segurança) ou "Over 1.5 Chutes" (Volume).
-           - Cite o NOME do jogador.
+        1. 🎯 SNIPER DE JOGADOR (Chutes):
+           - Se o cenário for "DOMÍNIO TOTAL", indique o Principal Atacante (Camisa 9) do time favorito para chutar.
+           - Indicação: "Fulano - Over 0.5 Chutes no Gol" ou "Over 1.5 Chutes".
            
-        2. 🧤 DEFESAS (MURALHA):
-           - Se o cenário for "DOMÍNIO", indique o Goleiro do time que vai sofrer pressão.
-           - Indique "Over 2.5 Defesas" ou "Over 3.5 Defesas".
+        2. 🧤 MURALHA (Goleiros):
+           - Se o cenário for "DOMÍNIO TOTAL", o goleiro do time pressionado vai trabalhar.
+           - Indicação: "Goleiro do [Time Zebra] - Over 2.5 Defesas".
+           
+        3. 🟨 SNIPER DE CARTÕES:
+           - Se o Árbitro for conhecido (não for 'Desconhecido') e o jogo for "JOGO ABERTO/TROCAÇÃO" (equilibrado), há tendência de cartões.
+           - Indicação: "Over 3.5 Cartões" ou "Over 4.5 Cartões" na partida.
         
         SAÍDA JSON:
         {{
             "sinais": [
                 {{
                     "fid": "...",
-                    "tipo": "JOGADOR",
-                    "titulo": "🎯 SNIPER DE JOGADOR",
+                    "tipo": "JOGADOR" ou "CARTAO" ou "GOLEIRO",
+                    "titulo": "🎯 SNIPER DE JOGADOR" ou "🟨 SNIPER DE CARTÕES" ou "🧤 MURALHA EM AÇÃO",
                     "jogo": "Time A x Time B",
-                    "destaque": "Ex: O Time A é muito favorito, Haaland deve ter muitas chances.",
-                    "indicacao": "Erling Haaland - Over 1.5 Chutes ao Gol"
+                    "destaque": "Explicação técnica curta baseada no Cenário ou Árbitro.",
+                    "indicacao": "A aposta exata."
                 }}
             ]
         }}
@@ -1810,18 +1818,37 @@ def salvar_snipers_do_texto(texto_ia):
 def enviar_multipla_matinal(token, chat_ids, api_key):
     if st.session_state.get('multipla_matinal_enviada'): return
     dados_json, mapa_nomes = gerar_multipla_matinal_ia(api_key)
+    
     if not dados_json or "jogos" not in dados_json: return
+    
     jogos = dados_json['jogos']
-    prob = dados_json.get('probabilidade_combinada', '90')
+    
+    # --- [CORREÇÃO] Limpeza do texto da probabilidade ---
+    # Se a IA mandar "80%", o replace tira o % para não duplicar na string f-string abaixo
+    prob_raw = str(dados_json.get('probabilidade_combinada', 'Alta')).replace('%', '')
+    
     msg = "🚀 <b>MÚLTIPLA DE SEGURANÇA (IA)</b>\n"
     ids_compostos = []; nomes_compostos = []
+    
     for idx, j in enumerate(jogos):
         icone = ["1️⃣", "2️⃣", "3️⃣"][idx] if idx < 3 else "👉"
         msg += f"\n{icone} <b>Jogo: {j['jogo']}</b>\n🎯 Seleção: Over 0.5 Gols\n📝 Motivo: {j['motivo']}\n"
         ids_compostos.append(str(j['fid'])); nomes_compostos.append(j['jogo'])
-    msg += f"\n⚠️ <b>Conclusão:</b> Probabilidade combinada de {prob}%."
+    
+    # Aqui adicionamos o % manualmente no final
+    msg += f"\n⚠️ <b>Conclusão:</b> Probabilidade combinada de {prob_raw}%."
+    
     enviar_telegram(token, chat_ids, msg)
-    multipla_obj = {"id_unico": f"MULT_{'_'.join(ids_compostos)}", "tipo": "MATINAL", "fids": ids_compostos, "nomes": nomes_compostos, "status": "Pendente", "data": get_time_br().strftime('%Y-%m-%d')}
+    
+    multipla_obj = {
+        "id_unico": f"MULT_{'_'.join(ids_compostos)}", 
+        "tipo": "MATINAL", 
+        "fids": ids_compostos, 
+        "nomes": nomes_compostos, 
+        "status": "Pendente", 
+        "data": get_time_br().strftime('%Y-%m-%d')
+    }
+    
     if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
     st.session_state['multiplas_pendentes'].append(multipla_obj)
     st.session_state['multipla_matinal_enviada'] = True
@@ -2973,5 +3000,6 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
 
 
