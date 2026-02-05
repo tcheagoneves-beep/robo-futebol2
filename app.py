@@ -50,7 +50,7 @@ st.markdown("""
 # ==============================================================================
 # 2. INICIALIZAÇÃO DE VARIÁVEIS E CONSTANTES
 # ==============================================================================
-ODD_MINIMA_LIVE = 1.60  # Meta de valor para exibir destaque
+ODD_MINIMA_LIVE = 1.60  # Meta de valor
 ODD_CRITICA_LIVE = 1.30 # Abaixo disso é perigo
 
 if 'TG_TOKEN' not in st.session_state: st.session_state['TG_TOKEN'] = ""
@@ -874,6 +874,7 @@ def gerar_insights_matinais_ia(api_key):
         
         if not lista_para_ia: return [], "Filtro eliminou tudo."
 
+        # Prompt ajustado para voltar a ter o TEXTO DETALHADO (Persuasivo)
         prompt = f"""
         ATUE COMO UM ANALISTA DE PERFORMANCE E ODDS (SNIPER).
         
@@ -896,7 +897,7 @@ def gerar_insights_matinais_ia(api_key):
                     "jogo": "Time A x Time B",
                     "palpite": "Over 2.5",
                     "odd": "1.80",
-                    "motivo": "Escreva uma análise completa e persuasiva aqui. Explique por que o histórico do time e a tendência de aquecimento justificam essa entrada. Use dados (ex: '100% de over em casa') se disponíveis no texto acima.",
+                    "motivo": "Escreva uma análise completa e persuasiva aqui. Use dados estatísticos (ex: '100% de over em casa') e explique a tendência para justificar a entrada com segurança.",
                     "tendencia_observada": "Casa Aquecendo muito"
                 }}
             ]
@@ -914,8 +915,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
     
-    # Focamos apenas nas Ligas onde a Bet365 abre mercado de Jogador (Chutes/Defesas)
-    # Mas como queremos CARTÕES também, mantemos o leque aberto
+    # Focamos apenas nas Ligas onde a Bet365 abre mercado de Jogador
     LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
 
     try:
@@ -940,12 +940,13 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             fid = j['fixture']['id']
             lid = j['league']['id']
             
-            # 1. BLINDAGEM BÁSICA
+            # 1. BLINDAGEM BÁSICA (Tem que ter Bet365)
             odd_check, _ = buscar_odd_pre_match(api_key, fid)
             if odd_check == 0: continue
 
             # 2. DEFINIÇÃO DE CENÁRIO (HÍBRIDO: JOGADOR OU CARTÕES)
             cenario_tatico = "Indefinido"
+            odd_referencia = 0.0
             
             try:
                 # Busca Match Winner para ver o cenário
@@ -957,18 +958,24 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     odd_casa = next((float(v['odd']) for v in vals if v['value'] == 'Home'), 0)
                     odd_fora = next((float(v['odd']) for v in vals if v['value'] == 'Away'), 0)
                     
-                    # Lógica para CHUTES (Massacre) - Só em Ligas Big
+                    # CÁLCULO DA "ODD ALVO" (Estimativa para o usuário ter referência)
+                    
+                    # Lógica para CHUTES/DEFESAS (Massacre) - Só em Ligas Big
                     if lid in LIGAS_BIG_MARKETS:
-                        if odd_casa > 0 and odd_casa < 1.70: # Afrouxei para 1.70 para pegar mais
+                        # Subi a régua para 1.90 para pegar mais favoritos (antes era 1.50)
+                        if odd_casa > 0 and odd_casa < 1.90: 
                             cenario_tatico = "MASSACRE CASA (Foco: Chutes do Artilheiro Casa)"
-                        elif odd_fora > 0 and odd_fora < 1.70: 
+                            odd_referencia = 1.57 # Odd média para chute ao gol
+                        elif odd_fora > 0 and odd_fora < 1.90: 
                             cenario_tatico = "MASSACRE VISITANTE (Foco: Chutes do Artilheiro Visitante)"
+                            odd_referencia = 1.57
                     
                     # Lógica para CARTÕES (Jogo Equilibrado/Pegado)
                     # Se não caiu no massacre, e as odds são altas (> 2.00 para ambos), é jogo duro
                     if "MASSACRE" not in cenario_tatico:
-                        if odd_casa > 1.90 and odd_fora > 1.90:
+                        if odd_casa > 2.00 and odd_fora > 2.00:
                             cenario_tatico = "JOGO TRUNCADO/BRIGA (Foco: Cartões)"
+                            odd_referencia = 1.83 # Odd média para Over Cards
 
             except:
                 cenario_tatico = "Sem Odds Winner"
@@ -979,7 +986,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             away = j['teams']['away']['name']
             liga_nome = j['league']['name']
             
-            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Cenário: {cenario_tatico}\n"
+            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Cenário: {cenario_tatico} | Odd Ref: {odd_referencia}\n"
             count_validos += 1
 
         if not dados_analise: return []
@@ -992,16 +999,17 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         
         SUA MISSÃO (SELECIONE AS MELHORES OPORTUNIDADES):
         Analise o "Cenário" de cada jogo e indique o melhor mercado.
+        IMPORTANTE: Sempre inclua a "Odd Ref" informada como "Odd Alvo" na sua indicação.
         
         REGRAS DE DECISÃO:
         1. Se for "MASSACRE" (Favorito claro em liga grande):
            - Indique "JOGADOR".
-           - Escolha o artilheiro do time favorito para "Over 1.5 Chutes" ou "0.5 Chutes ao Gol".
+           - Escolha o artilheiro do time favorito para "Over 0.5 Chutes ao Gol".
            - Cite o nome do jogador.
            
         2. Se for "JOGO TRUNCADO/BRIGA" (Jogo equilibrado):
            - Indique "CARTÕES".
-           - Se for clássico ou jogo decisivo, indique "Over Cartões" para o jogo ou para o time que bate mais.
+           - Indique "Over Cartões" para o jogo.
         
         SAÍDA JSON:
         {{
@@ -1012,7 +1020,8 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     "titulo": "🎯 SNIPER DE JOGADOR", <-- ou "🟨 SNIPER DE CARTÕES"
                     "jogo": "Time A x Time B",
                     "destaque": "Análise do motivo (ex: O time vai pressionar / O jogo será violento).",
-                    "indicacao": "Haaland Over 1.5 Chutes / Over 4.5 Cartões na Partida"
+                    "indicacao": "Haaland Over 0.5 Chutes ao Gol",
+                    "odd_alvo": "1.57" <-- Copie a Odd Ref do texto
                 }}
             ]
         }}
@@ -1768,7 +1777,7 @@ def enviar_telegram(token, chat_ids, msg):
             time.sleep(0.3) # Delay anti-spam do Telegram
 
 def salvar_snipers_do_texto(texto_ia):
-    # Função mantida para compatibilidade, mas o salvamento principal agora é via JSON
+    # Mantida para compatibilidade, mas o fluxo principal agora é via JSON na função matinal
     pass 
 
 def enviar_multipla_matinal(token, chat_ids, api_key):
@@ -1794,20 +1803,40 @@ def enviar_alerta_alternativos(token, chat_ids, api_key):
     if st.session_state.get('alternativos_enviado'): return
     sinais = gerar_analise_mercados_alternativos_ia(api_key)
     if not sinais: return
+    
     for s in sinais:
-        msg = f"<b>{s['titulo']}</b>\n\n⚽ <b>{s['jogo']}</b>\n\n🔎 <b>Análise:</b>\n{s['destaque']}\n\n🎯 <b>INDICAÇÃO:</b> {s['indicacao']}"
-        if s['tipo'] == 'GOLEIRO': msg += "\n⚠️ <i>Regra: Aposte no 'Goleiro do Time', não no nome do jogador.</i>"
+        # Pega a "Odd Alvo" calculada ou usa padrão
+        odd_ref = s.get('odd_alvo', '1.57')
+        
+        # Monta a mensagem baseada no TIPO (Jogador ou Cartões)
+        icone_tipo = "🎯" if s['tipo'] == "JOGADOR" else "🟨"
+        titulo = s['titulo']
+        
+        msg = f"{icone_tipo} <b>{titulo}</b>\n\n"
+        msg += f"⚽ <b>{s['jogo']}</b>\n\n"
+        msg += f"🔎 <b>Análise de Cenário:</b>\n{s['destaque']}\n\n"
+        msg += f"👉 <b>INDICAÇÃO:</b> {s['indicacao']}\n"
+        msg += f"🎯 <b>Odd Alvo:</b> Acima de @{odd_ref} (Criar Aposta)"
+        
+        if s['tipo'] == 'JOGADOR': 
+            msg += "\n⚠️ <i>Regra: Se o jogador não iniciar, a Bet365 anula (Void).</i>"
+            
         enviar_telegram(token, chat_ids, msg)
-        linha_alvo = "0"
+        
+        # Extrai linha numérica para conferência futura (ex: 0.5, 4.5)
+        linha_alvo = "0.5"
         try: linha_alvo = re.findall(r"[-+]?\d*\.\d+|\d+", s['indicacao'])[0]
         except: pass
+        
         item_alt = {
-            "FID": f"ALT_{s['fid']}", "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": "08:05",
+            "FID": f"ALT_{s.get('fid', '0')}", # Garante ID único
+            "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": "08:05",
             "Liga": "Mercado Alternativo", "Jogo": s['jogo'], "Placar_Sinal": f"Meta: {linha_alvo}",
-            "Estrategia": s['titulo'], "Resultado": "Pendente", "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"
+            "Estrategia": titulo, "Resultado": "Pendente", "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"
         }
         adicionar_historico(item_alt)
         time.sleep(2) 
+        
     st.session_state['alternativos_enviado'] = True
 
 def enviar_alavancagem(token, chat_ids, api_key):
@@ -2066,22 +2095,6 @@ def verificar_var_rollback(jogos_live, token, chats):
                     enviar_telegram(token, chats, f"⚠️ <b>VAR ACIONADO | GOL ANULADO</b>\n⚽ {s['Jogo']}\n📉 Placar voltou: <b>{gh}x{ga}</b>")
             except: pass
     if updates: atualizar_historico_ram(updates)
-
-def verificar_automacao_bi(token, chat_ids, stake_padrao):
-    agora = get_time_br()
-    hoje_str = agora.strftime('%Y-%m-%d')
-    if st.session_state.get('last_check_date') != hoje_str:
-        st.session_state['bi_enviado'] = False; st.session_state['ia_enviada'] = False
-        st.session_state['financeiro_enviado'] = False; st.session_state['bigdata_enviado'] = False
-        st.session_state['last_check_date'] = hoje_str
-    if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
-        enviar_relatorio_bi(token, chat_ids); st.session_state['bi_enviado'] = True
-    if agora.hour == 23 and agora.minute >= 40 and not st.session_state['financeiro_enviado']:
-        analise_fin = analisar_financeiro_com_ia(stake_padrao, st.session_state.get('banca_inicial', 100))
-        msg_fin = f"💰 <b>CONSULTORIA FINANCEIRA</b>\n\n{analise_fin}"
-        enviar_telegram(token, chat_ids, msg_fin); st.session_state['financeiro_enviado'] = True
-    if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
-        enviar_analise_estrategia(token, chat_ids); st.session_state['bigdata_enviado'] = True
 
 def verificar_mercados_alternativos(api_key):
     hist = st.session_state.get('historico_sinais', [])
