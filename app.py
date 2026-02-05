@@ -50,8 +50,8 @@ st.markdown("""
 # ==============================================================================
 # 2. INICIALIZAÇÃO DE VARIÁVEIS E CONSTANTES
 # ==============================================================================
-ODD_MINIMA_LIVE = 1.60  # Meta de valor
-ODD_CRITICA_LIVE = 1.30 # Abaixo disso é perigo
+ODD_MINIMA_LIVE = 1.60  
+ODD_CRITICA_LIVE = 1.30 
 
 if 'TG_TOKEN' not in st.session_state: st.session_state['TG_TOKEN'] = ""
 if 'TG_CHAT' not in st.session_state: st.session_state['TG_CHAT'] = ""
@@ -1675,6 +1675,38 @@ def otimizar_estrategias_existentes_ia():
         return response.text.strip()
         
     except Exception as e: return f"Erro na análise: {str(e)}"
+
+# --- [NOVO] AUTOMACAO BI (RESOLUÇÃO DO ERRO) ---
+def verificar_automacao_bi(token, chat_ids, stake_padrao):
+    agora = get_time_br()
+    hoje_str = agora.strftime('%Y-%m-%d')
+    
+    # Reset diário de flags se virou o dia
+    if st.session_state.get('last_check_date') != hoje_str:
+        st.session_state['bi_enviado'] = False
+        st.session_state['ia_enviada'] = False
+        st.session_state['financeiro_enviado'] = False
+        st.session_state['bigdata_enviado'] = False
+        st.session_state['last_check_date'] = hoje_str
+    
+    # 1. Relatório BI (23:30)
+    if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
+        enviar_relatorio_bi(token, chat_ids)
+        st.session_state['bi_enviado'] = True
+    
+    # 2. Consultoria Financeira (23:40)
+    if agora.hour == 23 and agora.minute >= 40 and not st.session_state['financeiro_enviado']:
+        analise_fin = analisar_financeiro_com_ia(stake_padrao, st.session_state.get('banca_inicial', 100))
+        msg_fin = f"💰 <b>CONSULTORIA FINANCEIRA</b>\n\n{analise_fin}"
+        enviar_telegram(token, chat_ids, msg_fin)
+        st.session_state['financeiro_enviado'] = True
+    
+    # 3. Laboratório de Estratégias (23:55)
+    if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
+        enviar_analise_estrategia(token, chat_ids)
+        st.session_state['bigdata_enviado'] = True
+# ==============================================================================
+# 6. FUNÇÕES DE ENVIO E NOTIFICAÇÃO (TELEGRAM)
 # ==============================================================================
 
 def enviar_analise_estrategia(token, chat_ids):
@@ -1698,7 +1730,6 @@ def enviar_relatorio_bi(token, chat_ids):
         agora = get_time_br().date()
         hoje = pd.to_datetime(agora)
         d_hoje = df[df['Data_DT'] == hoje]
-        d_semana = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
         
         def get_placar_str(d_slice):
             if d_slice.empty: return "Sem dados"
@@ -1714,18 +1745,6 @@ def enviar_relatorio_bi(token, chat_ids):
             aprovadas = d_slice[d_slice['Opiniao_IA'] == 'Aprovado']
             return get_placar_str(aprovadas)
 
-        top_strats_txt = ""
-        try:
-            df_closed = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-            if not df_closed.empty:
-                ranking = df_closed.groupby('Estrategia')['Resultado'].apply(lambda x: (x.str.contains('GREEN').sum() / len(x) * 100)).sort_values(ascending=False).head(5)
-                lista_top = []
-                for strat, wr in ranking.items():
-                    qtd = len(df_closed[df_closed['Estrategia'] == strat])
-                    lista_top.append(f"▪️ {strat}: {wr:.0f}% ({qtd}j)")
-                top_strats_txt = "\n".join(lista_top)
-        except: top_strats_txt = "Dados insuficientes"
-
         insight_text = analisar_bi_com_ia()
 
         msg = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>
@@ -1733,12 +1752,6 @@ def enviar_relatorio_bi(token, chat_ids):
 📆 <b>DIÁRIO (HOJE):</b>
 • Geral: {get_placar_str(d_hoje)}
 • 🤖 IA Aprovados: {get_ia_stats(d_hoje)}
-
-🗓 <b>SEMANAL (7 Dias):</b>
-• Geral: {get_placar_str(d_semana)}
-
-🏆 <b>TOP 5 ESTRATÉGIAS:</b>
-{top_strats_txt}
 
 🧠 <b>INSIGHT IA:</b>
 {insight_text}
@@ -1754,12 +1767,11 @@ def enviar_telegram(token, chat_ids, msg):
     if not token or not chat_ids: return
     ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
     
-    # --- LÓGICA DE FATIAMENTO (SPLITTER) ---
+    # --- FATIADOR DE MENSAGENS (Anti-Travamento) ---
     msgs_para_enviar = []
     if len(msg) <= 4090:
         msgs_para_enviar.append(msg)
     else:
-        # Se for muito grande, quebra linha a linha para não cortar HTML no meio
         buffer = ""
         linhas = msg.split('\n')
         for linha in linhas:
@@ -1774,11 +1786,7 @@ def enviar_telegram(token, chat_ids, msg):
         for m in msgs_para_enviar:
             t = threading.Thread(target=_worker_telegram, args=(token, cid, m))
             t.daemon = True; t.start()
-            time.sleep(0.3) # Delay anti-spam do Telegram
-
-def salvar_snipers_do_texto(texto_ia):
-    # Mantida para compatibilidade, mas o fluxo principal agora é via JSON na função matinal
-    pass 
+            time.sleep(0.3) 
 
 def enviar_multipla_matinal(token, chat_ids, api_key):
     if st.session_state.get('multipla_matinal_enviada'): return
@@ -1805,38 +1813,33 @@ def enviar_alerta_alternativos(token, chat_ids, api_key):
     if not sinais: return
     
     for s in sinais:
-        # Pega a "Odd Alvo" calculada ou usa padrão
-        odd_ref = s.get('odd_alvo', '1.57')
+        # Recupera a Odd Alvo calculada
+        odd_target = s.get('odd_alvo', '1.57')
+        icone = "🎯" if s['tipo'] == 'JOGADOR' else "🟨"
         
-        # Monta a mensagem baseada no TIPO (Jogador ou Cartões)
-        icone_tipo = "🎯" if s['tipo'] == "JOGADOR" else "🟨"
-        titulo = s['titulo']
-        
-        msg = f"{icone_tipo} <b>{titulo}</b>\n\n"
+        msg = f"{icone} <b>{s['titulo']}</b>\n\n"
         msg += f"⚽ <b>{s['jogo']}</b>\n\n"
-        msg += f"🔎 <b>Análise de Cenário:</b>\n{s['destaque']}\n\n"
+        msg += f"🔎 <b>Análise Tática:</b>\n{s['destaque']}\n\n"
         msg += f"👉 <b>INDICAÇÃO:</b> {s['indicacao']}\n"
-        msg += f"🎯 <b>Odd Alvo:</b> Acima de @{odd_ref} (Criar Aposta)"
+        msg += f"💰 <b>Odd Alvo:</b> Acima de @{odd_target}"
         
-        if s['tipo'] == 'JOGADOR': 
-            msg += "\n⚠️ <i>Regra: Se o jogador não iniciar, a Bet365 anula (Void).</i>"
-            
+        if s['tipo'] == 'JOGADOR': msg += "\n⚠️ <i>Se o jogador não iniciar, a aposta é anulada (Void).</i>"
+        
         enviar_telegram(token, chat_ids, msg)
         
-        # Extrai linha numérica para conferência futura (ex: 0.5, 4.5)
-        linha_alvo = "0.5"
+        # Tenta extrair número para conferência futura
+        linha_alvo = "0"
         try: linha_alvo = re.findall(r"[-+]?\d*\.\d+|\d+", s['indicacao'])[0]
         except: pass
         
         item_alt = {
-            "FID": f"ALT_{s.get('fid', '0')}", # Garante ID único
+            "FID": f"ALT_{s.get('fid', '0')}", 
             "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": "08:05",
             "Liga": "Mercado Alternativo", "Jogo": s['jogo'], "Placar_Sinal": f"Meta: {linha_alvo}",
-            "Estrategia": titulo, "Resultado": "Pendente", "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"
+            "Estrategia": s['titulo'], "Resultado": "Pendente", "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"
         }
         adicionar_historico(item_alt)
         time.sleep(2) 
-        
     st.session_state['alternativos_enviado'] = True
 
 def enviar_alavancagem(token, chat_ids, api_key):
@@ -1902,20 +1905,21 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
             lista_sinais, status = gerar_insights_matinais_ia(api_key)
             
             if lista_sinais and len(lista_sinais) > 0:
+                # Montagem da mensagem PERSUASIVA (V5.2)
                 msg_final = "🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n"
                 msg_final += "Aqui estão minhas principais escolhas, analisadas com precisão cirúrgica:\n"
                 
                 for s in lista_sinais:
-                    # --- MONTAGEM DA MENSAGEM DETALHADA ---
                     msg_final += f"\n✅ <b>{s.get('jogo', 'Jogo')}</b>"
-                    # Adiciona a linha da tendência que você queria:
+                    # Linha da tendência que você gosta
                     msg_final += f"\n🔥 {s.get('tendencia_observada', 'Tendência Analisada')}" 
                     msg_final += f"\n🎯 {s.get('palpite', 'Bet')} (@{s.get('odd', '0.00')})"
+                    # Texto longo e explicativo
                     msg_final += f"\n📝 {s.get('motivo', 'Análise IA')}\n"
                     
-                    # --- SALVAMENTO COM ID REAL ---
+                    # Salva com ID REAL para conferência futura
                     item_sniper = {
-                        "FID": str(s.get('fid', '0')), # ID Real para atualizar depois
+                        "FID": str(s.get('fid', '0')), 
                         "Data": get_time_br().strftime('%Y-%m-%d'), 
                         "Hora": "08:00", 
                         "Liga": "Sniper Matinal", 
@@ -1928,7 +1932,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
                     }
                     adicionar_historico(item_sniper)
                 
-                # Envia a mensagem (o splitter resolve se for grande)
                 enviar_telegram(token, chat_ids, msg_final)
                 st.session_state['matinal_enviado'] = True
             
@@ -1973,6 +1976,10 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
         st.session_state['alternativos_enviado'] = False; st.session_state['alavancagem_enviada'] = False
         st.session_state['drop_enviado_12'] = False; st.session_state['drop_enviado_16'] = False
         st.session_state['last_check_date'] = hoje_str
+
+# ==============================================================================
+# 7. FUNÇÕES DE CONFERÊNCIA DE RESULTADOS (GREEN/RED AUTOMÁTICO)
+# ==============================================================================
 
 def check_green_red_hibrido(jogos_live, token, chats, api_key):
     hist = st.session_state['historico_sinais']
@@ -2034,15 +2041,10 @@ def conferir_resultados_sniper(jogos_live, api_key):
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
     
     for s in snipers:
-        # SE TIVER ID REAL, ELE VAI PROCESSAR AGORA!
         fid = str(s['FID']).replace("ALT_", "")
-        
-        # Se for ID falso antigo (SNIPER_...), infelizmente não tem o que fazer, ignora.
         if "SNIPER_" in fid: continue 
 
         jogo = ids_live.get(fid)
-        
-        # Se não tá no Live, busca na API (Pode ter acabado)
         if not jogo:
             try:
                 res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
@@ -2051,17 +2053,15 @@ def conferir_resultados_sniper(jogos_live, api_key):
             
         if jogo:
             status = jogo['fixture']['status']['short']
-            
-            # Se acabou (FT) ou foi cancelado
             if status in ['FT', 'AET', 'PEN', 'INT', 'ABD']:
                 gh = jogo['goals']['home'] or 0
                 ga = jogo['goals']['away'] or 0
                 placar_final = f"{gh}x{ga}"
                 
-                # Definição simples de resultado para fechar o ciclo
-                # Para Sniper Matinal (geralmente gols), se saiu gol é bom sinal.
+                # Definição básica: Se saiu gol, é Green (para estratégias de Over)
                 res_final = "✅ GREEN" if (gh + ga) > 0 else "❌ RED"
                 
+                # Se for Mercado Alternativo, apenas marca FIM (conferência complexa demais para API básica)
                 if "Mercado" in s['Liga']:
                      res_final = f"🏁 FIM ({placar_final})"
 
@@ -2182,11 +2182,14 @@ def validar_multiplas_pendentes(jogos_live, api_key, token, chat_ids):
             item_save = {"FID": m['id_unico'], "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'), "Liga": "Múltiplas", "Jogo": " + ".join(m['nomes']), "Placar_Sinal": " / ".join(placar_final_str), "Estrategia": f"Múltipla {m['tipo']}", "Resultado": "✅ GREEN", "HomeID": "", "AwayID": "", "Odd": "", "Odd_Atualizada": "", "Opiniao_IA": "Aprovado", "Probabilidade": "Alta"}
             adicionar_historico(item_save)
 
-# --- BARRA LATERAL (CONFIGURAÇÕES E BOTÕES MANUAIS) ---
+# ==============================================================================
+# 8. INTERFACE E LOOP PRINCIPAL
+# ==============================================================================
+
+# --- BARRA LATERAL ---
 with st.sidebar:
     st.title("❄️ Neves Analytics")
     
-    # --- NOVO PAINEL DE STATUS MATINAL ---
     status_matinal = "✅ Enviado" if st.session_state.get('matinal_enviado') else "⏳ Pendente"
     cor_status = "green" if st.session_state.get('matinal_enviado') else "orange"
     st.markdown(f"**Status Matinal:** :{cor_status}[{status_matinal}]")
@@ -2197,7 +2200,6 @@ with st.sidebar:
         st.session_state['alternativos_enviado'] = False
         st.session_state['alavancagem_enviada'] = False
         st.toast("Status resetado! O robô tentará enviar novamente no próximo ciclo.")
-    # ---------------------------------------
 
     with st.expander("⚙️ Configurações", expanded=True):
         st.session_state['API_KEY'] = st.text_input("Chave API:", value=st.session_state['API_KEY'], type="password")
@@ -2500,44 +2502,33 @@ if st.session_state.ROBO_LIGADO:
                         try: odd_val = float(odd_atual_str)
                         except: odd_val = 0.0
                         
-                        # --- [CORREÇÃO] SEMÁFORO DE ODDS (SEM APAGAR AÇÃO) ---
+                        # --- SEMÁFORO DE ODDS V5.2 (EV+ PROTECTION) ---
                         destaque_odd = ""
                         
-                        # 1. Título e Emoji Base (Sempre mostra o nome da estratégia)
                         emoji_sinal = "✅"
                         titulo_sinal = f"SINAL {s['tag'].upper()}"
-                        
-                        # 2. Texto da Ação (O que fazer) - Sempre presente
                         texto_acao_original = s['ordem']
-                        
-                        # 3. Aviso de Odd (O Semáforo) - Começa vazio
                         bloco_aviso_odd = ""
 
                         if odd_val > 0 and odd_val < ODD_CRITICA_LIVE:
-                            # ZONA DE PERIGO (Ex: 1.15) -> Muda emoji e adiciona aviso
                             emoji_sinal = "⛔"
                             bloco_aviso_odd = f"⚠️ <b>ALERTA: ODD BAIXA (@{odd_val:.2f})</b>\n⏳ <i>Não entre agora. Aguarde ou ignore.</i>\n────────────────\n"
                         
                         elif odd_val >= ODD_CRITICA_LIVE and odd_val < ODD_MINIMA_LIVE:
-                            # ZONA DE ATENÇÃO (Ex: 1.45) -> Muda emoji e adiciona aviso
                             emoji_sinal = "⏳"
                             bloco_aviso_odd = f"👀 <b>AGUARDE VALORIZAR (@{odd_val:.2f})</b>\n🎯 <i>Meta: Entrar acima de @{ODD_MINIMA_LIVE:.2f}</i>\n────────────────\n"
                         
-                        # --- AQUI ESTAVA FALTANDO ---
                         elif odd_val >= ODD_MINIMA_LIVE:
-                            # ZONA DE VALOR (Ex: 1.65+) -> Apenas mostra a Odd bonita
                             emoji_sinal = "✅"
                             bloco_aviso_odd = f"🔥 <b>ODD DE VALOR: @{odd_val:.2f}</b>\n────────────────\n"
 
-                        # -----------------------------------
-                        # MANTIVE O SEU CÓDIGO ORIGINAL DAQUI PRA BAIXO:
                         if odd_val >= 1.80:
                             destaque_odd = "\n💎 <b>SUPER ODD DETECTADA! (EV+)</b>"
                             st.session_state['alertas_enviados'].add(uid_super)
                         
                         opiniao_txt = ""; prob_txt = "..."; opiniao_db = "Neutro"
                         
-                        # --- INICIO DO BLOCO NOVO (COM VETO DA IA) ---
+                        # --- CONSULTA À IA (COM VETO INTELIGENTE) ---
                         if IA_ATIVADA:
                             try:
                                 time.sleep(0.2) 
@@ -2559,14 +2550,14 @@ if st.session_state.ROBO_LIGADO:
                             "FID": str(fid), "Data": get_time_br().strftime('%Y-%m-%d'), "Hora": get_time_br().strftime('%H:%M'),
                             "Liga": j['league']['name'], "Jogo": f"{home} x {away} ({placar})", "Placar_Sinal": placar,
                             "Estrategia": s['tag'], 
-                            "Resultado": status_inicial, # <--- AQUI MUDOU
+                            "Resultado": status_inicial,
                             "HomeID": str(j['teams']['home']['id']) if lid in ids_safe else "", "AwayID": str(j['teams']['away']['id']) if lid in ids_safe else "",
                             "Odd": odd_atual_str, "Odd_Atualizada": "", "Opiniao_IA": opiniao_db, "Probabilidade": prob_txt 
                         }
                         
                         if adicionar_historico(item):
                             try:
-                                # --- MONTAGEM DA MENSAGEM (Manteve igual) ---
+                                # --- MONTAGEM DA MENSAGEM FINAL ---
                                 txt_winrate_historico = ""
                                 if txt_pessoal != "Neutro": txt_winrate_historico = f" | 👤 {txt_pessoal}"
 
@@ -2619,7 +2610,7 @@ if st.session_state.ROBO_LIGADO:
                                 
                                 sent_status = False
                                 
-                                # --- NOVA LÓGICA DE ENVIO (SÓ ENVIA SE APROVADO) ---
+                                # --- SÓ ENVIA SE APROVADO ---
                                 if opiniao_db == "Aprovado":
                                     enviar_telegram(safe_token, safe_chat, msg)
                                     sent_status = True
@@ -2630,11 +2621,9 @@ if st.session_state.ROBO_LIGADO:
                                     sent_status = True
                                     st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
                                 else:
-                                    # Se foi VETADO (Neutro), não envia nada
                                     st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
 
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
-                        # --- FIM DO BLOCO NOVO ---
 
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
