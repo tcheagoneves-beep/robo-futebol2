@@ -1718,6 +1718,36 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
         if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
         st.session_state['multiplas_pendentes'].append(multipla_obj)
 
+# --- FUNÇÃO QUE ESTAVA FALTANDO ---
+def verificar_automacao_bi(token, chat_ids, stake_padrao):
+    agora = get_time_br()
+    hoje_str = agora.strftime('%Y-%m-%d')
+    
+    # Reset diário de flags se virou o dia
+    if st.session_state.get('last_check_date') != hoje_str:
+        st.session_state['bi_enviado'] = False
+        st.session_state['ia_enviada'] = False
+        st.session_state['financeiro_enviado'] = False
+        st.session_state['bigdata_enviado'] = False
+        st.session_state['last_check_date'] = hoje_str
+    
+    # 1. Relatório BI (23:30)
+    if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
+        enviar_relatorio_bi(token, chat_ids)
+        st.session_state['bi_enviado'] = True
+    
+    # 2. Consultoria Financeira (23:40)
+    if agora.hour == 23 and agora.minute >= 40 and not st.session_state['financeiro_enviado']:
+        analise_fin = analisar_financeiro_com_ia(stake_padrao, st.session_state.get('banca_inicial', 100))
+        msg_fin = f"💰 <b>CONSULTORIA FINANCEIRA</b>\n\n{analise_fin}"
+        enviar_telegram(token, chat_ids, msg_fin)
+        st.session_state['financeiro_enviado'] = True
+    
+    # 3. Laboratório de Estratégias (23:55)
+    if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
+        enviar_analise_estrategia(token, chat_ids)
+        st.session_state['bigdata_enviado'] = True
+
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
     
@@ -2808,3 +2838,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
