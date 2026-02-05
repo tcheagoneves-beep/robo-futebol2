@@ -839,7 +839,7 @@ def gerar_multipla_matinal_ia(api_key):
     except Exception as e: return None, []
 
 def gerar_insights_matinais_ia(api_key):
-    if not IA_ATIVADA: return "IA Offline."
+    if not IA_ATIVADA: return "IA Offline.", {} # Retorna tupla agora
     hoje = get_time_br().strftime('%Y-%m-%d')
     try:
         url = "https://v3.football.api-sports.io/fixtures"
@@ -849,9 +849,10 @@ def gerar_insights_matinais_ia(api_key):
         
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
         
-        if not jogos_candidatos: return "Sem jogos para analisar hoje."
+        if not jogos_candidatos: return "Sem jogos para analisar hoje.", {}
         
         lista_para_ia = ""
+        mapa_jogos = {} # <--- NOVO: Guarda os IDs reais
         count = 0
         random.shuffle(jogos_candidatos) 
         
@@ -863,8 +864,11 @@ def gerar_insights_matinais_ia(api_key):
             away = j['teams']['away']['name']
             liga = j['league']['name']
             
+            # Monta a chave exata que vai aparecer no texto
+            nome_jogo = f"{home} x {away}"
+            mapa_jogos[nome_jogo] = str(fid) # <--- Salva o ID Real
+
             # --- FILTRO 1: ODD NA BET365 ---
-            # Aqui pegamos o VALOR e o NOME (Ex: 'Over 2.5')
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
             if odd_val == 0 or odd_val < 1.45: continue 
             
@@ -875,7 +879,6 @@ def gerar_insights_matinais_ia(api_key):
                 h_mac = stats['home']['macro']; h_mic = stats['home']['micro']
                 a_mac = stats['away']['macro']; a_mic = stats['away']['micro']
                 
-                # Regra de Corte: Ignorar times que morreram recentemente (Micro < 40%)
                 if h_mic < 40 and a_mic < 40: continue
 
                 def get_trend(mac, mic):
@@ -887,7 +890,6 @@ def gerar_insights_matinais_ia(api_key):
                 trend_h = get_trend(h_mac, h_mic)
                 trend_a = get_trend(a_mac, a_mic)
 
-                # --- CORREÇÃO AQUI: PASSAMOS O 'odd_nome' (O MERCADO EXATO) PARA A IA ---
                 lista_para_ia += f"""
                 - Jogo: {home} x {away} ({liga})
                   MERCADO DISPONÍVEL: {odd_nome} | ODD: @{odd_val:.2f}
@@ -896,8 +898,9 @@ def gerar_insights_matinais_ia(api_key):
                 """
                 count += 1
         
-        if not lista_para_ia: return "Nenhum jogo com valor e tendência positiva encontrado hoje."
+        if not lista_para_ia: return "Nenhum jogo com valor e tendência positiva encontrado hoje.", {}
 
+        # MANTIVE SEU PROMPT ORIGINAL EXATAMENTE IGUAL
         prompt = f"""
         ATUE COMO UM ANALISTA DE PERFORMANCE E ODDS (SNIPER).
         
@@ -913,7 +916,6 @@ def gerar_insights_matinais_ia(api_key):
         3. Priorize confrontos "Aquecendo x Aquecendo".
         4. Analise TODOS os jogos da lista.
         5. NÃO SE LIMITE A 3. Se houver 15 oportunidades boas (EV+), liste as 15.
-
         
         SAÍDA (Formato de Relatório):
         
@@ -923,11 +925,12 @@ def gerar_insights_matinais_ia(api_key):
         📝 Motivo: [Justifique se a odd vale o risco para essa linha específica. Ex: "A linha é alta (2.5), mas como os times estão aquecendo, @2.30 tem valor."]
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3)) # Temp mais baixa para evitar alucinação
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
         st.session_state['gemini_usage']['used'] += 1
-        return response.text
         
-    except Exception as e: return f"Erro na análise: {str(e)}"
+        return response.text, mapa_jogos # Retorna o texto E o mapa de IDs
+
+    except Exception as e: return f"Erro na análise: {str(e)}", {}
 
 def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
