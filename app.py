@@ -992,8 +992,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
     
-    # Ligas onde a Bet365 costuma abrir chutes e defesa de goleiro (Big Markets)
-    # 39=Premier League, 140=La Liga, 135=Serie A Italia, 78=Bundesliga, 61=Ligue 1, etc.
+    # Ligas Big Markets (Para Player Props)
     LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
 
     try:
@@ -1002,18 +1001,15 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # Filtra jogos NS (Não iniciados)
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
-        
         if not jogos_candidatos: return []
         
         random.shuffle(jogos_candidatos)
-        
         dados_analise = ""
         count_validos = 0
         
         for j in jogos_candidatos:
-            if count_validos >= 30: break 
+            if count_validos >= 25: break 
             
             fid = j['fixture']['id']
             lid = j['league']['id']
@@ -1023,11 +1019,15 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             juiz = j['fixture'].get('referee', 'Desconhecido')
             
             # --- LÓGICA DE DADOS ---
-            # 1. Definimos o que é permitido sugerir
             permite_player_props = "SIM" if lid in LIGAS_BIG_MARKETS else "NAO"
             
-            # 2. Resgatamos a inteligência de Cenário (Massacre vs Equilibrado)
-            # Isso é vital para saber se o Goleiro vai trabalhar (Muralha)
+            # Busca Stats para dar munição à IA (Principalmente Cartões)
+            stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
+            media_cartoes_total = 0
+            if stats:
+                media_cartoes_total = stats['home']['avg_cards'] + stats['away']['avg_cards']
+            
+            # Cenário Tático
             cenario = "Equilibrado"
             try:
                 url_odd = "https://v3.football.api-sports.io/odds"
@@ -1036,55 +1036,52 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     vals = r_odd['response'][0]['bookmakers'][0]['bets'][0]['values']
                     v1 = next((float(v['odd']) for v in vals if v['value']=='Home'), 0)
                     v2 = next((float(v['odd']) for v in vals if v['value']=='Away'), 0)
-                    if v1 < 1.50: cenario = "Massacre Casa (Ataque total do Mandante)"
-                    elif v2 < 1.50: cenario = "Massacre Visitante (Ataque total do Visitante)"
+                    if v1 < 1.50: cenario = "Massacre Casa"
+                    elif v2 < 1.50: cenario = "Massacre Visitante"
             except: pass
 
-            dados_analise += f"""
-            - Jogo: {home} x {away} | Liga: {liga_nome}
-              Juiz: {juiz} | Cenário Tático: {cenario}
-              Permite Apostar em Jogador? {permite_player_props}
-            """
-            count_validos += 1
+            if media_cartoes_total > 0: # Só manda pra IA se tiver dado de cartão
+                dados_analise += f"""
+                - Jogo: {home} x {away} ({liga_nome})
+                  Juiz: {juiz} | Cenário: {cenario}
+                  Permite Jogador? {permite_player_props}
+                  Média Cartões (Soma): {media_cartoes_total:.1f}
+                """
+                count_validos += 1
 
         if not dados_analise: return []
 
-        # --- PROMPT ATUALIZADO (COM REGRAS DE MERCADO) ---
         prompt = f"""
-        ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS (PLAYER PROPS & CARDS).
+        ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS.
         
-        Analise a lista de jogos abaixo. Use o "Cenário Tático" para inferir pressão.
+        Analise a lista de jogos abaixo. 
+        Seu foco principal é CARTÕES (Açougueiro), mas se a liga permitir, olhe Chutes/Goleiros.
         
-        LISTA DE JOGOS:
+        DADOS:
         {dados_analise}
         
-        SUA MISSÃO (ENCONTRAR 3 OPORTUNIDADES):
+        SUA MISSÃO (3 OPORTUNIDADES):
         
-        1. 🧤 **MURALHA (Goleiros):**
-           - REQUISITO: O jogo PRECISA ter "Permite Apostar em Jogador? SIM".
-           - LÓGICA: Se o Cenário for "Massacre Casa", o goleiro VISITANTE fará muitas defesas.
-           - INDICAÇÃO: "Over Defesas Goleiro [Time Sofredor]".
-           
-        2. 🎯 **SNIPER (Finalizações):**
-           - REQUISITO: O jogo PRECISA ter "Permite Apostar em Jogador? SIM".
-           - LÓGICA: Se "Massacre", o centroavante do favorito vai chutar muito.
-           - INDICAÇÃO: "Over 0.5 Chutes ao Gol [Nome do Jogador]".
-           
-        3. 🟨 **AÇOUGUEIRO (Cartões):**
-           - REQUISITO: Pode ser em QUALQUER jogo (SIM ou NAO).
-           - LÓGICA: Jogos "Equilibrados" ou com Juiz rigoroso.
-           - INDICAÇÃO: "Over Cartões na Partida".
+        1. 🟨 **AÇOUGUEIRO (Cartões) - OBRIGATÓRIO DAR A LINHA:**
+           - Regra de Ouro: A linha deve ser SEMPRE menor que a média.
+           - Se Média Cartões = 4.5 -> Indique "Over 3.5 Cartões".
+           - Se Média Cartões = 6.0 -> Indique "Over 4.5 Cartões".
+           - NUNCA indique apenas "Over Cartões". Dê o número!
+        
+        2. 🧤 **MURALHA / 🎯 SNIPER:**
+           - Só se "Permite Jogador? SIM".
+           - Se for Massacre Casa -> Goleiro Visitante Over 3.5 Defesas.
         
         SAÍDA JSON OBRIGATÓRIA:
         {{
             "sinais": [
                 {{
                     "fid": "...", 
-                    "tipo": "CARTAO" (ou GOLEIRO/CHUTE),
-                    "titulo": "🟨 AÇOUGUEIRO" (ou 🧤 MURALHA / 🎯 SNIPER),
+                    "tipo": "CARTAO",
+                    "titulo": "🟨 AÇOUGUEIRO",
                     "jogo": "Time A x Time B",
-                    "destaque": "Explique a lógica (Ex: Cenário de massacre, goleiro vai trabalhar muito).",
-                    "indicacao": "Over 3.5 Defesas" (ou Nome do Jogador ou Total Cartões)
+                    "destaque": "Média somada de 6.2 cartões e juiz rigoroso.",
+                    "indicacao": "Over 4.5 Cartões na Partida" (SEMPRE COM NÚMERO)
                 }}
             ]
         }}
