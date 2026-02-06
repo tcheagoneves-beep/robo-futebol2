@@ -2730,33 +2730,36 @@ if st.session_state.ROBO_LIGADO:
                                 linha_bd = ""
                                 if "MANDANTE" in txt_bigdata: linha_bd = f"• 💾 <b>Big Data:</b> Tendência confirmada.\n"
 
-                                # --- FORMATAÇÃO DO RAIO-X PARA O TELEGRAM ---
-                                txt_stats_extras = ""
-                                try:
-                                    txt_stats_extras += f"\n📊 <b>Dados do Momento:</b> <i>{texto_momento}</i>"
+                                # --- INICIO DO BLOCO NOVO (RAIO-X VISUAL LIMPO) ---
+                        txt_stats_extras = ""
+                        try:
+                            txt_stats_extras += f"\n📊 <b>Dados do Momento:</b> <i>{texto_momento}</i>"
+                            
+                            # Rating
+                            if nota_home != "N/A":
+                                txt_stats_extras += f"\n⭐ <b>Rating:</b> Casa {nota_home} | Fora {nota_away}"
+                            
+                            # Contexto Inteligente (Formatado para Leitura Humana)
+                            if 'dados_contextuais' in locals() and dados_contextuais:
+                                # Pega as porcentagens que já calculamos (Mais limpo que a lista de jogos)
+                                micro_h = dados_contextuais['home']['micro']
+                                micro_a = dados_contextuais['away']['micro']
+                                
+                                cards_h = dados_contextuais['home'].get('avg_cards', 0)
+                                cards_a = dados_contextuais['away'].get('avg_cards', 0)
+                                
+                                txt_stats_extras += "\n🔎 <b>Raio-X (Tendência):</b>"
+                                txt_stats_extras += f"\n📈 <b>Gols (Recente):</b> Casa {micro_h}% | Fora {micro_a}% (Over 1.5)"
+                                
+                                if cards_h > 0 or cards_a > 0:
+                                    # Formata cartões de jeito clean
+                                    txt_stats_extras += f"\n🟨 <b>Cartões (Média):</b> {cards_h:.1f} vs {cards_a:.1f}"
+                                    if dados_contextuais['home']['reds'] > 0 or dados_contextuais['away']['reds'] > 0:
+                                        txt_stats_extras += " 🟥 (Alerta Expulsão)"
                                     
-                                    # Dados de Rating (Força do Elenco)
-                                    if nota_home != "N/A":
-                                        txt_stats_extras += f"\n⭐ <b>Rating:</b> Casa {nota_home} | Fora {nota_away}"
-                                    
-                                    # O NOVO RAIO-X (Baseado nos dados ricos que criamos)
-                                    if dados_contextuais:
-                                        # Pega o histórico recente
-                                        resumo_h = dados_contextuais['home']['resumo']
-                                        resumo_a = dados_contextuais['away']['resumo']
-                                        
-                                        # Pega os dados de cartões (se houver)
-                                        cards_h = dados_contextuais['home'].get('avg_cards', 0)
-                                        cards_a = dados_contextuais['away'].get('avg_cards', 0)
-                                        
-                                        txt_stats_extras += "\n🔎 <b>Raio-X (Forma & Disciplina):</b>"
-                                        txt_stats_extras += f"\n🏠 <b>Casa:</b> {resumo_h}"
-                                        txt_stats_extras += f"\n✈️ <b>Fora:</b> {resumo_a}"
-                                        
-                                        if cards_h > 0 or cards_a > 0:
-                                            txt_stats_extras += f"\n🟨 <b>Média Cartões:</b> {cards_h:.1f} vs {cards_a:.1f}"
-                                            
-                                except Exception as e: print(f"Erro visual: {e}")
+                        except Exception as e: print(f"Erro visual: {e}")
+
+                        # --- FIM DO BLOCO NOVO ---
 
                                 msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
                                 msg += f"🏆 {liga_safe}\n"
