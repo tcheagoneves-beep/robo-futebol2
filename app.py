@@ -1431,7 +1431,91 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         
-        r_json = json.loads(response.text)
+        r_json = json.loads(response.text)def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
+    if not IA_ATIVADA: return "", "N/A"
+    try:
+        # ... (Mantém a parte de extração de dados e KPIs igualzinha a anterior) ...
+        # ... (Vou abreviar aqui para focar na correção do JSON lá no final) ...
+        
+        # --- 1. Extração de Dados Brutos ---
+        s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
+        def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
+        
+        chutes_h = gv(s1, 'Total Shots'); gol_h = gv(s1, 'Shots on Goal')
+        cantos_h = gv(s1, 'Corner Kicks'); atq_perigo_h = gv(s1, 'Dangerous Attacks')
+        faltas_h = gv(s1, 'Fouls'); cards_h = gv(s1, 'Yellow Cards') + gv(s1, 'Red Cards')
+        chutes_a = gv(s2, 'Total Shots'); gol_a = gv(s2, 'Shots on Goal')
+        cantos_a = gv(s2, 'Corner Kicks'); atq_perigo_a = gv(s2, 'Dangerous Attacks')
+        faltas_a = gv(s2, 'Fouls'); cards_a = gv(s2, 'Yellow Cards') + gv(s2, 'Red Cards')
+        chutes_totais = chutes_h + chutes_a; atq_perigo_total = atq_perigo_h + atq_perigo_a; total_faltas = faltas_h + faltas_a
+        tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
+        tempo = int(tempo_str) if tempo_str.isdigit() else 1
+
+        usou_estimativa = False
+        if atq_perigo_total == 0 and chutes_totais > 0:
+            atq_perigo_total = int(chutes_totais * 5)
+            usou_estimativa = True
+
+        intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
+        status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.0 else "❄️ BAIXA" if intensidade_jogo < 0.6 else "😐 MÉDIA"
+        soma_atq = atq_perigo_h + atq_perigo_a
+        dominancia_h = (atq_perigo_h / soma_atq * 100) if soma_atq > 0 else 50
+        quem_manda = "EQUILIBRADO"
+        if dominancia_h > 60: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
+        elif dominancia_h < 40: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
+
+        strats_low_intensity = ["Under", "Morno", "Vovô", "Back", "Segurar"]
+        eh_strat_low = any(x in estrategia for x in strats_low_intensity)
+        eh_strat_card = "Cartão" in estrategia
+
+        if not usou_estimativa and not eh_strat_low and not eh_strat_card:
+            if intensidade_jogo < 0.5 and tempo > 15: 
+                 return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> (Dados Reais) - Jogo muito lento.", "15%"
+
+        aviso_dados = ""
+        if usou_estimativa: aviso_dados = "(NOTA: Intensidade projetada via Chutes)."
+
+        prompt = f"""
+        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL E TRADER ESPORTIVO.
+        Analise os KPIs abaixo para validar a entrada '{estrategia}'.
+        {aviso_dados}
+
+        DADOS DO JOGO:
+        - Placar/Tempo: {dados_jogo['placar']} aos {tempo} min.
+        
+        KPIs:
+        1. Intensidade (Ataque): {intensidade_jogo:.2f}/min ({status_intensidade}).
+        2. Tática: {quem_manda}.
+        3. Faltas: {total_faltas} | Cartões: {cards_h}x{cards_a}.
+        
+        STATS DETALHADAS:
+        - Casa: {chutes_h} Chutes ({gol_h} no gol) | {cantos_h} Cantos | {atq_perigo_h} Atq Perigosos.
+        - Fora: {chutes_a} Chutes ({gol_a} no gol) | {cantos_a} Cantos | {atq_perigo_a} Atq Perigosos.
+        
+        CONTEXTO HISTÓRICO: {extra_context}
+        
+        -----------------------------------------------------------
+        ⚠️ REGRAS DE OURO:
+        1. O OBJETIVO É LUCRO. Se a estratégia for "GOLS", avalie o jogo como um todo (não importa quem marca).
+        2. CENÁRIO "ARAME LISO": Se o Time A chuta muito mas não marca, OLHE PARA O TIME B. Se o B tiver chutes no gol, APROVE (Gol de contra-ataque).
+        3. DEFESA PENEIRA: Se quem sofre pressão toma muitos gols no histórico, APROVE.
+        -----------------------------------------------------------
+
+        CLASSIFIQUE:
+        💎 DIAMANTE: Jogo aberto, pressão insustentável ou defesa prestes a falhar.
+        ✅ PADRÃO: Dados favoráveis.
+        ⛔ VETADO: Jogo travado, lento ou times retranqueiros.
+
+        JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
+        """
+        
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
+        st.session_state['gemini_usage']['used'] += 1
+        
+        # --- CORREÇÃO DO JSON (AQUI ESTAVA O ERRO DO N/A) ---
+        txt_limpo = response.text.replace("```json", "").replace("```", "").strip()
+        r_json = json.loads(txt_limpo)
+        
         classe = r_json.get('classe', 'PADRAO').upper()
         prob_val = int(r_json.get('probabilidade', 70))
         motivo = r_json.get('motivo_tecnico', 'Análise baseada em KPIs.')
@@ -2019,23 +2103,35 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
-    # 1. Sniper Matinal
+    # 1. Sniper Matinal (07h as 11h)
     if 7 <= agora.hour < 11:
         if not st.session_state['matinal_enviado']:
-            # A função gerar_insights_matinais_ia JÁ FAZ O FILTRO DE ODDS internamente agora
-            insights = gerar_insights_matinais_ia(api_key)
-            if insights and "Sem jogos" not in insights:
+            # --- CORREÇÃO AQUI: Recebe Texto E Mapa ---
+            conteudo_ia, mapa_ids = gerar_insights_matinais_ia(api_key)
+            
+            # Verifica se o TEXTO é válido
+            if conteudo_ia and "Sem jogos" not in str(conteudo_ia) and "Erro" not in str(conteudo_ia):
                 ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
-                msg_final = f"🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n\n{insights}"
+                msg_final = f"🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n\n{conteudo_ia}"
+                
                 for cid in ids: enviar_telegram(token, cid, msg_final)
-                salvar_snipers_do_texto(insights)
+                
+                # Salva no histórico usando o texto limpo
+                salvar_snipers_do_texto(conteudo_ia)
                 st.session_state['matinal_enviado'] = True
+            else:
+                print("Sniper Matinal: Nenhum jogo encontrado ou erro na IA.")
+
         if st.session_state['matinal_enviado'] and not st.session_state.get('multipla_matinal_enviada', False):
             time.sleep(5); enviar_multipla_matinal(token, chat_ids, api_key)
         if st.session_state['matinal_enviado'] and st.session_state['multipla_matinal_enviada'] and not st.session_state.get('alternativos_enviado', False):
             time.sleep(5); enviar_alerta_alternativos(token, chat_ids, api_key)
         if agora.hour >= 10 and not st.session_state.get('alavancagem_enviada', False):
             time.sleep(5); enviar_alavancagem(token, chat_ids, api_key)
+    
+    # ... (Resto da função segue igual para Drop Odds) ...
+    # Mantenha o código do Drop Odds que já estava lá embaixo
+    # (Se precisar, eu mando a função completa, mas o erro estava só no bloco acima)
     
     # 5. [NOVO] TRADING PRÉ-LIVE (DROP ODDS) - COM JANELA ESTENDIDA ATÉ 13:30
     faixa_12h = (agora.hour == 12 or (agora.hour == 13 and agora.minute <= 30))
@@ -3128,5 +3224,6 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
 
 
