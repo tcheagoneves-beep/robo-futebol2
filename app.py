@@ -902,7 +902,7 @@ def gerar_insights_matinais_ia(api_key):
             mapa_jogos[f"{home} x {away}"] = str(fid)
 
             # --- FILTRO 1: VALOR MÍNIMO (ODD > 1.50) ---
-            # Se a odd for muito esmagada, nem gasta token da IA
+            # O robô filtra pela odd de referência, mas a IA decide o mercado final.
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
             if odd_val < 1.50: continue 
             
@@ -918,7 +918,7 @@ def gerar_insights_matinais_ia(api_key):
                 ⚽ Jogo: {home} x {away} ({liga})
                 💰 Odd Ref ({odd_nome}): @{odd_val:.2f}
                 
-                📊 HISTÓRICO RECENTE (Analise para Vencedor ou Gols):
+                📊 HISTÓRICO RECENTE (Analise os placares):
                 🏠 Casa: {h_txt}
                 ✈️ Fora: {a_txt}
                 """
@@ -926,53 +926,56 @@ def gerar_insights_matinais_ia(api_key):
         
         if not lista_para_ia: return "Nenhum jogo com valor (Odd > 1.50) encontrado hoje.", {}
 
-        # --- O PROMPT SNIPER HÍBRIDO (RIGOROSO + MULTI-MERCADO) ---
+        # --- O PROMPT SNIPER MULTI-MERCADO (AGORA COM UNDER) ---
         prompt = f"""
         ATUE COMO UM TRADER ESPORTIVO PROFISSIONAL (PERFIL SNIPER).
         
         Analise a lista de jogos abaixo. 
-        Sua meta é encontrar a MELHOR oportunidade para cada jogo (Seja Vencedor, Gols ou HT), mas mantendo o RIGOR TÉCNICO.
+        Sua meta é encontrar a MELHOR oportunidade para cada jogo. 
+        NÃO fique viciado em "Over Gols". Se o jogo for ruim de gol, sugira UNDER. Se tiver favorito, sugira VENCEDOR.
         
         DADOS DOS JOGOS:
         {lista_para_ia}
         
         ---------------------------------------------------------------------
-        🚫 FILTRO DE ELITE (SEJA RIGOROSO - DESCARTE O LIXO):
-        1. Se um time é favorito mas ganha sempre de 1x0 "chorado" -> NÃO indique Over Gols.
-        2. Se o histórico mostra "V-D-V-D" (Instabilidade) -> NÃO indique Vitória Seca (Back).
+        🚫 FILTRO DE ELITE (Rigoroso):
+        1. Se um favorito ganha sempre de 1x0 -> NÃO indique Over, indique Vencedor ou Under.
+        2. Se o histórico mostra placares como 0x0, 1x1, 1x0 -> OBRIGATÓRIO sugerir "Menos de 2.5 Gols".
         3. Se a Odd é alta mas o risco é enorme -> DESCARTE.
-        4. O objetivo é GREEN, não volume. Se o jogo for ruim, ignore-o.
         ---------------------------------------------------------------------
 
-        🧠 RACIOCÍNIO PARA SELEÇÃO (ONDE ESTÁ O VALOR?):
+        🧠 MANUAL DE ESCOLHA (VARIE OS MERCADOS):
         
-        1. 🏆 **VENCEDOR (Match Odds):** Indique apenas se um time vem de sequência forte de vitórias e o outro está mal.
-           - Sugestão: "Vitória do [Time]".
+        1. 📉 **UNDER GOLS (Jogos Travados):**
+           - CRITÉRIO: Placares recentes mostram 0x0, 1x0, 0x1 ou 1x1. Defesas fortes.
+           - SUGESTÃO: "Menos de 2.5 Gols" ou "Menos de 3.5 Gols".
            
-        2. ⚡ **GOLS HT (Primeiro Tempo):** Indique se os históricos mostram gols cedo (ex: placares movimentados no intervalo).
-           - Sugestão: "Over 0.5 Gols HT".
+        2. 🏆 **VENCEDOR (Favorito Claro):**
+           - CRITÉRIO: Um time vem de sequencia de vitórias e o outro perde muito.
+           - SUGESTÃO: "Vitória do [Time]" ou "Back [Time]".
            
-        3. 🎯 **GOLS FT (Jogo Todo):** Indique se os times marcam e sofrem muito (placares tipo 2x2, 3x1, 4x2).
-           - Sugestão: "Over 2.5 Gols" ou "Ambas Marcam".
-        
-        4. 🛡️ **PROTEÇÃO:** Se o favorito joga bem mas a defesa vacila.
-           - Sugestão: "Empate Anula" ou "Dupla Chance".
+        3. ⚡ **GOLS HT (Início Rápido):** - CRITÉRIO: Placares movimentados já no primeiro tempo (ex: 1x1 HT).
+           - SUGESTÃO: "Over 0.5 Gols HT".
+           
+        4. 🎯 **GOLS FT (Tiroteio):**
+           - CRITÉRIO: Só use se for EVIDENTE (placares 2x2, 3x1, 4x2 frequentes).
+           - SUGESTÃO: "Mais de 2.5 Gols".
 
-        ⚠️ REGRAS FINAIS:
-        - Selecione APENAS as 3 a 5 MELHORES oportunidades do dia.
-        - Mantenha a resposta limpa e direta.
+        ⚠️ INSTRUÇÃO FINAL:
+        - Selecione APENAS as 3 a 5 MELHORES oportunidades.
+        - Mantenha a resposta limpa (sem asteriscos no título).
         
-        SAÍDA (USE EXATAMENTE ESTE FORMATO VISUAL):
+        SAÍDA (USE EXATAMENTE ESTE FORMATO):
         
-        **⚽ Jogo: [Time A] x [Time B] ([Liga])**
-        🔥 Tendência: [Descreva a fase. Ex: "Casa implacável" ou "Defesas frágeis"]
-        🎯 Palpite: [O Mercado escolhido]
-        📝 Motivo: [Explicação técnica baseada nos dados lidos, justificando a confiança]
+        ⚽ Jogo: [Time A] x [Time B] ([Liga])
+        🔥 Tendência: [Ex: "Defesas sólidas e placares magros" ou "Casa muito favorita"]
+        🎯 Palpite: [Ex: Menos de 2.5 Gols / Vitória do Casa / Over 0.5 HT]
+        📝 Motivo: [Explicação técnica baseada nos dados lidos]
         
         (Repita para os próximos jogos...)
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.4))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
         st.session_state['gemini_usage']['used'] += 1
         
         return response.text, mapa_jogos
