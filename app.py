@@ -2230,6 +2230,11 @@ if st.session_state.ROBO_LIGADO:
             jogos_para_atualizar = []
             agora_dt = datetime.now()
             
+            # --- DEFINIÇÃO DA VARIÁVEL PROX (Faltava aqui) ---
+            prox = buscar_agenda_cached(safe_api, hoje_real)
+            agora = get_time_br()
+            # -------------------------------------------------
+            
             # Loop de Análise dos Jogos ao Vivo
             for j in jogos_live:
                 lid = normalizar_id(j['league']['id']); fid = j['fixture']['id']
@@ -2273,7 +2278,6 @@ if st.session_state.ROBO_LIGADO:
                 if lista_sinais:
                     status_vis = f"✅ {len(lista_sinais)} Sinais"
                     
-                    # --- ATUALIZAÇÃO: DADOS DE ELITE PARA O LIVE ---
                     dados_contextuais = analisar_tendencia_macro_micro(safe_api, j['teams']['home']['id'], j['teams']['away']['id'])
                     
                     txt_history = "Dados indisponíveis."
@@ -2359,7 +2363,6 @@ if st.session_state.ROBO_LIGADO:
                         
                         opiniao_txt = ""; prob_txt = "..."; opiniao_db = "Neutro"
                         
-                        # CONSULTA A IA
                         opiniao_db = "Neutro" 
                         if IA_ATIVADA:
                             try:
@@ -2790,6 +2793,30 @@ if st.session_state.ROBO_LIGADO:
                             time.sleep(0.5); st.rerun()
                             
                     except Exception as e: st.error(f"Erro na IA: {e}")
+
+        with abas[10]:
+            st.markdown("### 📈 Trading Pré-Live (Drop Odds)")
+            st.caption("Apostas baseadas em variação de preço antes do jogo começar (Cashout Bet365).")
+            
+            c_trade1, c_trade2 = st.columns(2)
+            if c_trade1.button("🔍 Escanear Mercado Agora (Manual)"):
+                if IA_ATIVADA:
+                    with st.spinner("Comparando Bet365 vs Pinnacle... Isso pode demorar."):
+                        drops = scanner_drop_odds_pre_live(st.session_state['API_KEY'])
+                        if drops:
+                            st.success(f"Encontradas {len(drops)} oportunidades!")
+                            for d in drops:
+                                st.markdown(f"""
+                                ---
+                                ⚽ **{d['jogo']}** ({d['liga']}) | ⏰ {d['hora']}
+                                📉 **Drop:** {d['valor']:.1f}%
+                                • Bet365: **@{d['odd_b365']}**
+                                • Pinnacle: **@{d['odd_pinnacle']}**
+                                👉 *Entrar no {d['lado']} + Banker*
+                                """)
+                        else:
+                            st.warning("Nenhum desajuste de odd encontrado nas Ligas Top agora.")
+                else: st.error("IA/API necessária.")
 
         for i in range(INTERVALO, 0, -1):
             st.markdown(f'<div class="footer-timer">Próxima varredura em {i}s</div>', unsafe_allow_html=True)
