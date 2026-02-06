@@ -1607,14 +1607,29 @@ def enviar_multipla_matinal(token, chat_ids, api_key):
     dados_json, mapa_nomes = gerar_multipla_matinal_ia(api_key)
     if not dados_json or "jogos" not in dados_json: return
     jogos = dados_json['jogos']
-    prob = dados_json.get('probabilidade_combinada', '90')
+    
+    # --- CORREÇÃO DO NÚMERO DA PROBABILIDADE ---
+    raw_prob = str(dados_json.get('probabilidade_combinada', '90'))
+    
+    # Se a IA mandou "Alta", viramos para "90". Se mandou "Média", "75".
+    # Se mandou "90%", tiramos o % para não duplicar.
+    if "alta" in raw_prob.lower(): prob = "90"
+    elif "media" in raw_prob.lower() or "méd" in raw_prob.lower(): prob = "75"
+    else: 
+        # Filtra apenas os números da string
+        prob = ''.join(filter(str.isdigit, raw_prob))
+        if not prob: prob = "90" # Segurança final
+    # -------------------------------------------
+
     msg = "🚀 <b>MÚLTIPLA DE SEGURANÇA (IA)</b>\n"
     ids_compostos = []; nomes_compostos = []
     for idx, j in enumerate(jogos):
         icone = ["1️⃣", "2️⃣", "3️⃣"][idx] if idx < 3 else "👉"
         msg += f"\n{icone} <b>Jogo: {j['jogo']}</b>\n🎯 Seleção: Over 0.5 Gols\n📝 Motivo: {j['motivo']}\n"
         ids_compostos.append(str(j['fid'])); nomes_compostos.append(j['jogo'])
+    
     msg += f"\n⚠️ <b>Conclusão:</b> Probabilidade combinada de {prob}%."
+    
     enviar_telegram(token, chat_ids, msg)
     multipla_obj = {"id_unico": f"MULT_{'_'.join(ids_compostos)}", "tipo": "MATINAL", "fids": ids_compostos, "nomes": nomes_compostos, "status": "Pendente", "data": get_time_br().strftime('%Y-%m-%d')}
     if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
