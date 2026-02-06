@@ -1014,10 +1014,8 @@ def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
     
-    # LISTA DE ELITE (Onde tem mercado de Cartões e Jogadores na Bet365)
-    # 71=Brasileirão, 39=Premier League, 140=La Liga, 135=Serie A, 78=Bundesliga, 
-    # 61=Ligue 1, 2=Champions, 3=Europa League, 13=Libertadores, 9=Copa America
-    LIGAS_BIG_MARKETS = [71, 72, 39, 140, 135, 78, 61, 2, 3, 9, 10, 13, 848, 143, 137] 
+    # Ligas Big Markets (Para Player Props - Chutes/Goleiro)
+    LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13, 848, 143, 137] 
 
     try:
         url = "https://v3.football.api-sports.io/fixtures"
@@ -1025,32 +1023,31 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         jogos = res.get('response', [])
         
-        # Filtra jogos NS (Não iniciados)
         jogos_candidatos = [j for j in jogos if j['fixture']['status']['short'] == 'NS']
-        
         if not jogos_candidatos: return []
         
         random.shuffle(jogos_candidatos)
-        
         dados_analise = ""
         count_validos = 0
         
         for j in jogos_candidatos:
-            if count_validos >= 20: break 
+            if count_validos >= 30: break 
             
             fid = j['fixture']['id']
             lid = j['league']['id']
-            
-            # --- TRAVA DE SEGURANÇA ---
-            # Só analisa se for Liga Grande (Garante que tem mercado de Cartão/Player)
-            if lid not in LIGAS_BIG_MARKETS: continue
-            
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga_nome = j['league']['name']
             juiz = j['fixture'].get('referee', 'Desconhecido')
             
-            # Cenário Tático (Massacre ou Equilibrado)
+            # --- LÓGICA DE DADOS ---
+            permite_player_props = "SIM" if lid in LIGAS_BIG_MARKETS else "NAO"
+            
+            stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
+            media_cartoes_total = 0
+            if stats:
+                media_cartoes_total = stats['home']['avg_cards'] + stats['away']['avg_cards']
+            
             cenario = "Equilibrado"
             try:
                 url_odd = "https://v3.football.api-sports.io/odds"
@@ -1063,42 +1060,36 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     elif v2 < 1.50: cenario = "Massacre Visitante"
             except: pass
 
-            # Busca média de cartões para passar a IA
-            media_cards = 0
-            stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
-            if stats:
-                media_cards = stats['home']['avg_cards'] + stats['away']['avg_cards']
-
-            dados_analise += f"""
-            - Jogo: {home} x {away} | Liga: {liga_nome}
-              Juiz: {juiz} | Cenário: {cenario}
-              Média Cartões (Soma): {media_cards:.1f}
-            """
-            count_validos += 1
+            # Manda para a IA se tiver dados de cartão ou se permitir props
+            if media_cartoes_total > 0 or permite_player_props == "SIM":
+                dados_analise += f"""
+                - Jogo: {home} x {away} ({liga_nome})
+                  Juiz: {juiz} | Cenário: {cenario}
+                  Permite Jogador? {permite_player_props}
+                  Média Cartões (Soma dos Times): {media_cartoes_total:.1f}
+                """
+                count_validos += 1
 
         if not dados_analise: return []
 
-        # --- PROMPT ATUALIZADO (FOCADO EM BIG MARKETS) ---
         prompt = f"""
-        ATUE COMO UM ESPECIALISTA EM MERCADOS ESPECIAIS (Big Leagues).
+        ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS.
         
-        Analise a lista de jogos abaixo. Todos são de LIGAS GRANDES, então os mercados existem.
+        Analise a lista de jogos abaixo. Olhe para os dois lados da moeda: Jogo Violento (Over) e Jogo Limpo (Under).
         
-        LISTA DE JOGOS:
+        DADOS:
         {dados_analise}
         
         SUA MISSÃO (ENCONTRAR 3 OPORTUNIDADES):
         
-        1. 🧤 **MURALHA (Goleiros):**
-           - Se "Massacre Casa" -> Goleiro Visitante Over Defesas.
-           
-        2. 🎯 **SNIPER (Finalizações):**
-           - Se "Massacre" -> Centroavante do favorito Over Chutes.
-           
-        3. 🟨 **AÇOUGUEIRO (Cartões):**
-           - OBRIGATÓRIO: A linha sugerida deve ser MENOR que a média.
-           - Se a Média é 5.0 -> Indique "Over 3.5 Cartões".
-           - Se o Juiz for conhecido, cite ele.
+        1. 🟨 **MERCADO DE CARTÕES (Over e Under):**
+           - **MODO AÇOUGUEIRO (OVER):** Se a Média Soma for ALTA (> 4.5) e o Juiz rigoroso -> Indique "Mais de 3.5 Cartões" ou "Mais de 4.5".
+           - **MODO JOGO LIMPO (UNDER):** Se a Média Soma for BAIXA (< 3.5) -> Indique "Menos de 4.5 Cartões" (Segurança) ou "Menos de 3.5".
+           - **OBRIGATÓRIO:** Dê a linha exata (Ex: Mais de 3.5 / Menos de 4.5).
+        
+        2. 🧤 **MURALHA / 🎯 SNIPER (Jogadores):**
+           - Só sugira se "Permite Jogador? SIM".
+           - Se for Massacre Casa -> Goleiro Visitante Over 3.5 Defesas.
         
         SAÍDA JSON OBRIGATÓRIA:
         {{
@@ -1106,10 +1097,10 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                 {{
                     "fid": "...", 
                     "tipo": "CARTAO" (ou GOLEIRO/CHUTE),
-                    "titulo": "🟨 AÇOUGUEIRO" (ou 🧤 MURALHA / 🎯 SNIPER),
+                    "titulo": "🟨 AÇOUGUEIRO" (se for Over) ou "🕊️ JOGO LIMPO" (se for Under),
                     "jogo": "Time A x Time B",
-                    "destaque": "Explique o motivo (Ex: Média de cartões alta e jogo decisivo).",
-                    "indicacao": "Over 3.5 Cartões" (Use números exatos!)
+                    "destaque": "Explique (Ex: Times disciplinados, média somada de apenas 2.8 cartões).",
+                    "indicacao": "Menos de 4.5 Cartões na Partida"
                 }}
             ]
         }}
