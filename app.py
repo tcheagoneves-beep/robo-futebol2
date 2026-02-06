@@ -1210,6 +1210,10 @@ def gerar_bet_builder_alavancagem(api_key):
 # 4. INTELIGÊNCIA ARTIFICIAL, CÁLCULOS E ESTRATÉGIAS (O CÉREBRO)
 # ==============================================================================
 
+# ==============================================================================
+# 4. INTELIGÊNCIA ARTIFICIAL, CÁLCULOS E ESTRATÉGIAS (O CÉREBRO)
+# ==============================================================================
+
 def buscar_rating_inteligente(api_key, team_id):
     if db_firestore:
         try:
@@ -1267,6 +1271,10 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0, tempo_
         res = requests.get(url, headers={"x-apisports-key": api_key}, params=params).json()
         target_markets = []
         target_line = 0.0
+        
+        # Lógica para pegar odd de Under se a estratégia for de Under
+        is_under = "Under" in strategy_name or "Morno" in strategy_name or "Arame" in strategy_name
+        
         if "Relâmpago" in strategy_name and total_gols_atual == 0:
             target_markets = ["1st half", "first half"]; target_line = 0.5
         elif "Golden" in strategy_name and total_gols_atual == 1:
@@ -1281,15 +1289,20 @@ def get_live_odds(fixture_id, api_key, strategy_name, total_gols_atual=0, tempo_
             markets = res['response'][0]['odds']
             for m in markets:
                 m_name = m['name'].lower()
-                if any(tm in m_name for tm in target_markets) and "over" in m_name:
+                # Procura Over ou Under dependendo da estratégia
+                tipo_aposta = "under" if is_under else "over"
+                
+                if any(tm in m_name for tm in target_markets) and "goal" in m_name:
                     for v in m['values']:
                         try:
-                            line_raw = str(v['value']).lower().replace("over", "").strip()
-                            line_val = float(''.join(c for c in line_raw if c.isdigit() or c == '.'))
-                            if abs(line_val - target_line) < 0.1:
-                                raw_odd = float(v['odd'])
-                                if raw_odd > 50: raw_odd = raw_odd / 1000
-                                return "{:.2f}".format(raw_odd)
+                            val_name = str(v['value']).lower()
+                            if tipo_aposta in val_name: # Filtra "over" ou "under"
+                                line_raw = val_name.replace(tipo_aposta, "").strip()
+                                line_val = float(''.join(c for c in line_raw if c.isdigit() or c == '.'))
+                                if abs(line_val - target_line) < 0.1:
+                                    raw_odd = float(v['odd'])
+                                    if raw_odd > 50: raw_odd = raw_odd / 1000
+                                    return "{:.2f}".format(raw_odd)
                         except: pass
         return estimar_odd_teorica(strategy_name, tempo_jogo)
     except: return estimar_odd_teorica(strategy_name, tempo_jogo)
@@ -1343,7 +1356,7 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
     if not IA_ATIVADA: return "", "N/A"
     try:
-        # --- 1. Extração de Dados Brutos (Live) ---
+        # --- 1. Extração de Dados Brutos ---
         s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
         def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
         
@@ -1361,11 +1374,12 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         chutes_totais = chutes_h + chutes_a
         atq_perigo_total = atq_perigo_h + atq_perigo_a
         total_faltas = faltas_h + faltas_a
+        total_chutes_gol = gol_h + gol_a
         
         tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
         tempo = int(tempo_str) if tempo_str.isdigit() else 1
 
-        # --- 2. ENGENHARIA DE DADOS (KPIs do Momento) ---
+        # --- 2. ENGENHARIA DE DADOS (KPIs) ---
         intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
         status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.0 else "❄️ BAIXA" if intensidade_jogo < 0.6 else "😐 MÉDIA"
 
@@ -1375,24 +1389,26 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         quem_manda = "EQUILIBRADO"
         if dominancia_h > 60: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
         elif dominancia_h < 40: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
+
+        # Define se a estratégia sugerida é de Under ou Over
+        tipo_sugestao = "UNDER" if any(x in estrategia for x in ["Under", "Morno", "Arame", "Segurar"]) else "OVER"
         
         # Momento (Pressão nos últimos minutos)
         pressao_txt = "Neutro"
-        if rh >= 3: pressao_txt = "CASA AMASSANDO (Momentum)"
-        elif ra >= 3: pressao_txt = "VISITANTE AMASSANDO (Momentum)"
+        if rh >= 3: pressao_txt = "CASA AMASSANDO"
+        elif ra >= 3: pressao_txt = "VISITANTE AMASSANDO"
 
-        # --- 3. O PROMPT DE ELITE (CRUZA LIVE + HISTÓRICO) ---
+        # --- 4. O PROMPT (A NOVA INTELIGÊNCIA) ---
         prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS ESPORTIVOS (LIVE TRADING).
-        Analise se vale a pena entrar nesta oportunidade: '{estrategia}'.
-        
+        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL E TRADER ESPORTIVO.
+        Analise a entrada: '{estrategia}' (Tipo: {tipo_sugestao}).
+
         VOCÊ DEVE CRUZAR O "MOMENTO" (O que está acontecendo agora) COM A "VERDADE" (Histórico de 50 jogos).
         
         🏟️ DADOS DO AO VIVO ({tempo} min | Placar: {dados_jogo['placar']}):
-        - Intensidade: {intensidade_jogo:.2f}/min ({status_intensidade})
+        - Intensidade: {intensidade_jogo:.2f}/min ({status_intensidade}).
+        - Chutes Totais: {chutes_totais} | No Gol: {total_chutes_gol}
         - Cenário: {quem_manda} | {pressao_txt}
-        - Stats Casa: {chutes_h} Chutes ({gol_h} no gol) | {cantos_h} Cantos
-        - Stats Fora: {chutes_a} Chutes ({gol_a} no gol) | {cantos_a} Cantos
         
         📚 CONTEXTO HISTÓRICO (A VERDADE):
         {extra_context}
@@ -1400,15 +1416,19 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         -----------------------------------------------------------
         🧠 INTELIGÊNCIA DE DECISÃO:
         
-        1. **ARAME LISO?** Se o time chuta muito agora, mas o histórico (50j) diz que ele tem pouca conversão de gols -> **VETAR (Risco Alto)**.
-        2. **GIGANTE ACORDOU?** Se o time é forte historicamente (Winrate alto) e começou a pressionar agora (Momentum) -> **APROVAR (Diamante)**.
-        3. **FAVORITO FALSO?** Se o time está ganhando de 1x0 mas recuou, e o histórico mostra que ele cede empate -> **ALERTA**.
+        1. **ARAME LISO (FALSA PRESSÃO)?**
+           - Se tem muitos chutes ({chutes_totais}) mas poucos no gol, E o histórico mostra poucos gols -> **APROVAR UNDER (Diamante)**.
+
+        2. **GIGANTE ACORDOU?**
+           - Se a estratégia for "OVER" e o time começou a chutar no gol agora, e o histórico é bom -> **APROVAR**.
         
+        3. **JOGO MORNO?**
+           - Se nada acontece e o histórico é de 0x0 -> **APROVAR UNDER**.
+
         CLASSIFIQUE:
-        💎 DIAMANTE: Histórico + Momento perfeitos.
-        ✅ PADRÃO: Bons números, entrada válida.
-        ⚠️ ARRISCADO: Momento bom, mas histórico ruim (ou vice-versa).
-        ⛔ VETADO: Jogo travado ou times ineficientes.
+        💎 DIAMANTE: Leitura perfeita (Histórico + Momento batem).
+        ✅ PADRÃO: Dados favoráveis.
+        ⛔ VETADO: Risco alto (Ex: Sugerir Under em jogo de time goleador).
 
         JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
         """
@@ -1430,9 +1450,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
 
         prob_str = f"{prob_val}%"
         
-        # HTML para o Telegram
         html_analise = f"\n🤖 <b>IA LIVE (Híbrida):</b>\n{emoji} <b>{classe} ({prob_str})</b>\n"
-        html_analise += f"📊 <i>Momento: {pressao_txt}</i>\n"
         html_analise += f"📝 <i>{motivo}</i>"
         
         return html_analise, prob_str
@@ -1490,6 +1508,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         SINAIS = []
         golden_bet_ativada = False
         
+        # --- ESTRATÉGIAS DE OVER (GOLS) ---
+        
         if 65 <= tempo <= 75:
             pressao_real_h = (rh >= 3 and sog_h >= 5) 
             pressao_real_a = (ra >= 3 and sog_a >= 5)
@@ -1501,11 +1521,20 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1:
             if total_chutes_gol >= 5:
                 SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🔥 {total_chutes_gol} Chutes no Gol", "rh": rh, "ra": ra, "favorito": "GOLS"})
+        
+        # --- ESTRATÉGIAS DE UNDER (SEM GOLS) ---
 
+        # 1. JOGO MORNO (Clássico)
         dominio_claro = (posse_h > 60 or posse_a > 60) or (sog_h > 3 or sog_a > 3)
         if 55 <= tempo <= 75 and total_chutes <= 10 and (sog_h + sog_a) <= 2 and gh == ga and not dominio_claro:
             SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": f"👉 <b>FAZER:</b> Under Gols\n✅ Aposta: <b>Menos de {total_gols + 0.5} Gols</b>", "stats": "Jogo Travado", "rh": rh, "ra": ra, "favorito": "UNDER"})
 
+        # 2. ARAME LISO (NOVO!) - Muita ação, pouca pontaria
+        # Se tem muitos chutes, mas poucos no gol, a tendência é NÃO sair gol ou sair pouco.
+        if 60 <= tempo <= 80 and total_chutes >= 12 and (sog_h + sog_a) <= 3 and total_gols <= 1:
+             SINAIS.append({"tag": "🧊 Arame Liso", "ordem": f"👉 <b>FAZER:</b> Under Gols\n⚠️ <i>Muita finalização pra fora.</i>\n✅ Aposta: <b>Menos de {total_gols + 1.5} Gols</b>", "stats": f"{total_chutes} Chutes (Só {sog_h+sog_a} no gol)", "rh": 0, "ra": 0, "favorito": "UNDER"})
+
+        # --- OUTRAS ---
         if 75 <= tempo <= 85 and total_chutes < 18:
             diff = gh - ga
             if (diff == 1 and ra < 1 and posse_h >= 45) or (diff == -1 and rh < 1 and posse_a >= 45):
