@@ -2791,6 +2791,39 @@ if st.session_state.ROBO_LIGADO:
                                     st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
 
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
+                                # --- FIM DO BLOCO NOVO ---
+
+                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
+                                msg += f"🏆 {liga_safe}\n"
+                                msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
+                                msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
+                                msg += f"{bloco_aviso_odd}"
+                                msg += f"{texto_acao_original}\n"
+                                if destaque_odd: msg += f"{destaque_odd}\n"
+                                msg += f"{txt_stats_extras}\n"
+                                msg += "──────────────\n"
+                                msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
+                                msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
+                                msg += linha_bd
+                                msg += "\n"
+                                msg += f"{opiniao_txt}"
+                                
+                                # --- DECISÃO FINAL DE ENVIO ---
+                                if opiniao_db == "Aprovado":
+                                    enviar_telegram(safe_token, safe_chat, msg)
+                                    st.toast(f"✅ Sinal Enviado: {s['tag']}")
+                                
+                                elif opiniao_db == "Arriscado":
+                                    msg += "\n👀 <i>Obs: Risco moderado.</i>"
+                                    enviar_telegram(safe_token, safe_chat, msg)
+                                    st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
+                                
+                                else:
+                                    # Se for VETADO ou NEUTRO, NÃO ENVIA NADA!
+                                    # Mas já salvou na planilha como "⛔ VETADO" lá em cima.
+                                    st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
+
+                            except Exception as e: print(f"Erro ao enviar sinal: {e}")
         # --- FIM DO BLOCO NOVO ---
 
         # ESTA LINHA ABAIXO É ONDE ESTAVA O ERRO. AGORA ESTÁ ALINHADA.
