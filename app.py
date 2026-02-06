@@ -1849,15 +1849,22 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
 
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
+    # Pega tudo que é Sniper ou Alternativo que está Pendente
     snipers = [s for s in hist if ("Sniper" in s['Estrategia'] or "JOGADOR" in s['Estrategia'] or "Mercado" in s['Liga']) and s['Resultado'] == "Pendente"]
+    
     if not snipers: return
     updates = []
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
     
     for s in snipers:
+        # --- CORREÇÃO: PULA MERCADOS ALTERNATIVOS (Deixa a outra função cuidar) ---
+        if "Mercado Alternativo" in s['Liga']: continue 
+        # --------------------------------------------------------------------------
+
         if "SNIPER_" in str(s['FID']): continue 
         fid = str(s['FID']).replace("ALT_", "")
         jogo = ids_live.get(fid)
+        
         if not jogo:
             try:
                 res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
@@ -1866,16 +1873,19 @@ def conferir_resultados_sniper(jogos_live, api_key):
             
         if jogo:
             status = jogo['fixture']['status']['short']
+            # Se o jogo acabou
             if status in ['FT', 'AET', 'PEN', 'INT', 'ABD', 'PST']:
                 gh = jogo['goals']['home'] or 0
                 ga = jogo['goals']['away'] or 0
                 placar_final = f"{gh}x{ga}"
                 res_final = "❌ RED" 
                 
+                # Regra para Sniper Matinal (Gols)
                 if "Sniper Matinal" in s['Estrategia']:
                       if (gh + ga) >= 1: res_final = "✅ GREEN" 
                 
-                elif "JOGADOR" in s['Estrategia'] or "Mercado Alternativo" in s['Liga']:
+                # Se sobrar algum jogador antigo
+                elif "JOGADOR" in s['Estrategia']:
                     res_final = f"🏁 FIM ({placar_final})"
 
                 s['Resultado'] = res_final
@@ -1927,43 +1937,81 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
 
 def verificar_mercados_alternativos(api_key):
     hist = st.session_state.get('historico_sinais', [])
+    # Busca apenas os Alternativos Pendentes
     pendentes = [s for s in hist if s['Liga'] == 'Mercado Alternativo' and s['Resultado'] == 'Pendente']
+    
     if not pendentes: return
     updates_buffer = []
+    
     for s in pendentes:
         try:
             fid_real = str(s['FID']).replace("ALT_", "")
-            meta = 0.0
-            try: meta = float(str(s['Placar_Sinal']).split(':')[1].strip())
-            except: continue 
+            
+            # Tenta extrair a meta do texto salvo (Ex: "Meta: 3.5")
+            meta = 0.5
+            try: 
+                txt_meta = str(s['Placar_Sinal']).split('Meta:')[1].split('|')[0].strip()
+                meta = float(txt_meta)
+            except: 
+                # Fallback: Tenta achar número no texto original se falhar
+                import re
+                nums = re.findall(r"[-+]?\d*\.\d+|\d+", str(s['Placar_Sinal']))
+                if nums: meta = float(nums[0])
+
+            # Busca dados do jogo finalizado
             url = "https://v3.football.api-sports.io/fixtures"
             r = requests.get(url, headers={"x-apisports-key": api_key}, params={"id": fid_real}).json()
             if not r.get('response'): continue
+            
             jogo = r['response'][0]
             status = jogo['fixture']['status']['short']
+            
+            # Só processa se o jogo ACABOU
             if status not in ['FT', 'AET', 'PEN']: continue
+            
+            # Busca Estatísticas (Cartões/Chutes)
             url_stats = "https://v3.football.api-sports.io/fixtures/statistics"
             r_stats = requests.get(url_stats, headers={"x-apisports-key": api_key}, params={"fixture": fid_real}).json()
             if not r_stats.get('response'): continue
+            
             stats_home = r_stats['response'][0]['statistics']
             stats_away = r_stats['response'][1]['statistics']
+            
             def gv(lista, tipo): return next((x['value'] or 0 for x in lista if x['type'] == tipo), 0)
+            
             resultado_final = "❌ RED" 
-            if "CARTÕES" in s['Estrategia'] or "SNIPER" in s['Estrategia']:
+            valor_real = 0
+            
+            # --- LÓGICA DE CARTÕES (AÇOUGUEIRO) ---
+            if "CARTÕES" in s['Estrategia'].upper() or "AÇOUGUEIRO" in s['Estrategia'].upper():
                 cards_h = gv(stats_home, "Yellow Cards") + gv(stats_home, "Red Cards")
                 cards_a = gv(stats_away, "Yellow Cards") + gv(stats_away, "Red Cards")
-                total_cards = cards_h + cards_a
-                if total_cards > meta: resultado_final = "✅ GREEN"
-                s['Placar_Sinal'] = f"Meta: {meta} | Saiu: {total_cards}"
-            elif "DEFESAS" in s['Estrategia'] or "MURALHA" in s['Estrategia']:
+                valor_real = cards_h + cards_a
+                
+                # Verifica se é OVER ou UNDER
+                if "MENOS" in str(s.get('Jogo', '')).upper() or "UNDER" in str(s.get('Jogo', '')).upper():
+                    # Lógica Under
+                    if valor_real < meta: resultado_final = "✅ GREEN"
+                else:
+                    # Lógica Over (Padrão)
+                    if valor_real > meta: resultado_final = "✅ GREEN"
+                
+                s['Placar_Sinal'] = f"Meta: {meta} | Saiu: {valor_real}"
+
+            # --- LÓGICA DE GOLEIRO/CHUTES ---
+            elif "DEFESAS" in s['Estrategia'].upper() or "MURALHA" in s['Estrategia'].upper():
                 saves_h = gv(stats_home, "Goalkeeper Saves")
                 saves_a = gv(stats_away, "Goalkeeper Saves")
-                max_saves = max(saves_h, saves_a)
-                if max_saves >= meta: resultado_final = "✅ GREEN"
-                s['Placar_Sinal'] = f"Meta: {meta} | Defesas: {max_saves}"
+                valor_real = max(saves_h, saves_a) # Pega o maior (geralmente indicamos o time sofredor)
+                
+                if valor_real >= meta: resultado_final = "✅ GREEN"
+                s['Placar_Sinal'] = f"Meta: {meta} | Defesas: {valor_real}"
+            
             s['Resultado'] = resultado_final
             updates_buffer.append(s)
-        except: pass
+            
+        except Exception as e: print(f"Erro ao conferir alternativo: {e}")
+            
     if updates_buffer: atualizar_historico_ram(updates_buffer)
 
 def validar_multiplas_pendentes(jogos_live, api_key, token, chat_ids):
