@@ -1352,14 +1352,11 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         usou_estimativa = False
         if atq_perigo_total == 0 and chutes_totais > 0:
             atq_perigo_total = int(chutes_totais * 5)
+            # Estimativa proporcional
             atq_perigo_h = int(chutes_h * 5); atq_perigo_a = int(chutes_a * 5)
             usou_estimativa = True
 
         # --- 2. ENGENHARIA DE DADOS (KPIs) ---
-        # Precisão: O time chuta fofo ou chuta pra matar?
-        precisao_h = (gol_h / chutes_h * 100) if chutes_h > 0 else 0
-        precisao_a = (gol_a / chutes_a * 100) if chutes_a > 0 else 0
-        
         intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
         status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.0 else "❄️ BAIXA" if intensidade_jogo < 0.6 else "😐 MÉDIA"
 
@@ -1375,12 +1372,13 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         eh_strat_low = any(x in estrategia for x in strats_low_intensity)
         eh_strat_card = "Cartão" in estrategia
 
+        # Se for estratégia de GOL e a intensidade for muito baixa, a gente avisa a IA, mas deixa ela decidir pelo contexto
+        aviso_dados = ""
         if not usou_estimativa and not eh_strat_low and not eh_strat_card:
             if intensidade_jogo < 0.5 and tempo > 15: 
-                 return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> (Dados Reais) - Jogo muito lento.", "15%"
+                 aviso_dados = "(ALERTA: Intensidade MUITO BAIXA. Só aprove se houver chance clara de contra-ataque ou erro defensivo)."
 
-        aviso_dados = ""
-        if usou_estimativa: aviso_dados = "(NOTA: Intensidade projetada via Chutes)."
+        if usou_estimativa: aviso_dados += " (NOTA: Intensidade projetada via Chutes)."
 
         # --- 4. O PROMPT (A NOVA INTELIGÊNCIA) ---
         prompt = f"""
@@ -1405,97 +1403,6 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         -----------------------------------------------------------
         ⚠️ REGRAS DE OURO (LEIA COM ATENÇÃO):
         
-        1. O OBJETIVO É LUCRO, NÃO IMPORTA QUEM MARCA.
-           - Se a estratégia for "GOLS" (Over/Golden/Limit), avalie o jogo como um todo.
-        
-        2. O CENÁRIO DE "ARAME LISO" (PRESSÃO INEFICIENTE):
-           - Se o Time A chuta muito (15+) mas não marca, NÃO VETE IMEDIATAMENTE.
-           - OLHE PARA O TIME B (O OPRIMIDO): Eles têm histórico de marcar gols? Eles têm chutes no gol hoje?
-           - SE SIM: Isso é cenário de "Gol de Contra-Ataque". APROVE (DIAMANTE). O Time A está exposto.
-           
-        3. O CENÁRIO DE DEFESA PENEIRA:
-           - Se o time que está sofrendo a pressão tem histórico de sofrer muitos gols no final (veja no Contexto Histórico), a pressão vai furar. APROVE.
-           
-        4. QUANDO VETAR (ARRISCADO/VETADO):
-           - Só vete GOLS se a intensidade for BAIXA ou se AMBOS os times estiverem errando tudo e satisfeitos com o empate (Jogo morto).
-        -----------------------------------------------------------
-
-        CLASSIFIQUE:
-        💎 DIAMANTE: Jogo aberto, pressão insustentável (de um lado ou dos dois) ou defesa prestes a falhar.
-        ✅ PADRÃO: Dados favoráveis.
-        ⛔ VETADO: Jogo travado, lento ou times retranqueiros.
-
-        JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
-        """
-        
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
-        st.session_state['gemini_usage']['used'] += 1
-        
-        r_json = json.loads(response.text)def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
-    if not IA_ATIVADA: return "", "N/A"
-    try:
-        # ... (Mantém a parte de extração de dados e KPIs igualzinha a anterior) ...
-        # ... (Vou abreviar aqui para focar na correção do JSON lá no final) ...
-        
-        # --- 1. Extração de Dados Brutos ---
-        s1 = stats_raw[0]['statistics']; s2 = stats_raw[1]['statistics']
-        def gv(l, t): return next((x['value'] for x in l if x['type']==t), 0) or 0
-        
-        chutes_h = gv(s1, 'Total Shots'); gol_h = gv(s1, 'Shots on Goal')
-        cantos_h = gv(s1, 'Corner Kicks'); atq_perigo_h = gv(s1, 'Dangerous Attacks')
-        faltas_h = gv(s1, 'Fouls'); cards_h = gv(s1, 'Yellow Cards') + gv(s1, 'Red Cards')
-        chutes_a = gv(s2, 'Total Shots'); gol_a = gv(s2, 'Shots on Goal')
-        cantos_a = gv(s2, 'Corner Kicks'); atq_perigo_a = gv(s2, 'Dangerous Attacks')
-        faltas_a = gv(s2, 'Fouls'); cards_a = gv(s2, 'Yellow Cards') + gv(s2, 'Red Cards')
-        chutes_totais = chutes_h + chutes_a; atq_perigo_total = atq_perigo_h + atq_perigo_a; total_faltas = faltas_h + faltas_a
-        tempo_str = str(dados_jogo.get('tempo', '0')).replace("'", "")
-        tempo = int(tempo_str) if tempo_str.isdigit() else 1
-
-        usou_estimativa = False
-        if atq_perigo_total == 0 and chutes_totais > 0:
-            atq_perigo_total = int(chutes_totais * 5)
-            usou_estimativa = True
-
-        intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
-        status_intensidade = "🔥 ALTA" if intensidade_jogo > 1.0 else "❄️ BAIXA" if intensidade_jogo < 0.6 else "😐 MÉDIA"
-        soma_atq = atq_perigo_h + atq_perigo_a
-        dominancia_h = (atq_perigo_h / soma_atq * 100) if soma_atq > 0 else 50
-        quem_manda = "EQUILIBRADO"
-        if dominancia_h > 60: quem_manda = f"DOMÍNIO CASA ({dominancia_h:.0f}%)"
-        elif dominancia_h < 40: quem_manda = f"DOMÍNIO VISITANTE ({100-dominancia_h:.0f}%)"
-
-        strats_low_intensity = ["Under", "Morno", "Vovô", "Back", "Segurar"]
-        eh_strat_low = any(x in estrategia for x in strats_low_intensity)
-        eh_strat_card = "Cartão" in estrategia
-
-        if not usou_estimativa and not eh_strat_low and not eh_strat_card:
-            if intensidade_jogo < 0.5 and tempo > 15: 
-                 return "\n🤖 <b>IA:</b> 💤 <b>Baixa Intensidade</b> (Dados Reais) - Jogo muito lento.", "15%"
-
-        aviso_dados = ""
-        if usou_estimativa: aviso_dados = "(NOTA: Intensidade projetada via Chutes)."
-
-        prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL E TRADER ESPORTIVO.
-        Analise os KPIs abaixo para validar a entrada '{estrategia}'.
-        {aviso_dados}
-
-        DADOS DO JOGO:
-        - Placar/Tempo: {dados_jogo['placar']} aos {tempo} min.
-        
-        KPIs:
-        1. Intensidade (Ataque): {intensidade_jogo:.2f}/min ({status_intensidade}).
-        2. Tática: {quem_manda}.
-        3. Faltas: {total_faltas} | Cartões: {cards_h}x{cards_a}.
-        
-        STATS DETALHADAS:
-        - Casa: {chutes_h} Chutes ({gol_h} no gol) | {cantos_h} Cantos | {atq_perigo_h} Atq Perigosos.
-        - Fora: {chutes_a} Chutes ({gol_a} no gol) | {cantos_a} Cantos | {atq_perigo_a} Atq Perigosos.
-        
-        CONTEXTO HISTÓRICO: {extra_context}
-        
-        -----------------------------------------------------------
-        ⚠️ REGRAS DE OURO:
         1. O OBJETIVO É LUCRO. Se a estratégia for "GOLS", avalie o jogo como um todo (não importa quem marca).
         2. CENÁRIO "ARAME LISO": Se o Time A chuta muito mas não marca, OLHE PARA O TIME B. Se o B tiver chutes no gol, APROVE (Gol de contra-ataque).
         3. DEFESA PENEIRA: Se quem sofre pressão toma muitos gols no histórico, APROVE.
@@ -1513,6 +1420,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         st.session_state['gemini_usage']['used'] += 1
         
         # --- CORREÇÃO DO JSON (AQUI ESTAVA O ERRO DO N/A) ---
+        # Limpa qualquer aspa ou formatação Markdown que a IA mande
         txt_limpo = response.text.replace("```json", "").replace("```", "").strip()
         r_json = json.loads(txt_limpo)
         
