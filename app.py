@@ -329,7 +329,6 @@ def scanner_drop_odds_pre_live(api_key):
                 })
         return oportunidades
     except Exception as e: return []
-
 # --- GERENCIAMENTO DE PLANILHAS E DADOS ---
 
 def carregar_aba(nome_aba, colunas_esperadas):
@@ -775,7 +774,6 @@ def buscar_agenda_cached(api_key, date_str):
         url = "https://v3.football.api-sports.io/fixtures"
         return requests.get(url, headers={"x-apisports-key": api_key}, params={"date": date_str, "timezone": "America/Sao_Paulo"}).json().get('response', [])
     except: return []
-
 # ==============================================================================
 # [NOVO] FUNÇÕES DE INTELIGÊNCIA HÍBRIDA (MÚLTIPLAS + NOVOS MERCADOS)
 # ==============================================================================
@@ -835,29 +833,26 @@ def gerar_multipla_matinal_ia(api_key):
             # 2. Usa a NOVA função de Tendência (Macro/Micro)
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
-            if stats and stats['home']['qtd'] > 0:
+            if stats and stats['home']['micro'] > 0: # Garante que tem dados
                 # Regra para Múltipla: Queremos segurança. 
                 # Evita times com média recente muito baixa (<40% de over)
                 if stats['home']['micro'] < 40 and stats['away']['micro'] < 40: continue
                 
                 # Formata os dados para a IA
-                h_mac = stats['home']['macro']; h_mic = stats['home']['micro']
-                a_mac = stats['away']['macro']; a_mic = stats['away']['micro']
+                h_mic = stats['home']['micro']
+                a_mic = stats['away']['micro']
                 
                 mapa_jogos[fid] = f"{home} x {away}"
                 lista_jogos_txt += f"""
                 - ID {fid}: {home} x {away} ({j['league']['name']})
                   Odd: {odd_val} ({odd_nome})
-                  Casa: Histórico {h_mac}% / Recente {h_mic}%
-                  Fora: Histórico {a_mac}% / Recente {a_mic}%
+                  Casa: Recente {h_mic}% Over
+                  Fora: Recente {a_mic}% Over
                 """
                 count_validos += 1
 
         if not lista_jogos_txt: return None, []
         
-        # Contexto extra
-        contexto_firebase = carregar_contexto_global_firebase()
-
         prompt = f"""
         ATUE COMO UM GESTOR DE RISCO (MONTAGEM DE BILHETE PRONTO).
         OBJETIVO: Criar uma DUPLA (2 jogos) ou TRIPLA (3 jogos) de Alta Segurança (Odds @1.80 a @2.50 combinadas).
@@ -1459,6 +1454,11 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
         blk_h = get_v(stats_h, 'Blocked Shots'); blk_a = get_v(stats_a, 'Blocked Shots')
         post_h = get_v(stats_h, 'Shots against goalbar') 
+        
+        # DADOS PARA CARTÕES (AÇOUGUEIRO LIVE)
+        faltas_h = get_v(stats_h, 'Fouls'); faltas_a = get_v(stats_a, 'Fouls')
+        cards_h = get_v(stats_h, 'Yellow Cards') + get_v(stats_h, 'Red Cards')
+        cards_a = get_v(stats_a, 'Yellow Cards') + get_v(stats_a, 'Red Cards')
 
         total_chutes = sh_h + sh_a; total_chutes_gol = sog_h + sog_a; total_bloqueados = blk_h + blk_a
         chutes_fora_h = max(0, sh_h - sog_h - blk_h); chutes_fora_a = max(0, sh_a - sog_a - blk_a)
@@ -1528,12 +1528,9 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
             if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-        return SINAIS  # <--- (IMPORTANTE) Dê 8 espaços (ou 2 Tabs) antes dessa linha
+        return SINAIS 
         
-    except: return []  # <--- (IMPORTANTE) Dê 4 espaços (ou 1 Tab) antes dessa linha
-
-
-
+    except: return []
 # ==============================================================================
 # 5. FUNÇÕES DE SUPORTE, AUTOMAÇÃO E INTERFACE (O CORPO)
 # ==============================================================================
@@ -1562,310 +1559,6 @@ def atualizar_stats_em_paralelo(jogos_alvo, api_key):
                 update_api_usage(headers)
     return resultados
 
-# ==============================================================================
-# FUNÇÕES DE IA AUXILIARES (BI, FINANCEIRO E ESTRATÉGIA)
-# ==============================================================================
-
-def analisar_bi_com_ia():
-    if not IA_ATIVADA: return "IA Offline."
-    
-    # 1. Carrega TUDO (Sem limites)
-    df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Sem dados suficientes para análise de BI."
-    
-    try:
-        df = df.copy()
-        
-        # 2. Limpeza de Dados (Pra IA não ler lixo)
-        cols_uteis = ['Data', 'Hora', 'Liga', 'Jogo', 'Estrategia', 'Resultado', 'Odd']
-        cols_existentes = [c for c in cols_uteis if c in df.columns]
-        
-        # Filtra apenas jogos finalizados (Green/Red)
-        df_final = df[df['Resultado'].isin(['✅ GREEN', '❌ RED', 'GREEN', 'RED'])][cols_existentes]
-        
-        if df_final.empty: return "Sem operações finalizadas para analisar."
-
-        # 3. Transforma em CSV Texto (A IA ama ler CSV bruto)
-        csv_completo = df_final.to_csv(index=False, sep=';')
-        
-        # 4. Prompt "BIG DATA"
-        prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS SÊNIOR.
-        
-        Analise o histórico COMPLETO de operações deste Robô de Trading Esportivo:
-        
-        DADOS (CSV):
-        {csv_completo}
-        
-        SUA MISSÃO (INSIGHTS PROFUNDOS):
-        Não resuma o óbvio. Encontre correlações ocultas.
-        
-        Responda em 3 pontos curtos e diretos:
-        1. 🏆 **A Melhor Configuração:** (Qual estratégia + Liga tem a maior consistência?).
-        2. ☠️ **O Padrão do Prejuízo:** (Existe um horário, dia da semana ou liga específica que só dá RED?).
-        3. 💡 **Sugestão de Ajuste:** (Ex: "Pare de operar a estratégia X na liga Y").
-        
-        Seja numérico e direto.
-        """
-        
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
-        st.session_state['gemini_usage']['used'] += 1
-        return response.text.strip()
-        
-    except Exception as e:
-        return "Não foi possível processar o Big Data no momento."
-
-def analisar_financeiro_com_ia(stake_padrao, banca_inicial):
-    try:
-        df = st.session_state.get('historico_full', pd.DataFrame())
-        hoje = get_time_br().strftime('%Y-%m-%d')
-        df_hoje = df[df['Data'] == hoje].copy()
-        if df_hoje.empty: return "Sem operações hoje para simular."
-        df_hoje = df_hoje.drop_duplicates(subset=['FID'])
-        
-        STAKE_FIXA = 10.00
-        ODD_MEDIA = 1.40
-        LUCRO_POR_GREEN = STAKE_FIXA * (ODD_MEDIA - 1) 
-        greens = len(df_hoje[df_hoje['Resultado'].str.contains('GREEN', na=False)])
-        reds = len(df_hoje[df_hoje['Resultado'].str.contains('RED', na=False)])
-        lucro_total = (greens * LUCRO_POR_GREEN) - (reds * STAKE_FIXA)
-        emoji_res = "🤑" if lucro_total > 0 else "🔻"
-        
-        texto = f"""
-📊 <b>SIMULAÇÃO REALISTA (HOJE):</b>
-
-Se você tivesse apostado <b>R$ {STAKE_FIXA:.2f}</b> fixos em cada jogo hoje,
-buscando uma Odd média de <b>@{ODD_MEDIA:.2f}</b> (segurança):
-
-✅ <b>{greens} Greens</b> (R$ +{greens * LUCRO_POR_GREEN:.2f})
-❌ <b>{reds} Reds</b> (R$ -{reds * STAKE_FIXA:.2f})
-
-▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
-💰 <b>RESULTADO FINAL: R$ {lucro_total:.2f}</b> {emoji_res}
-▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
-<i>*Cenário conservador (1 entrada única por partida).</i>
-"""
-        return texto
-    except Exception as e: return f"Erro no cálculo: {e}"
-    
-def criar_estrategia_nova_ia():
-    if not IA_ATIVADA: return "IA Offline."
-    
-    # 1. Roleta de Temas (Garante variedade a cada clique)
-    temas = [
-        "Caça-Zebras (Times perdendo em casa)",
-        "Over Cantos no Final (Pressão absurda)",
-        "Under Gols (Jogos travados)",
-        "Lei do Ex (Estatística de confronto direto)",
-        "Recuperação no 2º Tempo (Times favoritos perdendo)",
-        "Mercado de Cartões (Jogos violentos)",
-        "Empate Anula (Proteção)",
-        "Over 1.5 Gols HT (Jogos frenéticos)"
-    ]
-    tema_sorteado = random.choice(temas)
-    
-    # 2. Injeção de Dados (Grounding)
-    txt_dados = "Dados insuficientes no momento."
-    try:
-        dados_bd = st.session_state.get('cache_firebase_view', [])
-        if dados_bd:
-            df = pd.DataFrame(dados_bd)
-            media_gols = 2.5 # Valor padrão caso falhe o cálculo
-            
-            # Tenta extrair média real se possível
-            try:
-                soma_gols = 0
-                for d in dados_bd:
-                    p = d.get('placar_final', '0x0').split('x')
-                    soma_gols += int(p[0]) + int(p[1])
-                media_gols = soma_gols / len(dados_bd)
-            except: pass
-            
-            txt_dados = f"Base de {len(dados_bd)} jogos. Média de Gols atual: {media_gols:.2f}."
-    except: pass
-
-    # 3. O Prompt "Engenheiro"
-    prompt = f"""
-    ATUE COMO: Arquiteto de Software e Estrategista de Apostas (Quant).
-    
-    OBJETIVO: Criar uma nova lógica algorítmica para o robô "Neves Analytics".
-    
-    FOCO DA VEZ: {tema_sorteado}
-    CONTEXTO DE DADOS: {txt_dados}
-    
-    REGRAS OBRIGATÓRIAS (ANTI-ALUCINAÇÃO):
-    1. NÃO sugira "análise de sentimento", "twitter", "notícias" ou "VAR". O robô só vê NÚMEROS (Chutes, Cantos, Placar, Tempo).
-    2. A estratégia deve ser baseada em "Gatilhos Logicos" (Ex: Se chutes > 10 e placar = 0x0, então...).
-    3. Seja curto e direto.
-    
-    SAÍDA ESPERADA:
-    
-    Nome: [Nome Criativo da Estratégia]
-    Lógica: [Explique a lógica: "Buscar jogos onde o time da casa tem X chutes..."]
-    Gatilhos (IF):
-      - Tempo: [Ex: 70-80 min]
-      - Placar: [Ex: Empate ou Perdendo por 1]
-      - Stats: [Ex: Mais de 15 chutes totais]
-    Ação: [Ex: Apostar em Over 0.5 Gols]
-    """
-    
-    try:
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.7)) # Temp alta para criatividade
-        st.session_state['gemini_usage']['used'] += 1
-        return response.text.strip()
-    except Exception as e: return f"Erro na criação: {str(e)}"
-
-
-def otimizar_estrategias_existentes_ia():
-    if not IA_ATIVADA: return "IA Offline."
-    
-    # 1. Carrega o histórico COMPLETO
-    df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Você precisa de histórico (Greens/Reds) para eu poder otimizar algo."
-    
-    try:
-        # 2. Prepara os dados: Separa TUDO o que já foi finalizado
-        # Filtrar apenas colunas relevantes para a IA não se perder com lixo
-        cols_uteis = ['Data', 'Hora', 'Liga', 'Jogo', 'Estrategia', 'Placar_Sinal', 'Resultado', 'Odd']
-        
-        # Garante que as colunas existam antes de filtrar
-        cols_existentes = [c for c in cols_uteis if c in df.columns]
-        resumo = df[df['Resultado'].isin(['✅ GREEN', '❌ RED', 'GREEN', 'RED'])][cols_existentes].copy()
-        
-        if resumo.empty: return "Sem operações finalizadas para analisar."
-        
-        # Estatísticas Gerais (O "Placar" do Robô)
-        stats_str = ""
-        grupos = resumo.groupby('Estrategia')
-        lista_reds_csv = ""
-        
-        for nome, grupo in grupos:
-            greens = len(grupo[grupo['Resultado'].str.contains('GREEN', na=False)])
-            reds = len(grupo[grupo['Resultado'].str.contains('RED', na=False)])
-            total = greens + reds
-            winrate = (greens / total * 100) if total > 0 else 0
-            
-            stats_str += f"- {nome}: {greens}G / {reds}R ({winrate:.1f}% Winrate)\n"
-            
-            # SE O WINRATE FOR RUIM (<60%) ou se tiver MUITOS Reds, mandamos TODOS os dados para a IA
-            if winrate < 65 and reds > 0:
-                # Pegamos TODOS os jogos que deram RED dessa estratégia
-                df_reds = grupo[grupo['Resultado'].str.contains('RED', na=False)]
-                
-                # Convertemos para CSV Texto para a IA ler linha a linha
-                csv_reds = df_reds.to_csv(index=False, sep=';')
-                lista_reds_csv += f"\n--- 🚨 DADOS BRUTOS DOS ERROS: {nome} ---\n{csv_reds}\n"
-
-        if not lista_reds_csv:
-            return "Suas estratégias estão todas acima de 65% de Winrate! Mantenha o que está fazendo."
-
-        # 3. O Prompt "DATA SCIENTIST" (Agora com FULL DATASET)
-        prompt = f"""
-        ATUE COMO UM CIENTISTA DE DADOS SÊNIOR (Especialista em Padrões e Algoritmos).
-        
-        Eu vou te fornecer o HISTÓRICO COMPLETO de falhas (REDs) do meu robô de apostas.
-        Sua capacidade de leitura é alta, então analise TUDO.
-        
-        RESUMO GERAL:
-        {stats_str}
-        
-        📂 BASE DE DADOS DOS ERROS (CSV COMPLETO):
-        {lista_reds_csv}
-        
-        SUA MISSÃO (DEEP LEARNING):
-        Cruze os dados. Não olhe apenas o jogo, olhe o CONTEXTO.
-        
-        1. 🕵️‍♂️ **Investigação de Padrão:**
-           - Existe alguma **LIGA** específica que está drenando o lucro? (Ex: Ligas Sub-20, Ligas Árabes, etc)
-           - Existe algum **HORÁRIO** maldito?
-           - Existe algum padrão de **PLACAR** na hora da entrada? (Ex: Entrar em 1x1 sempre dá errado?)
-           
-        2. 🛠️ **Correção de Código (AÇÃO):**
-           - Para cada estratégia com desempenho ruim, me dê uma REGRA DE FILTRO (IF) para adicionar no código.
-           - Exemplo: "Parece que a 'Golden Bet' falha 90% das vezes na Liga do Egito. Adicione: `if 'Egypt' not in liga`."
-           
-        Seja técnico, direto e baseado nos dados fornecidos.
-        """
-        
-        # 4. Chama a IA (Gemini 2.0 aguenta o tranco)
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
-        st.session_state['gemini_usage']['used'] += 1
-        return response.text.strip()
-        
-    except Exception as e: return f"Erro na análise massiva: {str(e)}"
-# ==============================================================================
-
-def enviar_analise_estrategia(token, chat_ids):
-    sugestao = criar_estrategia_nova_ia()
-    ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
-    msg = f"🧪 <b>LABORATÓRIO DE ESTRATÉGIAS (IA)</b>\n\n{sugestao}"
-    for cid in ids: enviar_telegram(token, cid, msg)
-
-def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
-    msg = f"💰 <b>RELATÓRIO FINANCEIRO</b>\n\n📊 <b>Cenário:</b> {cenario}\n💵 <b>Lucro Líquido:</b> R$ {lucro:.2f}\n📈 <b>ROI:</b> {roi:.1f}%\n🎟️ <b>Entradas:</b> {entradas}\n\n<i>Cálculo baseado na gestão configurada.</i>"
-    enviar_telegram(token, chat_ids, msg)
-
-def enviar_relatorio_bi(token, chat_ids):
-    df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return
-    try:
-        df = df.copy()
-        df['Data_Str'] = df['Data'].astype(str).str.replace(' 00:00:00', '', regex=False).str.strip()
-        df['Data_DT'] = pd.to_datetime(df['Data_Str'], errors='coerce')
-        df = df.drop_duplicates(subset=['FID', 'Estrategia'], keep='last')
-        agora = get_time_br().date()
-        hoje = pd.to_datetime(agora)
-        d_hoje = df[df['Data_DT'] == hoje]
-        d_semana = df[df['Data_DT'] >= (hoje - timedelta(days=7))]
-        d_mes = df[df['Data_DT'] >= (hoje - timedelta(days=30))]
-        
-        def get_placar_str(d_slice):
-            if d_slice.empty: return "Sem dados"
-            finalizados = d_slice[d_slice['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-            g = finalizados['Resultado'].str.contains('GREEN').sum()
-            r = finalizados['Resultado'].str.contains('RED').sum()
-            t = g + r
-            wr = (g/t*100) if t > 0 else 0
-            return f"<b>{g}G - {r}R</b> ({wr:.1f}%)"
-
-        def get_ia_stats(d_slice):
-            if 'Opiniao_IA' not in d_slice.columns: return "N/A"
-            aprovadas = d_slice[d_slice['Opiniao_IA'] == 'Aprovado']
-            return get_placar_str(aprovadas)
-
-        top_strats_txt = ""
-        try:
-            df_closed = df[df['Resultado'].isin(['✅ GREEN', '❌ RED'])]
-            if not df_closed.empty:
-                ranking = df_closed.groupby('Estrategia')['Resultado'].apply(lambda x: (x.str.contains('GREEN').sum() / len(x) * 100)).sort_values(ascending=False).head(5)
-                lista_top = []
-                for strat, wr in ranking.items():
-                    qtd = len(df_closed[df_closed['Estrategia'] == strat])
-                    lista_top.append(f"▪️ {strat}: {wr:.0f}% ({qtd}j)")
-                top_strats_txt = "\n".join(lista_top)
-        except: top_strats_txt = "Dados insuficientes"
-
-        insight_text = analisar_bi_com_ia()
-
-        msg = f"""📈 <b>RELATÓRIO BI AVANÇADO</b>
-
-📆 <b>DIÁRIO (HOJE):</b>
-• Geral: {get_placar_str(d_hoje)}
-• 🤖 IA Aprovados: {get_ia_stats(d_hoje)}
-
-🗓 <b>SEMANAL (7 Dias):</b>
-• Geral: {get_placar_str(d_semana)}
-• 🤖 IA Aprovados: {get_ia_stats(d_semana)}
-
-🏆 <b>TOP 5 ESTRATÉGIAS:</b>
-{top_strats_txt}
-
-🧠 <b>INSIGHT IA:</b>
-{insight_text}
-"""
-        enviar_telegram(token, chat_ids, msg)
-    except Exception as e: enviar_telegram(token, chat_ids, f"📈 RELATÓRIO BI (Simplificado)\n\n{analisar_bi_com_ia()}")
-
 def _worker_telegram(token, chat_id, msg):
     try: requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"}, timeout=10)
     except: pass
@@ -1879,7 +1572,6 @@ def enviar_telegram(token, chat_ids, msg):
     if len(msg) <= 4090:
         msgs_para_enviar.append(msg)
     else:
-        # Se for muito grande, quebra linha a linha para não cortar HTML no meio
         buffer = ""
         linhas = msg.split('\n')
         for linha in linhas:
@@ -1894,7 +1586,7 @@ def enviar_telegram(token, chat_ids, msg):
         for m in msgs_para_enviar:
             t = threading.Thread(target=_worker_telegram, args=(token, cid, m))
             t.daemon = True; t.start()
-            time.sleep(0.3) # Delay anti-spam do Telegram
+            time.sleep(0.3) 
 
 def salvar_snipers_do_texto(texto_ia):
     if not texto_ia or "Sem jogos" in texto_ia: return
@@ -2004,20 +1696,13 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
-    # 1. Sniper Matinal (07h as 11h)
     if 7 <= agora.hour < 11:
         if not st.session_state['matinal_enviado']:
-            # --- CORREÇÃO AQUI: Recebe Texto E Mapa ---
             conteudo_ia, mapa_ids = gerar_insights_matinais_ia(api_key)
-            
-            # Verifica se o TEXTO é válido
             if conteudo_ia and "Sem jogos" not in str(conteudo_ia) and "Erro" not in str(conteudo_ia):
                 ids = [x.strip() for x in str(chat_ids).replace(';', ',').split(',') if x.strip()]
                 msg_final = f"🌅 <b>SNIPER MATINAL (IA + DADOS)</b>\n\n{conteudo_ia}"
-                
                 for cid in ids: enviar_telegram(token, cid, msg_final)
-                
-                # Salva no histórico usando o texto limpo
                 salvar_snipers_do_texto(conteudo_ia)
                 st.session_state['matinal_enviado'] = True
             else:
@@ -2030,11 +1715,6 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
         if agora.hour >= 10 and not st.session_state.get('alavancagem_enviada', False):
             time.sleep(5); enviar_alavancagem(token, chat_ids, api_key)
     
-    # ... (Resto da função segue igual para Drop Odds) ...
-    # Mantenha o código do Drop Odds que já estava lá embaixo
-    # (Se precisar, eu mando a função completa, mas o erro estava só no bloco acima)
-    
-    # 5. [NOVO] TRADING PRÉ-LIVE (DROP ODDS) - COM JANELA ESTENDIDA ATÉ 13:30
     faixa_12h = (agora.hour == 12 or (agora.hour == 13 and agora.minute <= 30))
     faixa_16h = (agora.hour == 16 and agora.minute <= 30)
 
@@ -2117,21 +1797,15 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
 
 def conferir_resultados_sniper(jogos_live, api_key):
     hist = st.session_state.get('historico_sinais', [])
-    # Filtra tudo que é Sniper (Matinal ou Jogador) e está Pendente
     snipers = [s for s in hist if ("Sniper" in s['Estrategia'] or "JOGADOR" in s['Estrategia'] or "Mercado" in s['Liga']) and s['Resultado'] == "Pendente"]
-    
     if not snipers: return
-    
     updates = []
     ids_live = {str(j['fixture']['id']): j for j in jogos_live} 
     
     for s in snipers:
-        if "SNIPER_" in str(s['FID']): continue # Ignora IDs falsos de teste
-        
-        fid = str(s['FID']).replace("ALT_", "") # Limpa prefixos se houver
+        if "SNIPER_" in str(s['FID']): continue 
+        fid = str(s['FID']).replace("ALT_", "")
         jogo = ids_live.get(fid)
-        
-        # Se não tá no Live, busca na API (Pode ter acabado)
         if not jogo:
             try:
                 res = requests.get("https://v3.football.api-sports.io/fixtures", headers={"x-apisports-key": api_key}, params={"id": fid}).json()
@@ -2140,28 +1814,16 @@ def conferir_resultados_sniper(jogos_live, api_key):
             
         if jogo:
             status = jogo['fixture']['status']['short']
-            
-            # Só processa se acabou (FT) ou foi cancelado/adiado
             if status in ['FT', 'AET', 'PEN', 'INT', 'ABD', 'PST']:
                 gh = jogo['goals']['home'] or 0
                 ga = jogo['goals']['away'] or 0
                 placar_final = f"{gh}x{ga}"
+                res_final = "❌ RED" 
                 
-                res_final = "❌ RED" # Padrão
-                
-                # Regra 1: Sniper Matinal (Over Gols Geral)
                 if "Sniper Matinal" in s['Estrategia']:
-                     # Se saiu pelo menos 1 gol, geralmente é Green em Over ou deu chance de Cashout
-                     # Mas se a aposta for Over 2.5, precisamos ser específicos. 
-                     # Como o Sniper Matinal da IA geralmente indica valor, vamos considerar:
-                     if (gh + ga) >= 1: res_final = "✅ GREEN" # Simplificação para Over 0.5/1.5
+                      if (gh + ga) >= 1: res_final = "✅ GREEN" 
                 
-                # Regra 2: Player Props (Chutes) - Requer leitura manual ou API avançada de jogadores
-                # Como a API padrão free/basic as vezes não dá dados de jogadores no endpoint de fixture simples,
-                # vamos focar no Resultado do Jogo/Gols para fechar o status ou manter Pendente para auditoria manual
                 elif "JOGADOR" in s['Estrategia'] or "Mercado Alternativo" in s['Liga']:
-                    # Aqui é complexo validar automaticamente sem endpoint de players.
-                    # Vamos marcar como "Finalizado (Auditar)" para você saber que o jogo acabou
                     res_final = f"🏁 FIM ({placar_final})"
 
                 s['Resultado'] = res_final
@@ -2210,7 +1872,7 @@ def verificar_automacao_bi(token, chat_ids, stake_padrao):
         enviar_telegram(token, chat_ids, msg_fin); st.session_state['financeiro_enviado'] = True
     if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
         enviar_analise_estrategia(token, chat_ids); st.session_state['bigdata_enviado'] = True
-# --- FUNÇÃO DE AUDITORIA DE MERCADOS ALTERNATIVOS (Recuperada) ---
+
 def verificar_mercados_alternativos(api_key):
     hist = st.session_state.get('historico_sinais', [])
     pendentes = [s for s in hist if s['Liga'] == 'Mercado Alternativo' and s['Resultado'] == 'Pendente']
@@ -2593,7 +2255,6 @@ if st.session_state.ROBO_LIGADO:
                     {nota_home} (Casa) x {nota_away} (Fora)
                     """
                     
-
                     for s in lista_sinais:
                         prob = "..." 
                         liga_safe = j['league']['name'].replace("<", "").replace(">", "").replace("&", "e")
@@ -2741,7 +2402,7 @@ if st.session_state.ROBO_LIGADO:
                                     
                                     # Contexto Inteligente (Formatado para Leitura Humana)
                                     if 'dados_contextuais' in locals() and dados_contextuais:
-                                        # Pega as porcentagens que já calculamos (Mais limpo que a lista de jogos)
+                                        # Pega as porcentagens que já calculamos
                                         micro_h = dados_contextuais['home']['micro']
                                         micro_a = dados_contextuais['away']['micro']
                                         
@@ -2791,171 +2452,6 @@ if st.session_state.ROBO_LIGADO:
                                     st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
 
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
-                                # --- FIM DO BLOCO NOVO ---
-
-                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
-                                msg += f"🏆 {liga_safe}\n"
-                                msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
-                                msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
-                                msg += f"{bloco_aviso_odd}"
-                                msg += f"{texto_acao_original}\n"
-                                if destaque_odd: msg += f"{destaque_odd}\n"
-                                msg += f"{txt_stats_extras}\n"
-                                msg += "──────────────\n"
-                                msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
-                                msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
-                                msg += linha_bd
-                                msg += "\n"
-                                msg += f"{opiniao_txt}"
-                                
-                                # --- DECISÃO FINAL DE ENVIO ---
-                                if opiniao_db == "Aprovado":
-                                    enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"✅ Sinal Enviado: {s['tag']}")
-                                
-                                elif opiniao_db == "Arriscado":
-                                    msg += "\n👀 <i>Obs: Risco moderado.</i>"
-                                    enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
-                                
-                                else:
-                                    # Se for VETADO ou NEUTRO, NÃO ENVIA NADA!
-                                    # Mas já salvou na planilha como "⛔ VETADO" lá em cima.
-                                    st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
-
-                            except Exception as e: print(f"Erro ao enviar sinal: {e}")
-        # --- FIM DO BLOCO NOVO ---
-
-        # ESTA LINHA ABAIXO É ONDE ESTAVA O ERRO. AGORA ESTÁ ALINHADA.
-        msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
-        msg += f"🏆 {liga_safe}\n"
-        msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
-        msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
-        msg += f"{bloco_aviso_odd}"
-        msg += f"{texto_acao_original}\n"
-        if destaque_odd: msg += f"{destaque_odd}\n"
-        msg += f"{txt_stats_extras}\n"
-        msg += "──────────────\n"
-        msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
-        msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
-        msg += linha_bd
-        msg += "\n"
-        msg += f"{opiniao_txt}"
-        
-        # --- DECISÃO FINAL DE ENVIO ---
-        if opiniao_db == "Aprovado":
-            enviar_telegram(safe_token, safe_chat, msg)
-            st.toast(f"✅ Sinal Enviado: {s['tag']}")
-        
-        elif opiniao_db == "Arriscado":
-            msg += "\n👀 <i>Obs: Risco moderado.</i>"
-            enviar_telegram(safe_token, safe_chat, msg)
-            st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
-        
-        else:
-            st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
-
-    except Exception as e: print(f"Erro ao enviar sinal: {e}")
-
-                                # --- FIM DO BLOCO NOVO ---
-
-                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
-                                msg += f"🏆 {liga_safe}\n"
-                                msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
-                                msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
-                                msg += f"{bloco_aviso_odd}"
-                                msg += f"{texto_acao_original}\n"
-                                if destaque_odd: msg += f"{destaque_odd}\n"
-                                msg += f"{txt_stats_extras}\n"
-                                msg += "──────────────\n"
-                                msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
-                                msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
-                                msg += linha_bd
-                                msg += "\n"
-                                msg += f"{opiniao_txt}"
-                                
-                                # --- DECISÃO FINAL DE ENVIO ---
-                                if opiniao_db == "Aprovado":
-                                    enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"✅ Sinal Enviado: {s['tag']}")
-                                
-                                elif opiniao_db == "Arriscado":
-                                    msg += "\n👀 <i>Obs: Risco moderado.</i>"
-                                    enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
-                                
-                                else:
-                                    # Se for VETADO ou NEUTRO, NÃO ENVIA NADA!
-                                    st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
-
-                            except Exception as e: print(f"Erro ao enviar sinal: {e}")
-                                # --- FIM DO BLOCO NOVO ---
-
-                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
-                                msg += f"🏆 {liga_safe}\n"
-                                msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
-                                msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
-                                msg += f"{bloco_aviso_odd}"
-                                msg += f"{texto_acao_original}\n"
-                                if destaque_odd: msg += f"{destaque_odd}\n"
-                                msg += f"{txt_stats_extras}\n"
-                                msg += "──────────────\n"
-                                msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
-                                msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
-                                msg += linha_bd
-                                msg += "\n"
-                                msg += f"{opiniao_txt}"
-                                
-                                # --- DECISÃO FINAL DE ENVIO ---
-                                if opiniao_db == "Aprovado":
-                                    enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"✅ Sinal Enviado: {s['tag']}")
-                                
-                                elif opiniao_db == "Arriscado":
-                                    msg += "\n👀 <i>Obs: Risco moderado.</i>"
-                                    enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
-                                
-                                else:
-                                    # Se for VETADO ou NEUTRO, NÃO ENVIA NADA!
-                                    # Mas já salvou na planilha como "⛔ VETADO" lá em cima.
-                                    st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
-
-                            except Exception as e: print(f"Erro ao enviar sinal: {e}")
-                        # --- FIM DO BLOCO NOVO ---
-
-                                msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
-                                msg += f"🏆 {liga_safe}\n"
-                                msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
-                                msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
-                                msg += f"{bloco_aviso_odd}"
-                                msg += f"{texto_acao_original}\n"
-                                if destaque_odd: msg += f"{destaque_odd}\n"
-                                msg += f"{txt_stats_extras}\n"
-                                msg += "──────────────\n"
-                                msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
-                                msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
-                                msg += linha_bd
-                                msg += "\n"
-                                msg += f"{opiniao_txt}"
-                                
-                                # --- DECISÃO FINAL DE ENVIO ---
-                                if opiniao_db == "Aprovado":
-                                    enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"✅ Sinal Enviado: {s['tag']}")
-                                
-                                elif opiniao_db == "Arriscado":
-                                    msg += "\n👀 <i>Obs: Risco moderado.</i>"
-                                    enviar_telegram(safe_token, safe_chat, msg)
-                                    st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
-                                
-                                else:
-                                    # Se for VETADO ou NEUTRO, NÃO ENVIA NADA!
-                                    # Mas já salvou na planilha como "⛔ VETADO" lá em cima.
-                                    st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
-
-                            except Exception as e: print(f"Erro ao enviar sinal: {e}")
-                        # --- FIM DO BLOCO NOVO ---
 
                         elif uid_super not in st.session_state['alertas_enviados'] and odd_val >= 1.80:
                              st.session_state['alertas_enviados'].add(uid_super)
@@ -3310,6 +2806,3 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
-
-
-
