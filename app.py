@@ -556,6 +556,7 @@ def atualizar_historico_ram(lista_atualizada_hoje):
     df_final = df_memoria.apply(atualizar_linha, axis=1)
     st.session_state['historico_full'] = df_final
 
+# --- [RECUPERADO] FUNÇÃO ESSENCIAL DO BIG DATA ---
 def consultar_bigdata_cenario_completo(home_id, away_id):
     if not db_firestore: return "Big Data Offline"
     try:
@@ -893,6 +894,7 @@ def gerar_multipla_matinal_ia(api_key):
 
     except Exception as e: return None, []
 
+# --- RECUPERADO: GERAÇÃO MATINAL DETALHADA ---
 def gerar_insights_matinais_ia(api_key):
     if not IA_ATIVADA: return "IA Offline.", {}
     hoje = get_time_br().strftime('%Y-%m-%d')
@@ -1348,6 +1350,7 @@ def obter_odd_final_para_calculo(odd_registro, estrategia):
         return valor
     except: return 1.50
 
+# --- [RECUPERADO] IA LIVE COMPLETA ---
 def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context="", time_favoravel=""):
     if not IA_ATIVADA: return "", "N/A"
     try:
@@ -1488,6 +1491,7 @@ def momentum(fid, sog_h, sog_a):
     st.session_state['memoria_pressao'][fid] = mem
     return len(mem['h_t']), len(mem['a_t'])
 
+# --- [RECUPERADO] FUNÇÃO PROCESSAR COMPLETA (COM BLITZ E LAY GOLEADA) ---
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
     if not stats: return []
     try:
@@ -1585,8 +1589,8 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
         return SINAIS 
-        
     except: return []
+
 # ==============================================================================
 # 5. FUNÇÕES DE SUPORTE, AUTOMAÇÃO E INTERFACE (O CORPO)
 # ==============================================================================
@@ -1757,6 +1761,69 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
         multipla_obj = {"id_unico": id_dupla, "tipo": "LIVE", "fids": ids_save, "nomes": nomes_save, "gols_ref": gols_ref_save, "status": "Pendente", "data": get_time_br().strftime('%Y-%m-%d')}
         if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
         st.session_state['multiplas_pendentes'].append(multipla_obj)
+
+# --- NOVAS FUNÇÕES DO LABORATÓRIO E BI (MANTIDAS DO NOVO) ---
+def analisar_bi_com_ia():
+    if not IA_ATIVADA: return "IA Offline."
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return "Sem dados."
+    resumo = df.groupby('Estrategia')['Resultado'].value_counts().unstack().fillna(0).to_string()
+    prompt = f"ATUE COMO ANALISTA DE DADOS. Analise: {resumo}. Dê 3 insights sobre o que está dando lucro e o que dar prejuízo."
+    try:
+        response = model_ia.generate_content(prompt)
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text
+    except: return "Erro IA."
+
+def criar_estrategia_nova_ia(foco_usuario):
+    if not IA_ATIVADA or not db_firestore: return "Offline."
+    try:
+        df_hist = st.session_state.get('historico_full', pd.DataFrame())
+        txt_hist = "Sem histórico."
+        if not df_hist.empty: txt_hist = df_hist.groupby('Estrategia')['Resultado'].value_counts().unstack().fillna(0).to_string()
+        docs = db_firestore.collection("BigData_Futebol").order_by("data_hora", direction=firestore.Query.DESCENDING).limit(100).stream()
+        data = [d.to_dict() for d in docs]
+        prompt = f"ATUE COMO QUANT. O usuário quer estratégia de: {foco_usuario}. HISTÓRICO DELE: {txt_hist}. DADOS GLOBAIS: {str(data[:3])}. Crie 1 estratégia PRÉ-LIVE e 1 AO VIVO."
+        response = model_ia.generate_content(prompt)
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text
+    except Exception as e: return f"Erro: {str(e)}"
+
+def otimizar_estrategias_existentes_ia():
+    if not IA_ATIVADA: return "IA Offline."
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df.empty: return "Sem dados."
+    reds = df[df['Resultado'].str.contains('RED', na=False)]['Estrategia'].value_counts().to_string()
+    prompt = f"ATUE COMO GESTOR DE RISCO. Estou tomando RED nestas estratégias: {reds}. Sugira uma trava de segurança técnica."
+    try:
+        response = model_ia.generate_content(prompt)
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text
+    except: return "Erro IA."
+
+def analisar_financeiro_com_ia(stake, banca):
+    if not IA_ATIVADA: return "IA Offline."
+    stats = st.session_state.get('last_fin_stats', {})
+    prompt = f"ATUE COMO CONSULTOR FINANCEIRO. Banca: {banca}. Stake: {stake}. Lucro: {stats.get('lucro')}. Dê um conselho curto."
+    try:
+        response = model_ia.generate_content(prompt)
+        st.session_state['gemini_usage']['used'] += 1
+        return response.text
+    except: return "Erro IA."
+
+def enviar_relatorio_bi(token, chat_ids):
+    msg = f"📊 RELATÓRIO BI\n\n{analisar_bi_com_ia()}"
+    enviar_telegram(token, chat_ids, msg)
+
+def enviar_relatorio_financeiro(token, chat_ids, cenario, lucro, roi, entradas):
+    msg = f"💰 FECHAMENTO\nCenário: {cenario}\nLucro: R$ {lucro:.2f}\nROI: {roi:.2f}%"
+    enviar_telegram(token, chat_ids, msg)
+
+def enviar_analise_estrategia(token, chat_ids):
+    msg = f"🔧 AJUSTE TÉCNICO\n\n{otimizar_estrategias_existentes_ia()}"
+    enviar_telegram(token, chat_ids, msg)
+
+# --- FIM DAS NOVAS FUNÇÕES ---
 
 def verificar_alerta_matinal(token, chat_ids, api_key):
     agora = get_time_br()
@@ -2104,6 +2171,28 @@ with st.sidebar:
                 verificar_alerta_matinal(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], st.session_state['API_KEY'])
                 st.success("Alertas Matinais Disparados (Se houver)!")
         
+        if st.button("🧠 Pedir Análise do BI"):
+            if IA_ATIVADA:
+                with st.spinner("🤖 Consultando dados..."):
+                    analise = analisar_bi_com_ia(); st.markdown("### 📝 Relatório"); st.info(analise)
+            else: st.error("IA Desconectada.")
+
+        st.markdown("---")
+        st.caption("🧪 Laboratório de Estratégias")
+        foco_strat = st.selectbox("Qual o foco?", ["Escanteios", "Gols (Over)", "Gols (Under)", "Cartões", "Zebra/Momento"], key="foco_lab")
+        if st.button(f"✨ Criar Estratégia de {foco_strat}"):
+            if IA_ATIVADA:
+                with st.spinner(f"🤖 A IA está varrendo o Big Data..."):
+                    sugestao = criar_estrategia_nova_ia(foco_strat)
+                    st.markdown(f"### 💡 Nova Estratégia"); st.info(sugestao)
+            else: st.error("IA Desconectada.")
+
+        if st.button("🔧 Otimizar Estratégias"):
+            if IA_ATIVADA:
+                with st.spinner("🤖 Cruzando performance..."):
+                    sugestao = otimizar_estrategias_existentes_ia(); st.markdown("### 🛠️ Plano"); st.info(sugestao)
+            else: st.error("IA Desconectada.")
+        
         if st.button("🚀 Gerar Alavancagem (Jogo Único)"):
             if IA_ATIVADA:
                 with st.spinner("🤖 Triangulando API + Big Data + Histórico Pessoal..."):
@@ -2140,6 +2229,40 @@ with st.sidebar:
                         count_salvos += 1
                     st.success(f"✅ Recuperados e Salvos: {count_salvos} jogos!")
                 else: st.warning("Nenhum jogo finalizado pendente.")
+        
+        if st.button("📊 Enviar Relatório BI"): enviar_relatorio_bi(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT']); st.toast("Enviado!")
+        if st.button("💰 Enviar Relatório Fin."):
+            if 'last_fin_stats' in st.session_state:
+                s = st.session_state['last_fin_stats']
+                enviar_relatorio_financeiro(st.session_state['TG_TOKEN'], st.session_state['TG_CHAT'], s['cenario'], s['lucro'], s['roi'], s['entradas'])
+                st.toast("Enviado!")
+            else: st.error("Abra a aba Financeiro.")
+
+        # --- BOTÃO DE EXPORTAÇÃO DE DADOS ---
+        with st.expander("💾 Exportação de Dados (Segurança)", expanded=False):
+            st.info("Use para baixar os dados e analisar na IA externa.")
+            if st.button("📥 Gerar Arquivo do Firebase"):
+                if db_firestore:
+                    with st.spinner("Baixando dados da nuvem..."):
+                        try:
+                            # Pega TODOS os jogos salvos
+                            docs = db_firestore.collection("BigData_Futebol").stream()
+                            all_data = [d.to_dict() for d in docs]
+                            
+                            # Converte para JSON
+                            json_str = json.dumps(all_data, indent=2, default=str)
+                            
+                            st.success(f"{len(all_data)} jogos recuperados!")
+                            st.download_button(
+                                label="⬇️ Clique para Salvar no PC (JSON)",
+                                data=json_str,
+                                file_name="bigdata_futebol_backup.json",
+                                mime="application/json"
+                            )
+                        except Exception as e:
+                            st.error(f"Erro ao baixar: {e}")
+                else:
+                    st.error("Firebase não conectado.")
 
     with st.expander("💰 Gestão de Banca", expanded=False):
         stake_padrao = st.number_input("Valor da Aposta (R$)", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
@@ -2825,4 +2948,4 @@ if st.session_state.ROBO_LIGADO:
 else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
-        st.info("💡 Robô em espera. Configure na lateral.")        
+        st.info("💡 Robô em espera. Configure na lateral.")
