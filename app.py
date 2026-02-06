@@ -2702,61 +2702,94 @@ if st.session_state.ROBO_LIGADO:
                         
                         # 4. SALVA E TENTA ENVIAR (MAS SÓ ENVIA SE NÃO FOR VETADO)
                         if adicionar_historico(item):
-                            try:
-                                # --- PREPARAÇÃO DE VARIÁVEIS VISUAIS ---
-                                txt_winrate_historico = ""
-                                if txt_pessoal != "Neutro": txt_winrate_historico = f" | 👤 {txt_pessoal}"
+    try:
+        # --- PREPARAÇÃO DE VARIÁVEIS VISUAIS ---
+        txt_winrate_historico = ""
+        if txt_pessoal != "Neutro": txt_winrate_historico = f" | 👤 {txt_pessoal}"
 
-                                header_winrate = ""
-                                df_h = st.session_state.get('historico_full', pd.DataFrame())
-                                if not df_h.empty:
-                                    strat_f = df_h[df_h['Estrategia'] == s['tag']]
-                                    if len(strat_f) >= 3:
-                                        greens_s = len(strat_f[strat_f['Resultado'].str.contains('GREEN', na=False)])
-                                        wr_s = (greens_s / len(strat_f)) * 100
-                                        header_winrate = f" | 🟢 <b>Strat: {wr_s:.0f}%</b>"
+        header_winrate = ""
+        df_h = st.session_state.get('historico_full', pd.DataFrame())
+        if not df_h.empty:
+            strat_f = df_h[df_h['Estrategia'] == s['tag']]
+            if len(strat_f) >= 3:
+                greens_s = len(strat_f[strat_f['Resultado'].str.contains('GREEN', na=False)])
+                wr_s = (greens_s / len(strat_f)) * 100
+                header_winrate = f" | 🟢 <b>Strat: {wr_s:.0f}%</b>"
 
-                                if not header_winrate and "Winrate Pessoal" in txt_pessoal:
-                                    wr_val = txt_pessoal.split(':')[-1].strip()
-                                    header_winrate = f" | 👤 <b>Time: {wr_val}</b>"
-                                if not header_winrate and dados_50: 
-                                    header_winrate = f" | 📊 <b>API: {dados_50['home']['over15_ft']}%</b>"
+        if not header_winrate and "Winrate Pessoal" in txt_pessoal:
+            wr_val = txt_pessoal.split(':')[-1].strip()
+            header_winrate = f" | 👤 <b>Time: {wr_val}</b>"
+        if not header_winrate and dados_50: 
+            header_winrate = f" | 📊 <b>API: {dados_50['home']['over15_ft']}%</b>"
 
-                                texto_momento = "Morno 🧊"
-                                if rh > ra: texto_momento = "Pressão Casa 🔥"
-                                elif ra > rh: texto_momento = "Pressão Visitante 🔥"
-                                elif rh > 2 or ra > 2: texto_momento = "Jogo Aberto ⚡"
+        texto_momento = "Morno 🧊"
+        if rh > ra: texto_momento = "Pressão Casa 🔥"
+        elif ra > rh: texto_momento = "Pressão Visitante 🔥"
+        elif rh > 2 or ra > 2: texto_momento = "Jogo Aberto ⚡"
 
-                                linha_bd = ""
-                                if "MANDANTE" in txt_bigdata: linha_bd = f"• 💾 <b>Big Data:</b> Tendência confirmada.\n"
+        linha_bd = ""
+        if "MANDANTE" in txt_bigdata: linha_bd = f"• 💾 <b>Big Data:</b> Tendência confirmada.\n"
 
-                                # --- INICIO DO BLOCO NOVO (RAIO-X VISUAL LIMPO) ---
-                                txt_stats_extras = ""
-                                try:
-                                    txt_stats_extras += f"\n📊 <b>Dados do Momento:</b> <i>{texto_momento}</i>"
-                                    
-                                    # Rating
-                                    if nota_home != "N/A":
-                                        txt_stats_extras += f"\n⭐ <b>Rating:</b> Casa {nota_home} | Fora {nota_away}"
-                                    
-                                    # Contexto Inteligente (Formatado para Leitura Humana)
-                                    if 'dados_contextuais' in locals() and dados_contextuais:
-                                        # Pega as porcentagens que já calculamos
-                                        micro_h = dados_contextuais['home']['micro']
-                                        micro_a = dados_contextuais['away']['micro']
-                                        
-                                        cards_h = dados_contextuais['home'].get('avg_cards', 0)
-                                        cards_a = dados_contextuais['away'].get('avg_cards', 0)
-                                        
-                                        txt_stats_extras += "\n🔎 <b>Raio-X (Tendência):</b>"
-                                        txt_stats_extras += f"\n📈 <b>Gols (Recente):</b> Casa {micro_h}% | Fora {micro_a}% (Over 1.5)"
-                                        
-                                        if cards_h > 0 or cards_a > 0:
-                                            txt_stats_extras += f"\n🟨 <b>Cartões (Média):</b> {cards_h:.1f} vs {cards_a:.1f}"
-                                            if dados_contextuais['home']['reds'] > 0 or dados_contextuais['away']['reds'] > 0:
-                                                txt_stats_extras += " 🟥 (Alerta Expulsão)"
-                                            
-                                except Exception as e: print(f"Erro visual: {e}")
+        # --- INICIO DO BLOCO NOVO (RAIO-X VISUAL LIMPO) ---
+        txt_stats_extras = ""
+        try:
+            txt_stats_extras += f"\n📊 <b>Dados do Momento:</b> <i>{texto_momento}</i>"
+            
+            # Rating
+            if nota_home != "N/A":
+                txt_stats_extras += f"\n⭐ <b>Rating:</b> Casa {nota_home} | Fora {nota_away}"
+            
+            # Contexto Inteligente (Formatado para Leitura Humana)
+            if 'dados_contextuais' in locals() and dados_contextuais:
+                # Pega as porcentagens que já calculamos
+                micro_h = dados_contextuais['home']['micro']
+                micro_a = dados_contextuais['away']['micro']
+                
+                cards_h = dados_contextuais['home'].get('avg_cards', 0)
+                cards_a = dados_contextuais['away'].get('avg_cards', 0)
+                
+                txt_stats_extras += "\n🔎 <b>Raio-X (Tendência):</b>"
+                txt_stats_extras += f"\n📈 <b>Gols (Recente):</b> Casa {micro_h}% | Fora {micro_a}% (Over 1.5)"
+                
+                if cards_h > 0 or cards_a > 0:
+                    txt_stats_extras += f"\n🟨 <b>Cartões (Média):</b> {cards_h:.1f} vs {cards_a:.1f}"
+                    if dados_contextuais['home']['reds'] > 0 or dados_contextuais['away']['reds'] > 0:
+                        txt_stats_extras += " 🟥 (Alerta Expulsão)"
+                    
+        except Exception as e: print(f"Erro visual: {e}")
+        # --- FIM DO BLOCO NOVO ---
+
+        # ESTA LINHA ABAIXO É ONDE ESTAVA O ERRO. AGORA ESTÁ ALINHADA.
+        msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
+        msg += f"🏆 {liga_safe}\n"
+        msg += f"⚽ <b>{home_safe} 🆚 {away_safe}</b>\n"
+        msg += f"⏰ {tempo}' min | 🥅 Placar: {placar}\n\n"
+        msg += f"{bloco_aviso_odd}"
+        msg += f"{texto_acao_original}\n"
+        if destaque_odd: msg += f"{destaque_odd}\n"
+        msg += f"{txt_stats_extras}\n"
+        msg += "──────────────\n"
+        msg += f"📊 <b>Raio-X do Momento (Live):</b>\n"
+        msg += f"• 🔥 <b>Ataque:</b> {s.get('stats', 'Pressão')}\n"
+        msg += linha_bd
+        msg += "\n"
+        msg += f"{opiniao_txt}"
+        
+        # --- DECISÃO FINAL DE ENVIO ---
+        if opiniao_db == "Aprovado":
+            enviar_telegram(safe_token, safe_chat, msg)
+            st.toast(f"✅ Sinal Enviado: {s['tag']}")
+        
+        elif opiniao_db == "Arriscado":
+            msg += "\n👀 <i>Obs: Risco moderado.</i>"
+            enviar_telegram(safe_token, safe_chat, msg)
+            st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
+        
+        else:
+            st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
+
+    except Exception as e: print(f"Erro ao enviar sinal: {e}")
+
                                 # --- FIM DO BLOCO NOVO ---
 
                                 msg = f"{emoji_sinal} <b>{titulo_sinal}</b>{header_winrate}\n"
