@@ -892,7 +892,8 @@ def gerar_insights_matinais_ia(api_key):
         random.shuffle(jogos_candidatos) 
         
         for j in jogos_candidatos:
-            if count >= 60: break 
+            # Aumentei o limite para a IA ter mais opções para filtrar e achar os TOP 5
+            if count >= 80: break 
             
             fid = j['fixture']['id']
             home = j['teams']['home']['name']
@@ -901,12 +902,15 @@ def gerar_insights_matinais_ia(api_key):
             
             mapa_jogos[f"{home} x {away}"] = str(fid)
 
-            # --- FILTRO 1: VALOR MÍNIMO (ODD > 1.50) ---
-            # O robô filtra pela odd de referência, mas a IA decide o mercado final.
+            # Busca odd de referência (Over 2.5) para a IA ter noção de preço
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
-            if odd_val < 1.50: continue 
             
-            # Busca Contexto (Gols, Forma, Cartões)
+            # --- NOTA SOBRE FILTRO DE ODDS ---
+            # Para estratégias de UNDER (Menos gols), uma Odd alta no Over (ex: 2.20) é um sinal bom.
+            # Por isso, removi o "continue" hardcoded aqui para permitir que a IA avalie cenários de Under
+            # onde a odd do Over é alta. A IA fará o filtro de valor.
+            
+            # Busca Contexto
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
             if stats:
@@ -916,63 +920,65 @@ def gerar_insights_matinais_ia(api_key):
                 lista_para_ia += f"""
                 ---
                 ⚽ Jogo: {home} x {away} ({liga})
-                💰 Odd Ref ({odd_nome}): @{odd_val:.2f}
-                
-                📊 HISTÓRICO RECENTE (Analise os placares):
+                💰 Ref (Over 2.5): @{odd_val:.2f}
+                📊 HISTÓRICO:
                 🏠 Casa: {h_txt}
                 ✈️ Fora: {a_txt}
                 """
                 count += 1
         
-        if not lista_para_ia: return "Nenhum jogo com valor (Odd > 1.50) encontrado hoje.", {}
+        if not lista_para_ia: return "Nenhum jogo com dados suficientes hoje.", {}
 
-        # --- O PROMPT SNIPER MULTI-MERCADO (AGORA COM UNDER) ---
+        # --- O PROMPT SNIPER COMPLETO (RIGOR + CATEGORIAS + VISUAL) ---
         prompt = f"""
-        ATUE COMO UM TRADER ESPORTIVO PROFISSIONAL (PERFIL SNIPER).
-        
-        Analise a lista de jogos abaixo. 
-        Sua meta é encontrar a MELHOR oportunidade para cada jogo. 
-        NÃO fique viciado em "Over Gols". Se o jogo for ruim de gol, sugira UNDER. Se tiver favorito, sugira VENCEDOR.
+        ATUE COMO UM TRADER ESPORTIVO DE ELITE (PERFIL SNIPER).
+        Analise a lista de jogos e gere um RELATÓRIO ESTRATÉGICO RIGOROSO.
         
         DADOS DOS JOGOS:
         {lista_para_ia}
-        
-        ---------------------------------------------------------------------
-        🚫 FILTRO DE ELITE (Rigoroso):
-        1. Se um favorito ganha sempre de 1x0 -> NÃO indique Over, indique Vencedor ou Under.
-        2. Se o histórico mostra placares como 0x0, 1x1, 1x0 -> OBRIGATÓRIO sugerir "Menos de 2.5 Gols".
-        3. Se a Odd é alta mas o risco é enorme -> DESCARTE.
-        ---------------------------------------------------------------------
 
-        🧠 MANUAL DE ESCOLHA (VARIE OS MERCADOS):
+        ---------------------------------------------------------------------
+        🚫 FILTRO DE ELITE (SEJA RIGOROSO - CRITÉRIOS DE CORTE):
+        1. "Vitória Chorada": Se o favorito ganha sempre de 1x0 -> NÃO indique Over Gols. Indique Vencedor ou Under.
+        2. "Arame Liso": Se os times empatam muito em 0x0 ou 1x1 -> OBRIGATÓRIO sugerir UNDER (Menos gols).
+        3. "Instabilidade": Se o time faz V-D-V-D (ganha e perde) -> NÃO indique Vencedor.
+        4. O OBJETIVO É QUALIDADE, NÃO QUANTIDADE. Se o jogo for duvidoso, ignore.
+        ---------------------------------------------------------------------
         
-        1. 📉 **UNDER GOLS (Jogos Travados):**
-           - CRITÉRIO: Placares recentes mostram 0x0, 1x0, 0x1 ou 1x1. Defesas fortes.
-           - SUGESTÃO: "Menos de 2.5 Gols" ou "Menos de 3.5 Gols".
-           
-        2. 🏆 **VENCEDOR (Favorito Claro):**
-           - CRITÉRIO: Um time vem de sequencia de vitórias e o outro perde muito.
-           - SUGESTÃO: "Vitória do [Time]" ou "Back [Time]".
-           
-        3. ⚡ **GOLS HT (Início Rápido):** - CRITÉRIO: Placares movimentados já no primeiro tempo (ex: 1x1 HT).
-           - SUGESTÃO: "Over 0.5 Gols HT".
-           
-        4. 🎯 **GOLS FT (Tiroteio):**
-           - CRITÉRIO: Só use se for EVIDENTE (placares 2x2, 3x1, 4x2 frequentes).
-           - SUGESTÃO: "Mais de 2.5 Gols".
-
-        ⚠️ INSTRUÇÃO FINAL:
-        - Selecione APENAS as 3 a 5 MELHORES oportunidades.
-        - Mantenha a resposta limpa (sem asteriscos no título).
+        SUA MISSÃO: Preencher as 3 listas abaixo com as melhores oportunidades que passaram no filtro.
         
-        SAÍDA (USE EXATAMENTE ESTE FORMATO):
+        ---
         
-        ⚽ Jogo: [Time A] x [Time B] ([Liga])
-        🔥 Tendência: [Ex: "Defesas sólidas e placares magros" ou "Casa muito favorita"]
-        🎯 Palpite: [Ex: Menos de 2.5 Gols / Vitória do Casa / Over 0.5 HT]
-        📝 Motivo: [Explicação técnica baseada nos dados lidos]
+        LISTA 1: TIROTEIO (GOLS OVER) - Busque até 5 jogos TOP.
+        Critério: Placares recentes altos (2x1, 3x2, 4x1) e ataques constantes.
+        ⚠️ FORMATO VISUAL: 🎯 Palpite: **MAIS de 2.5 Gols** (ou Ambas Marcam / Over 1.5 HT)
         
-        (Repita para os próximos jogos...)
+        LISTA 2: TRINCHEIRA (GOLS UNDER) - Busque até 5 jogos TOP.
+        Critério: Placares magros (0x0, 1x0, 1x1). Defesas fortes ou ataques ruins.
+        ⚠️ FORMATO VISUAL: 🎯 Palpite: **MENOS de 2.5 Gols** (ou Menos de 3.5)
+        
+        LISTA 3: VENCEDOR/EMPATE - Busque até 5 jogos TOP.
+        Critério: Favorito com sequencia de vitórias ou Empate frequente.
+        ⚠️ FORMATO VISUAL: 🎯 Palpite: **Vitória do [Time]** (ou Empate Anula)
+        
+        ---
+        
+        SAÍDA OBRIGATÓRIA (VISUAL LIMPO E ORGANIZADO):
+        
+        🔥 **ZONA DE GOLS (OVER)**
+        ⚽ Jogo: [Nome] ([Liga])
+        🎯 Palpite: **MAIS de 2.5 Gols**
+        📝 Motivo: [Explique o dado: "Casa fez 3 gols nos últimos 2 jogos..."]
+        
+        ❄️ **ZONA DE TRINCHEIRA (UNDER)**
+        ⚽ Jogo: [Nome] ([Liga])
+        🎯 Palpite: **MENOS de 2.5 Gols**
+        📝 Motivo: [Explique o dado: "Histórico de 0x0 e 1x0..."]
+        
+        🏆 **ZONA DE MATCH ODDS**
+        ⚽ Jogo: [Nome] ([Liga])
+        🎯 Palpite: **Vitória do [Time]**
+        📝 Motivo: [Explique a fase do time]
         """
         
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.5))
@@ -986,7 +992,8 @@ def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
     
-    # Focamos apenas nas Ligas onde a Bet365 abre mercado de Jogador
+    # Ligas onde a Bet365 costuma abrir chutes e defesa de goleiro (Big Markets)
+    # 39=Premier League, 140=La Liga, 135=Serie A Italia, 78=Bundesliga, 61=Ligue 1, etc.
     LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
 
     try:
@@ -1006,23 +1013,21 @@ def gerar_analise_mercados_alternativos_ia(api_key):
         count_validos = 0
         
         for j in jogos_candidatos:
-            if count_validos >= 20: break 
+            if count_validos >= 30: break 
             
             fid = j['fixture']['id']
             lid = j['league']['id']
-            
-            if lid not in LIGAS_BIG_MARKETS: continue
-            
-            # Busca Odds para entender o favoritismo
-            odd_check, _ = buscar_odd_pre_match(api_key, fid)
-            if odd_check == 0: continue
-
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga_nome = j['league']['name']
             juiz = j['fixture'].get('referee', 'Desconhecido')
             
-            # Tenta pegar odds de vencedor para definir cenário
+            # --- LÓGICA DE DADOS ---
+            # 1. Definimos o que é permitido sugerir
+            permite_player_props = "SIM" if lid in LIGAS_BIG_MARKETS else "NAO"
+            
+            # 2. Resgatamos a inteligência de Cenário (Massacre vs Equilibrado)
+            # Isso é vital para saber se o Goleiro vai trabalhar (Muralha)
             cenario = "Equilibrado"
             try:
                 url_odd = "https://v3.football.api-sports.io/odds"
@@ -1031,49 +1036,55 @@ def gerar_analise_mercados_alternativos_ia(api_key):
                     vals = r_odd['response'][0]['bookmakers'][0]['bets'][0]['values']
                     v1 = next((float(v['odd']) for v in vals if v['value']=='Home'), 0)
                     v2 = next((float(v['odd']) for v in vals if v['value']=='Away'), 0)
-                    if v1 < 1.50: cenario = "Massacre Casa"
-                    elif v2 < 1.50: cenario = "Massacre Visitante"
+                    if v1 < 1.50: cenario = "Massacre Casa (Ataque total do Mandante)"
+                    elif v2 < 1.50: cenario = "Massacre Visitante (Ataque total do Visitante)"
             except: pass
 
-            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Cenário: {cenario} | Juiz: {juiz}\n"
+            dados_analise += f"""
+            - Jogo: {home} x {away} | Liga: {liga_nome}
+              Juiz: {juiz} | Cenário Tático: {cenario}
+              Permite Apostar em Jogador? {permite_player_props}
+            """
             count_validos += 1
 
         if not dados_analise: return []
 
-        # --- PROMPT ATUALIZADO (INCLUI CARTÕES E DEFESAS) ---
+        # --- PROMPT ATUALIZADO (COM REGRAS DE MERCADO) ---
         prompt = f"""
         ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS (PLAYER PROPS & CARDS).
         
-        Analise a lista de jogos abaixo. Use seu conhecimento sobre elencos e estatísticas.
+        Analise a lista de jogos abaixo. Use o "Cenário Tático" para inferir pressão.
         
         LISTA DE JOGOS:
         {dados_analise}
         
-        SUA MISSÃO (ENCONTRAR 3 OPORTUNIDADES DE VALOR):
-        Procure por uma destas 3 situações:
+        SUA MISSÃO (ENCONTRAR 3 OPORTUNIDADES):
         
         1. 🧤 **MURALHA (Goleiros):**
-           - Cenário: "Massacre". O time pequeno vai sofrer chutes o jogo todo.
-           - Indicação: "Over Defesas do Goleiro do time fraco".
+           - REQUISITO: O jogo PRECISA ter "Permite Apostar em Jogador? SIM".
+           - LÓGICA: Se o Cenário for "Massacre Casa", o goleiro VISITANTE fará muitas defesas.
+           - INDICAÇÃO: "Over Defesas Goleiro [Time Sofredor]".
            
         2. 🎯 **SNIPER (Finalizações):**
-           - Cenário: "Massacre" ou "Equilibrado" com times ofensivos.
-           - Indicação: "Over Chutes (ou Chutes ao Gol) do Centroavante Principal". Cite o nome (Ex: Haaland, Kane, Gabigol).
+           - REQUISITO: O jogo PRECISA ter "Permite Apostar em Jogador? SIM".
+           - LÓGICA: Se "Massacre", o centroavante do favorito vai chutar muito.
+           - INDICAÇÃO: "Over 0.5 Chutes ao Gol [Nome do Jogador]".
            
         3. 🟨 **AÇOUGUEIRO (Cartões):**
-           - Cenário: Juiz rigoroso ou jogo com tendência violenta.
-           - Indicação: "Over Cartões na Partida" ou "Cartão para Jogador X (se conhecido por ser violento)".
+           - REQUISITO: Pode ser em QUALQUER jogo (SIM ou NAO).
+           - LÓGICA: Jogos "Equilibrados" ou com Juiz rigoroso.
+           - INDICAÇÃO: "Over Cartões na Partida".
         
         SAÍDA JSON OBRIGATÓRIA:
         {{
             "sinais": [
                 {{
                     "fid": "...", 
-                    "tipo": "MERCADO",
-                    "titulo": "🎯 SNIPER DE FINALIZAÇÕES" (ou MURALHA / AÇOUGUEIRO),
+                    "tipo": "CARTAO" (ou GOLEIRO/CHUTE),
+                    "titulo": "🟨 AÇOUGUEIRO" (ou 🧤 MURALHA / 🎯 SNIPER),
                     "jogo": "Time A x Time B",
-                    "destaque": "Explique por que escolheu isso (Ex: O time A chuta muito e o goleiro do B faz muitas defesas).",
-                    "indicacao": "Nome do Jogador - Over 0.5 Chutes ao Gol"
+                    "destaque": "Explique a lógica (Ex: Cenário de massacre, goleiro vai trabalhar muito).",
+                    "indicacao": "Over 3.5 Defesas" (ou Nome do Jogador ou Total Cartões)
                 }}
             ]
         }}
@@ -2823,4 +2834,5 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
 
