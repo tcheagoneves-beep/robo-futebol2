@@ -986,7 +986,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
     hoje = get_time_br().strftime('%Y-%m-%d')
     
-    # Focamos apenas nas Ligas onde a Bet365 abre mercado de Jogador (Chutes/Defesas)
+    # Focamos apenas nas Ligas onde a Bet365 abre mercado de Jogador
     LIGAS_BIG_MARKETS = [39, 140, 135, 78, 61, 2, 3, 71, 72, 9, 10, 13] 
 
     try:
@@ -1011,79 +1011,69 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             fid = j['fixture']['id']
             lid = j['league']['id']
             
-            # Só analisa ligas grandes (onde tem mercado de jogador)
             if lid not in LIGAS_BIG_MARKETS: continue
             
-            # 1. BLINDAGEM BÁSICA
+            # Busca Odds para entender o favoritismo
             odd_check, _ = buscar_odd_pre_match(api_key, fid)
             if odd_check == 0: continue
-
-            # 2. DEFINIÇÃO DE CENÁRIO (Player Props)
-            cenario_tatico = "Indefinido"
-            
-            try:
-                # Busca Match Winner para ver quem vai amassar
-                url_odd = "https://v3.football.api-sports.io/odds"
-                r_odd = requests.get(url_odd, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "8", "bet": "1"}).json()
-                
-                if r_odd.get('response'):
-                    vals = r_odd['response'][0]['bookmakers'][0]['bets'][0]['values']
-                    odd_casa = next((float(v['odd']) for v in vals if v['value'] == 'Home'), 0)
-                    odd_fora = next((float(v['odd']) for v in vals if v['value'] == 'Away'), 0)
-                    
-                    # Lógica para CHUTES (Artilheiro do Favorito)
-                    if odd_casa > 0 and odd_casa < 1.50: 
-                        cenario_tatico = "DOMÍNIO TOTAL CASA (Oportunidade: Chutes do Atacante Casa + Defesas Goleiro Visitante)"
-                    elif odd_fora > 0 and odd_fora < 1.50: 
-                        cenario_tatico = "DOMÍNIO TOTAL VISITANTE (Oportunidade: Chutes do Atacante Visitante + Defesas Goleiro Casa)"
-                    # Lógica para Jogo Aberto (Ambos Chutam)
-                    elif odd_casa < 2.50 and odd_fora < 2.50:
-                         cenario_tatico = "JOGO ABERTO/TROCAÇÃO (Oportunidade: Chutes dos dois lados)"
-            except:
-                cenario_tatico = "Sem Odds Winner"
-
-            if "Indefinido" in cenario_tatico or "Sem" in cenario_tatico: continue
 
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga_nome = j['league']['name']
+            juiz = j['fixture'].get('referee', 'Desconhecido')
             
-            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Cenário: {cenario_tatico}\n"
+            # Tenta pegar odds de vencedor para definir cenário
+            cenario = "Equilibrado"
+            try:
+                url_odd = "https://v3.football.api-sports.io/odds"
+                r_odd = requests.get(url_odd, headers={"x-apisports-key": api_key}, params={"fixture": fid, "bookmaker": "8", "bet": "1"}).json()
+                if r_odd.get('response'):
+                    vals = r_odd['response'][0]['bookmakers'][0]['bets'][0]['values']
+                    v1 = next((float(v['odd']) for v in vals if v['value']=='Home'), 0)
+                    v2 = next((float(v['odd']) for v in vals if v['value']=='Away'), 0)
+                    if v1 < 1.50: cenario = "Massacre Casa"
+                    elif v2 < 1.50: cenario = "Massacre Visitante"
+            except: pass
+
+            dados_analise += f"- Jogo: {home} x {away} | Liga: {liga_nome} | Cenário: {cenario} | Juiz: {juiz}\n"
             count_validos += 1
 
         if not dados_analise: return []
 
+        # --- PROMPT ATUALIZADO (INCLUI CARTÕES E DEFESAS) ---
         prompt = f"""
-        ATUE COMO UM ANALISTA DE "PLAYER PROPS" (MERCADO DE JOGADORES BET365).
+        ATUE COMO UM ESPECIALISTA EM MERCADOS ALTERNATIVOS (PLAYER PROPS & CARDS).
         
-        Analise os jogos abaixo. Você tem conhecimento sobre os elencos e artilheiros dos times.
+        Analise a lista de jogos abaixo. Use seu conhecimento sobre elencos e estatísticas.
         
         LISTA DE JOGOS:
         {dados_analise}
         
-        SUA MISSÃO (TOP 3 OPORTUNIDADES):
-        Encontre valor em CHUTES (Finalizações) ou DEFESAS (Goleiro).
+        SUA MISSÃO (ENCONTRAR 3 OPORTUNIDADES DE VALOR):
+        Procure por uma destas 3 situações:
         
-        REGRAS DE OURO:
-        1. 🎯 CHUTES (FINALIZAÇÃO):
-           - Se o cenário for "DOMÍNIO", indique o Principal Atacante (Camisa 9) do time favorito.
-           - Mercado Alvo: "Over 0.5 Chutes ao Gol" (Segurança) ou "Over 1.5 Chutes" (Volume).
-           - Cite o NOME do jogador.
+        1. 🧤 **MURALHA (Goleiros):**
+           - Cenário: "Massacre". O time pequeno vai sofrer chutes o jogo todo.
+           - Indicação: "Over Defesas do Goleiro do time fraco".
            
-        2. 🧤 DEFESAS (MURALHA):
-           - Se o cenário for "DOMÍNIO", indique o Goleiro do time que vai sofrer pressão.
-           - Indique "Over 2.5 Defesas" ou "Over 3.5 Defesas".
+        2. 🎯 **SNIPER (Finalizações):**
+           - Cenário: "Massacre" ou "Equilibrado" com times ofensivos.
+           - Indicação: "Over Chutes (ou Chutes ao Gol) do Centroavante Principal". Cite o nome (Ex: Haaland, Kane, Gabigol).
+           
+        3. 🟨 **AÇOUGUEIRO (Cartões):**
+           - Cenário: Juiz rigoroso ou jogo com tendência violenta.
+           - Indicação: "Over Cartões na Partida" ou "Cartão para Jogador X (se conhecido por ser violento)".
         
-        SAÍDA JSON:
+        SAÍDA JSON OBRIGATÓRIA:
         {{
             "sinais": [
                 {{
-                    "fid": "...",
-                    "tipo": "JOGADOR",
-                    "titulo": "🎯 SNIPER DE JOGADOR",
+                    "fid": "...", 
+                    "tipo": "MERCADO",
+                    "titulo": "🎯 SNIPER DE FINALIZAÇÕES" (ou MURALHA / AÇOUGUEIRO),
                     "jogo": "Time A x Time B",
-                    "destaque": "Ex: O Time A é muito favorito, Haaland deve ter muitas chances.",
-                    "indicacao": "Erling Haaland - Over 1.5 Chutes ao Gol"
+                    "destaque": "Explique por que escolheu isso (Ex: O time A chuta muito e o goleiro do B faz muitas defesas).",
+                    "indicacao": "Nome do Jogador - Over 0.5 Chutes ao Gol"
                 }}
             ]
         }}
