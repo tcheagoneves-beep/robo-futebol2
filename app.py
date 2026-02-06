@@ -898,82 +898,81 @@ def gerar_insights_matinais_ia(api_key):
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga = j['league']['name']
-            juiz = j['fixture'].get('referee', 'Desconhecido')
             
             mapa_jogos[f"{home} x {away}"] = str(fid)
 
-            # --- FILTRO 1: BUSCA A ODD ---
+            # --- FILTRO 1: VALOR MÍNIMO (ODD > 1.50) ---
+            # Se a odd for muito esmagada, nem gasta token da IA
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
-            
-            # --- FILTRO 2 (NOVO): VALOR MÍNIMO ---
-            # Se a Odd for menor que 1.50, é "suco" (pouco retorno). Ignora.
             if odd_val < 1.50: continue 
             
-            # Busca Contexto Pesado (Gols + Cartões)
+            # Busca Contexto (Gols, Forma, Cartões)
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
             
             if stats:
                 h_txt = stats['home']['resumo']
                 a_txt = stats['away']['resumo']
                 
-                h_cards = f"{stats['home']['avg_cards']:.1f}/jogo ({stats['home']['reds']} Vermelhos)"
-                a_cards = f"{stats['away']['avg_cards']:.1f}/jogo ({stats['away']['reds']} Vermelhos)"
-                
                 lista_para_ia += f"""
                 ---
                 ⚽ Jogo: {home} x {away} ({liga})
-                👮 Juiz: {juiz}
-                💰 Mercado Ref: {odd_nome} @{odd_val:.2f}
+                💰 Odd Ref ({odd_nome}): @{odd_val:.2f}
                 
-                📊 GOLS (Histórico Recente):
+                📊 HISTÓRICO RECENTE (Analise para Vencedor ou Gols):
                 🏠 Casa: {h_txt}
                 ✈️ Fora: {a_txt}
-                
-                🟨 CARTÕES (Média 10j):
-                🏠 Casa: {h_cards}
-                ✈️ Fora: {a_cards}
                 """
                 count += 1
         
         if not lista_para_ia: return "Nenhum jogo com valor (Odd > 1.50) encontrado hoje.", {}
 
-        # --- O PROMPT HÍBRIDO PERFEITO ---
+        # --- O PROMPT SNIPER HÍBRIDO (RIGOROSO + MULTI-MERCADO) ---
         prompt = f"""
-        ATUE COMO UM ANALISTA DE FUTEBOL SÊNIOR (ESPECIALISTA EM GOLS E DISCIPLINA).
+        ATUE COMO UM TRADER ESPORTIVO PROFISSIONAL (PERFIL SNIPER).
         
-        Analise a lista de jogos abaixo. Use os dados REAIS fornecidos.
-        TODOS os jogos já foram filtrados por Odd mínima, então foque na PROBABILIDADE de bater.
+        Analise a lista de jogos abaixo. 
+        Sua meta é encontrar a MELHOR oportunidade para cada jogo (Seja Vencedor, Gols ou HT), mas mantendo o RIGOR TÉCNICO.
         
-        DADOS:
+        DADOS DOS JOGOS:
         {lista_para_ia}
         
-        SUA MISSÃO (TOP 5 DE OURO):
-        Selecione as 5 melhores oportunidades do dia, seja em GOLS ou CARTÕES.
+        ---------------------------------------------------------------------
+        🚫 FILTRO DE ELITE (SEJA RIGOROSO - DESCARTE O LIXO):
+        1. Se um time é favorito mas ganha sempre de 1x0 "chorado" -> NÃO indique Over Gols.
+        2. Se o histórico mostra "V-D-V-D" (Instabilidade) -> NÃO indique Vitória Seca (Back).
+        3. Se a Odd é alta mas o risco é enorme -> DESCARTE.
+        4. O objetivo é GREEN, não volume. Se o jogo for ruim, ignore-o.
+        ---------------------------------------------------------------------
+
+        🧠 RACIOCÍNIO PARA SELEÇÃO (ONDE ESTÁ O VALOR?):
         
-        ⚠️ CRITÉRIOS DE ELIMINAÇÃO (SEJA RIGOROSO):
-        
-        1. PARA GOLS (SNIPER):
-           - Se o time ganhou de 1x0 "chorado" contra time fraco -> DESCARTE.
-           - PRIORIZE times que vêm de goleadas (Ex: 3x0, 4x1) ou jogos muito abertos.
-           - PRIORIZE confrontos "Ataque Forte vs Defesa Vazada".
+        1. 🏆 **VENCEDOR (Match Odds):** Indique apenas se um time vem de sequência forte de vitórias e o outro está mal.
+           - Sugestão: "Vitória do [Time]".
            
-        2. PARA CARTÕES (AÇOUGUEIRO):
-           - SÓ INDIQUE se a média somada dos times for ALTA (> 5.0) E o Juiz for conhecido.
-           - Se houver Vermelhos recentes, é um forte indicador.
-           - Se os times vêm de placares magros (0x0, 1x0), a chance de jogo pegado é maior.
+        2. ⚡ **GOLS HT (Primeiro Tempo):** Indique se os históricos mostram gols cedo (ex: placares movimentados no intervalo).
+           - Sugestão: "Over 0.5 Gols HT".
+           
+        3. 🎯 **GOLS FT (Jogo Todo):** Indique se os times marcam e sofrem muito (placares tipo 2x2, 3x1, 4x2).
+           - Sugestão: "Over 2.5 Gols" ou "Ambas Marcam".
         
-        SAÍDA (Relatório Final):
+        4. 🛡️ **PROTEÇÃO:** Se o favorito joga bem mas a defesa vacila.
+           - Sugestão: "Empate Anula" ou "Dupla Chance".
+
+        ⚠️ REGRAS FINAIS:
+        - Selecione APENAS as 3 a 5 MELHORES oportunidades do dia.
+        - Mantenha a resposta limpa e direta.
         
-        🌅 **SNIPER MATINAL (IA + DADOS)**
+        SAÍDA (USE EXATAMENTE ESTE FORMATO VISUAL):
         
-        1️⃣ ⚽ Jogo: [Nome]
-        🎯 Palpite: [Mercado] (Ex: Over 2.5 Gols / Over Cartões)
-        💡 Motivo Técnico: [Explique baseado nos dados. Ex: "Casa vem de 3 goleadas seguidas" ou "Média de cartões somada é 7.0 e o juiz é rigoroso"]
+        **⚽ Jogo: [Time A] x [Time B] ([Liga])**
+        🔥 Tendência: [Descreva a fase. Ex: "Casa implacável" ou "Defesas frágeis"]
+        🎯 Palpite: [O Mercado escolhido]
+        📝 Motivo: [Explicação técnica baseada nos dados lidos, justificando a confiança]
         
-        2️⃣ ... (Até 5 jogos)
+        (Repita para os próximos jogos...)
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.4))
         st.session_state['gemini_usage']['used'] += 1
         
         return response.text, mapa_jogos
@@ -2806,3 +2805,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")        
+
