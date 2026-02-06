@@ -903,13 +903,16 @@ def gerar_insights_matinais_ia(api_key):
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
             liga = j['league']['name']
-            juiz = j['fixture'].get('referee', 'Desconhecido') # Dados Novos
+            juiz = j['fixture'].get('referee', 'Desconhecido')
             
             mapa_jogos[f"{home} x {away}"] = str(fid)
 
-            # Filtro de Odds
+            # --- FILTRO 1: BUSCA A ODD ---
             odd_val, odd_nome = buscar_odd_pre_match(api_key, fid)
-            if odd_val == 0: continue 
+            
+            # --- FILTRO 2 (NOVO): VALOR MÍNIMO ---
+            # Se a Odd for menor que 1.50, é "suco" (pouco retorno). Ignora.
+            if odd_val < 1.50: continue 
             
             # Busca Contexto Pesado (Gols + Cartões)
             stats = analisar_tendencia_macro_micro(api_key, j['teams']['home']['id'], j['teams']['away']['id'])
@@ -918,7 +921,6 @@ def gerar_insights_matinais_ia(api_key):
                 h_txt = stats['home']['resumo']
                 a_txt = stats['away']['resumo']
                 
-                # Dados de Cartões (Novo)
                 h_cards = f"{stats['home']['avg_cards']:.1f}/jogo ({stats['home']['reds']} Vermelhos)"
                 a_cards = f"{stats['away']['avg_cards']:.1f}/jogo ({stats['away']['reds']} Vermelhos)"
                 
@@ -938,13 +940,14 @@ def gerar_insights_matinais_ia(api_key):
                 """
                 count += 1
         
-        if not lista_para_ia: return "Nenhum jogo qualificado.", {}
+        if not lista_para_ia: return "Nenhum jogo com valor (Odd > 1.50) encontrado hoje.", {}
 
-        # --- O PROMPT HÍBRIDO PERFEITO (GOLS RIGOROSOS + CARTÕES) ---
+        # --- O PROMPT HÍBRIDO PERFEITO ---
         prompt = f"""
         ATUE COMO UM ANALISTA DE FUTEBOL SÊNIOR (ESPECIALISTA EM GOLS E DISCIPLINA).
         
         Analise a lista de jogos abaixo. Use os dados REAIS fornecidos.
+        TODOS os jogos já foram filtrados por Odd mínima, então foque na PROBABILIDADE de bater.
         
         DADOS:
         {lista_para_ia}
