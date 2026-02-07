@@ -874,8 +874,8 @@ def gerar_multipla_matinal_ia(api_key):
         
         lista_jogos_txt = ""
         mapa_jogos = {}
-    # [MELHORIA] Metadados para filtro de correlação (liga/horário)
-    meta_local = {}
+        # [MELHORIA] Metadados para filtro de correlação (liga/horário)
+        meta_local = {}
         
         count_validos = 0
         random.shuffle(jogos_candidatos)
@@ -2418,8 +2418,8 @@ if st.session_state.ROBO_LIGADO:
         if not api_error and jogos_live:
             # Seleciona apenas jogos que estão rolando (1º tempo, 2º tempo, Intervalo)
             jogos_para_baixar = [j for j in jogos_live if j['fixture']['status']['short'] in ['1H', '2H', 'HT', 'ET']]
-    # [MELHORIA] Cache de estatísticas: baixa apenas jogos SEM stats em memória
-    jogos_para_baixar = [j for j in jogos_para_baixar if f"st_{j['fixture']['id']}" not in st.session_state]
+            # [MELHORIA] Cache de estatísticas: baixa apenas jogos SEM stats em memória
+            jogos_para_baixar = [j for j in jogos_para_baixar if f"st_{j['fixture']['id']}" not in st.session_state]
             
             if jogos_para_baixar:
                 # Baixa as stats em paralelo (rápido) e salva na memória do robô
@@ -3003,7 +3003,7 @@ if st.session_state.ROBO_LIGADO:
                     resumo_live = 'JOGOS AO VIVO (Top Pressão): ' + ' | '.join([f"{nm} ({pl}, {tm}min, SOG:{sog}, SH:{sh})" for sog, sh, tm, pl, nm in top])
             except:
                 resumo_live = ''
-                    contexto_chat = f"""
+            contexto_chat = f"""
                     ATUE COMO: Cientista de Dados Sênior do 'Neves Analytics'.
                     
                     SUA MISSÃO: 
@@ -3023,18 +3023,18 @@ if st.session_state.ROBO_LIGADO:
                     Seja objetivo e numérico.
                     """
 
-                    try:
-                        with st.spinner("🤖 Calculando estatísticas e gerando resposta..."):
-                            response = model_ia.generate_content(contexto_chat)
-                            st.session_state['gemini_usage']['used'] += 1
-                            msg_ia = response.text
-                        
-                        st.session_state.messages.append({"role": "assistant", "content": msg_ia})
-                        st.chat_message("assistant").write(msg_ia)
-                        if len(st.session_state["messages"]) > 6:
-                            time.sleep(0.5); st.rerun()
-                            
-                    except Exception as e: st.error(f"Erro na IA: {e}")
+            try:
+                with st.spinner("🤖 Calculando estatísticas e gerando resposta..."):
+                    response = model_ia.generate_content(contexto_chat)
+                    st.session_state['gemini_usage']['used'] += 1
+                    msg_ia = response.text
+                
+                st.session_state.messages.append({"role": "assistant", "content": msg_ia})
+                st.chat_message("assistant").write(msg_ia)
+                if len(st.session_state["messages"]) > 6:
+                    time.sleep(0.5); st.rerun()
+                    
+            except Exception as e: st.error(f"Erro na IA: {e}")
 
         with abas[10]:
             st.markdown("### 📈 Trading Pré-Live (Drop Odds)")
