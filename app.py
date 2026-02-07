@@ -114,7 +114,7 @@ except: IA_ATIVADA = False
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada', 'Opiniao_IA', 'Probabilidade']
+COLS_HIST = ['FID', 'Data', 'Hora', 'Liga', 'Jogo', 'Placar_Sinal', 'Estrategia', 'Resultado', 'HomeID', 'AwayID', 'Odd', 'Odd_Atualizada', 'Opiniao_IA', 'Probabilidade', 'Stake_Recomendado_Pct', 'Stake_Recomendado_RS', 'Modo_Gestao']
 COLS_SAFE = ['id', 'País', 'Liga', 'Motivo', 'Strikes', 'Jogos_Erro']
 COLS_OBS = ['id', 'País', 'Liga', 'Data_Erro', 'Strikes', 'Jogos_Erro']
 COLS_BLACK = ['id', 'País', 'Liga', 'Motivo']
@@ -174,6 +174,175 @@ def gerar_chave_universal(fid, estrategia, tipo_sinal="SINAL"):
     elif tipo_sinal == "GREEN": return f"RES_GREEN_{chave}"
     elif tipo_sinal == "RED": return f"RES_RED_{chave}"
     return chave
+
+
+# ==============================================================================
+# [MELHORIA V3] CLASSIFICAÇÃO (OVER/UNDER) + GOLS + ODD MOVEMENT + KELLY
+# ==============================================================================
+def classificar_tipo_estrategia(estrategia: str) -> str:
+    '''Classifica se a estratégia é OVER, UNDER ou NEUTRO.'''
+    estrategia_lower = str(estrategia or '').lower()
+    over = [
+        'porteira aberta','golden bet','gol relâmpago','blitz','massacre',
+        'estratégia do vovô','gigante dormindo','reação do gigante','over','btts','ambas marcam'
+    ]
+    under = ['jogo morno','arame liso','under','sem gols']
+    for e in over:
+        if e in estrategia_lower:
+            return 'OVER'
+    for e in under:
+        if e in estrategia_lower:
+            return 'UNDER'
+    return 'NEUTRO'
+
+
+def calcular_gols_atuais(placar_str: str) -> int:
+    '''Calcula gols atuais (ex: 2x1 -> 3).'''
+    try:
+        gh, ga = map(int, str(placar_str).lower().replace(' ', '').split('x'))
+        return int(gh) + int(ga)
+    except:
+        return 0
+
+
+def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
+    '''Threshold dinâmico por estratégia + odd (50-80).'''
+    estr = str(estrategia or '')
+    tipo = classificar_tipo_estrategia(estr)
+    if tipo == 'UNDER':
+        thr = 65
+    elif 'golden' in estr.lower() or 'diamante' in estr.lower():
+        thr = 75
+    else:
+        thr = 50
+
+    try:
+        odd = float(odd_atual)
+        if odd >= 2.00:
+            thr -= 5
+        elif odd <= 1.30:
+            thr += 10
+    except:
+        pass
+
+    return int(max(50, min(thr, 80)))
+
+
+def rastrear_movimento_odd(fid, estrategia, odd_atual, janela_min=5):
+    '''Rastreia movimento de odd em memória (últimos X min).'''
+    try:
+        fid = str(fid)
+        odd_atual = float(odd_atual)
+    except:
+        return 'DESCONHECIDO', 0.0
+
+    if 'odd_history' not in st.session_state:
+        st.session_state['odd_history'] = {}
+
+    hist = st.session_state['odd_history'].get(fid, [])
+    agora = get_time_br()
+    hist.append({'t': agora, 'odd': odd_atual, 'estrategia': str(estrategia)})
+
+    limite = agora - timedelta(minutes=int(janela_min))
+    hist = [x for x in hist if x.get('t') and x['t'] >= limite]
+    st.session_state['odd_history'][fid] = hist
+
+    if len(hist) < 2:
+        return 'ESTÁVEL', 0.0
+
+    odd_ini = hist[0]['odd']
+    if odd_ini <= 0:
+        return 'ESTÁVEL', 0.0
+
+    variacao = ((odd_atual - odd_ini) / odd_ini) * 100.0
+
+    if variacao <= -7:
+        return 'CAINDO FORTE', variacao
+    if variacao <= -3:
+        return 'CAINDO', variacao
+    if variacao >= 7:
+        return 'SUBINDO FORTE', variacao
+    if variacao >= 3:
+        return 'SUBINDO', variacao
+    return 'ESTÁVEL', variacao
+
+
+def calcular_kelly_criterion(probabilidade, odd, modo='fracionario'):
+    '''Kelly % ideal (prob 0-100).'''
+    try:
+        prob_decimal = float(probabilidade) / 100.0
+        odd = float(odd)
+        if odd <= 1.01:
+            return 0.0
+        kelly = (prob_decimal * odd - 1) / (odd - 1)
+        if kelly <= 0:
+            kelly = 0
+        elif kelly > 0.25:
+            kelly = 0.25
+
+        if modo == 'conservador':
+            if float(probabilidade) >= 85:
+                return 2.0
+            if float(probabilidade) >= 70:
+                return 1.5
+            return 1.0
+
+        if modo == 'fracionario':
+            kelly *= 0.5
+
+        k = round(kelly * 100.0, 1)
+        if 0 < k < 0.5:
+            k = 0.5
+        return k
+    except:
+        return 1.5
+
+
+def calcular_stake_recomendado(banca_atual, probabilidade, odd, modo='fracionario'):
+    '''Stake recomendado em % e R$.'''
+    try:
+        banca_atual = float(banca_atual)
+        pct = calcular_kelly_criterion(probabilidade, odd, modo)
+        valor = round((banca_atual * pct) / 100.0, 2)
+        if 0 < valor < 2.0:
+            valor = 2.0
+        return {'porcentagem': pct, 'valor': valor, 'modo': modo}
+    except:
+        return {'porcentagem': 1.5, 'valor': round(float(banca_atual or 0) * 0.015, 2), 'modo': 'erro'}
+
+
+# ==============================================================================
+# [CORREÇÃO CRÍTICA] ODDS MÍNIMAS POR ESTRATÉGIA
+# ==============================================================================
+ODD_MINIMA_POR_ESTRATEGIA = {
+    "estratégia do vovô": 1.20,
+    "vovô": 1.20,
+    "jogo morno": 1.35,
+    "morno": 1.35,
+    "porteira aberta": 1.50,
+    "porteira": 1.50,
+    "golden bet": 1.80,
+    "golden": 1.80,
+    "gol relâmpago": 1.60,
+    "relâmpago": 1.60,
+    "blitz": 1.60,
+    "massacre": 1.70,
+    "alavancagem": 3.50,
+    "sniper": 1.80,
+    "arame liso": 1.35,
+    "under": 1.40,
+}
+
+def obter_odd_minima(estrategia):
+    """Retorna a odd mínima aceitável para a estratégia. Padrão 1.50 se não encontrar."""
+    try:
+        estrategia_lower = str(estrategia or '').lower()
+        for chave, odd_min in ODD_MINIMA_POR_ESTRATEGIA.items():
+            if chave in estrategia_lower:
+                return float(odd_min)
+        return 1.50
+    except:
+        return 1.50
 
 # --- [MELHORIA] NOVA FUNÇÃO DE BUSCA DE ODD PRÉ-MATCH (ROBUSTA) ---
 def buscar_odd_pre_match(api_key, fid):
@@ -530,6 +699,24 @@ def carregar_tudo(force=False):
 def adicionar_historico(item):
     if 'historico_full' not in st.session_state: st.session_state['historico_full'] = carregar_aba("Historico", COLS_HIST)
     df_memoria = st.session_state['historico_full']
+
+
+# [MELHORIA] Stake recomendado (Kelly) no histórico
+try:
+    banca_atual_local = float(st.session_state.get('banca_atual', st.session_state.get('banca_inicial', 1000.0)))
+    modo_local = st.session_state.get('modo_gestao_banca', 'fracionario')
+    prob_str = str(item.get('Probabilidade', '70%')).replace('%','').strip()
+    prob_val = float(prob_str) if prob_str and prob_str.replace('.','',1).isdigit() else 70.0
+    odd_str = str(item.get('Odd', '1.50')).replace(',', '.').strip()
+    odd_val_item = float(odd_str) if odd_str and odd_str.replace('.','',1).isdigit() else 1.50
+    stake_calc = calcular_stake_recomendado(banca_atual_local, prob_val, odd_val_item, modo_local)
+    item['Stake_Recomendado_Pct'] = f"{stake_calc['porcentagem']}%"
+    item['Stake_Recomendado_RS'] = f"R$ {stake_calc['valor']:.2f}"
+    item['Modo_Gestao'] = str(modo_local)
+except:
+    item['Stake_Recomendado_Pct'] = item.get('Stake_Recomendado_Pct', '')
+    item['Stake_Recomendado_RS'] = item.get('Stake_Recomendado_RS', '')
+    item['Modo_Gestao'] = item.get('Modo_Gestao', '')
     df_novo = pd.DataFrame([item])
     df_final = pd.concat([df_novo, df_memoria], ignore_index=True)
     st.session_state['historico_full'] = df_final
@@ -1519,6 +1706,36 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         pressao_txt = "Neutro"
         if rh >= 3: pressao_txt = "CASA AMASSANDO"
         elif ra >= 3: pressao_txt = "VISITANTE AMASSANDO"
+
+        # ==============================================================================
+        # [MELHORIA V3] Calibração de VETOS + Odd Movement + BigData Global
+        # ==============================================================================
+        tipo_estrategia = classificar_tipo_estrategia(estrategia)
+        gols_atuais = calcular_gols_atuais(dados_jogo.get('placar', '0x0'))
+        forca_aprovacao_minima = (tipo_estrategia == 'OVER' and gols_atuais >= 2)
+        threshold_forcado = 65 if forca_aprovacao_minima else None
+        forca_veto = (tipo_estrategia == 'UNDER' and gols_atuais >= 2)
+
+        tendencia_odd = 'ESTÁVEL'
+        variacao_odd = 0.0
+        alerta_movimento = ''
+        contexto_bigdata_global = ''
+        try:
+            fid_local = dados_jogo.get('fid', dados_jogo.get('id', 0))
+            odd_local = float(dados_jogo.get('odd_atual', 1.50))
+            tendencia_odd, variacao_odd = rastrear_movimento_odd(fid_local, estrategia, odd_local)
+            if tendencia_odd == 'CAINDO FORTE':
+                alerta_movimento = f'\nALERTA DE ODD: Odd CAIU {abs(variacao_odd):.1f}% (Sharp Money).'
+            elif tendencia_odd == 'SUBINDO FORTE':
+                alerta_movimento = f'\nOPORTUNIDADE DE VALOR: Odd SUBIU {variacao_odd:.1f}% (Mercado pagando mais).'
+        except:
+            pass
+        try:
+            contexto_bigdata_global = carregar_contexto_global_firebase()
+        except:
+            contexto_bigdata_global = ''
+
+
         
         # Aviso para a IA se usamos estimativa
         aviso_ia = ""
@@ -1539,12 +1756,25 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         - Intensidade Calculada: {intensidade_jogo:.2f}/min ({status_intensidade}).
         - Chutes Totais: {chutes_totais} | No Gol: {total_chutes_gol}
         - Cenário: {quem_manda} | {pressao_txt}
+- Gols já marcados: {gols_atuais}
+- Tipo de Estratégia: {tipo_estrategia}
+MOVIMENTO DE ODD (últimos 5 min):
+- Tendência: {tendencia_odd}
+- Variação: {variacao_odd:+.1f}%
+{alerta_movimento}
         
-        📚 CONTEXTO HISTÓRICO (A VERDADE):
+        📊 CONTEXTO GLOBAL (BIG DATA):
+{contexto_bigdata_global}
+
+📚 CONTEXTO HISTÓRICO (A VERDADE):
         {extra_context}
         
         -----------------------------------------------------------
         🧠 INTELIGÊNCIA DE DECISÃO:
+0. **REGRA FUNDAMENTAL (NOVA):**
+- Se tipo é OVER e jogo já tem >= 2 gols -> APROVAÇÃO obrigatória (mínimo PADRÃO).
+- Se tipo é UNDER e jogo já tem >= 2 gols -> VETO obrigatório (inconsistência).
+- Não ignore o placar atual.
         
         1. **ESTRATÉGIA GOL RELÂMPAGO/BLITZ:**
            - Se a estratégia é OVER e tem chutes ({chutes_totais}), **IGNORE** se a intensidade parecer baixa. Foque nos Chutes. aprove como **PADRÃO** ou **DIAMANTE**.
@@ -1590,14 +1820,45 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         classe = r_json.get('classe', 'PADRAO').upper()
         prob_val = int(r_json.get('probabilidade', 70))
         motivo = r_json.get('motivo_tecnico', 'Análise baseada em KPIs.')
+        # ==============================================================================
+        # [MELHORIA V3] Aplicar proteções (anti-veto/anti-perda) + validação de odd
+        # ==============================================================================
+        try:
+            odd_atual = float(dados_jogo.get('odd_atual', 1.50))
+        except:
+            odd_atual = 1.50
+        odd_minima_necessaria = obter_odd_minima(estrategia)
+
+        if forca_veto:
+            classe = 'VETADO'
+            prob_val = 0
+            motivo = 'UNDER em jogo com {} gols (inconsistência lógica)'.format(gols_atuais)
+
+        if odd_atual < odd_minima_necessaria:
+            if not forca_aprovacao_minima:
+                classe = 'VETADO'
+                prob_val = 0
+                motivo = 'Odd {:.2f} abaixo do mínimo {:.2f}'.format(odd_atual, odd_minima_necessaria)
+            else:
+                motivo = str(motivo) + ' | AVISO: Odd baixa ({:.2f})'.format(odd_atual)
+
+        if forca_aprovacao_minima:
+            if threshold_forcado and prob_val < threshold_forcado:
+                prob_val = threshold_forcado
+            if classe in ['VETADO','ARRISCADO']:
+                classe = 'PADRÃO'
+            motivo = str(motivo) + ' | Ajustado (OVER com {} gols)'.format(gols_atuais)
+
         
         emoji = "✅"
         if "DIAMANTE" in classe or (prob_val >= 85): emoji = "💎"; classe = "DIAMANTE"
         elif "ARRISCADO" in classe: emoji = "⚠️"
-        # [MELHORIA V2] Threshold dinâmico de veto por tipo de estratégia
-        threshold_veto = 60
-        if ('Under' in estrategia) or ('Morno' in estrategia) or ('Arame' in estrategia):
-            threshold_veto = 50
+        # [MELHORIA V3] Threshold dinâmico por estratégia + odd
+        try:
+            odd_local = float(dados_jogo.get('odd_atual', 1.50))
+        except:
+            odd_local = 1.50
+        threshold_veto = calcular_threshold_dinamico(estrategia, odd_local)
         if "VETADO" in classe or prob_val < threshold_veto:
             emoji = "⛔"; classe = "VETADO"
 
@@ -1629,6 +1890,19 @@ def momentum(fid, sog_h, sog_a):
 
 # --- [RECUPERADO] FUNÇÃO PROCESSAR COMPLETA (COM BLITZ E LAY GOLEADA) ---
 def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
+    """
+    [PATCH SENSIBILIDADE V2] Função recalibrada para gerar mais sinais
+    
+    MUDANÇAS:
+    - Golden Bet: Requisitos reduzidos (rh>=2, bloq>=3)
+    - Porteira Aberta: Remove filtro duplo SOG
+    - Gol Relâmpago: Janela 15 min, 3 chutes
+    - Blitz: Remove bug do post_h
+    - Tiroteio: Janela 12-28 min, 6 chutes
+    - Lay Goleada: 12+ chutes (antes 16)
+    - Sniper Final: Inicia aos 75 min
+    - Arame Liso: 10+ chutes (antes 12)
+    """
     if not stats: return []
     try:
         stats_h = stats[0]['statistics']; stats_a = stats[1]['statistics']
@@ -1638,9 +1912,7 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         sh_a = get_v(stats_a, 'Total Shots'); sog_a = get_v(stats_a, 'Shots on Goal')
         ck_h = get_v(stats_h, 'Corner Kicks'); ck_a = get_v(stats_a, 'Corner Kicks')
         blk_h = get_v(stats_h, 'Blocked Shots'); blk_a = get_v(stats_a, 'Blocked Shots')
-        post_h = get_v(stats_h, 'Shots against goalbar') 
         
-        # DADOS PARA CARTÕES (AÇOUGUEIRO LIVE)
         faltas_h = get_v(stats_h, 'Fouls'); faltas_a = get_v(stats_a, 'Fouls')
         cards_h = get_v(stats_h, 'Yellow Cards') + get_v(stats_h, 'Red Cards')
         cards_a = get_v(stats_a, 'Yellow Cards') + get_v(stats_a, 'Red Cards')
@@ -1667,69 +1939,72 @@ def processar(j, stats, tempo, placar, rank_home=None, rank_away=None):
         SINAIS = []
         golden_bet_ativada = False
         
-        # --- ESTRATÉGIAS DE OVER (GOLS) ---
+        # ==============================================================================
+        # [AJUSTE SENSIBILIDADE V2] ESTRATÉGIAS RECALIBRADAS
+        # ==============================================================================
         
-        if 65 <= tempo <= 75:
-            pressao_real_h = (rh >= 3 and sog_h >= 5) 
-            pressao_real_a = (ra >= 3 and sog_a >= 5)
-            if (pressao_real_h or pressao_real_a) and (total_gols >= 1 or total_chutes >= 18):
-                if total_bloqueados >= 5: 
+        # --- 1. GOLDEN BET (AJUSTADO - Mais Fácil) ---
+        if 60 <= tempo <= 75:  # Janela aumentada: 60-75 (antes: 65-75)
+            pressao_real_h = (rh >= 2 and sog_h >= 3) or sh_h >= 12  # Reduzido
+            pressao_real_a = (ra >= 2 and sog_a >= 3) or sh_a >= 12  # Reduzido
+            if (pressao_real_h or pressao_real_a) and (total_gols >= 1 or total_chutes >= 15):  # Reduzido de 18
+                if total_bloqueados >= 3:  # Reduzido de 5 para 3
                     SINAIS.append({"tag": "💎 GOLDEN BET", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🛡️ {total_bloqueados} Bloqueios (Pressão Real)", "rh": rh, "ra": ra, "favorito": "GOLS"})
                     golden_bet_ativada = True
 
-        if not golden_bet_ativada and (70 <= tempo <= 75) and abs(gh - ga) <= 1:
-            if total_chutes_gol >= 5:
+        # --- 2. JANELA DE OURO (AJUSTADO) ---
+        if not golden_bet_ativada and (65 <= tempo <= 78) and abs(gh - ga) <= 1:  # Janela aumentada
+            if total_chutes_gol >= 4:  # Reduzido de 5
                 SINAIS.append({"tag": "💰 Janela de Ouro", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": f"🔥 {total_chutes_gol} Chutes no Gol", "rh": rh, "ra": ra, "favorito": "GOLS"})
         
-        # --- ESTRATÉGIAS DE UNDER (SEM GOLS) ---
-
-        # 1. JOGO MORNO (Clássico)
+        # --- 3. JOGO MORNO (MANTIDO - Já funciona bem) ---
         dominio_claro = (posse_h > 60 or posse_a > 60) or (sog_h > 3 or sog_a > 3)
         if 55 <= tempo <= 75 and total_chutes <= 10 and (sog_h + sog_a) <= 2 and gh == ga and not dominio_claro:
             SINAIS.append({"tag": "❄️ Jogo Morno", "ordem": f"👉 <b>FAZER:</b> Under Gols\n✅ Aposta: <b>Menos de {total_gols + 0.5} Gols</b>", "stats": "Jogo Travado", "rh": rh, "ra": ra, "favorito": "UNDER"})
 
-        # 2. ARAME LISO (NOVO!) - Muita ação, pouca pontaria
-        # Se tem muitos chutes, mas poucos no gol, a tendência é NÃO sair gol ou sair pouco.
-        if 60 <= tempo <= 80 and total_chutes >= 12 and (sog_h + sog_a) <= 3 and total_gols <= 1:
+        # --- 4. ARAME LISO (AJUSTADO) ---
+        if 55 <= tempo <= 80 and total_chutes >= 10 and (sog_h + sog_a) <= 3 and total_gols <= 1:  # Reduzido de 12
              SINAIS.append({"tag": "🧊 Arame Liso", "ordem": f"👉 <b>FAZER:</b> Under Gols\n⚠️ <i>Muita finalização pra fora.</i>\n✅ Aposta: <b>Menos de {total_gols + 1.5} Gols</b>", "stats": f"{total_chutes} Chutes (Só {sog_h+sog_a} no gol)", "rh": 0, "ra": 0, "favorito": "UNDER"})
 
-        # --- OUTRAS ---
+        # --- 5. ESTRATÉGIA DO VOVÔ (MANTIDO - Já funciona bem) ---
         if 75 <= tempo <= 85 and total_chutes < 18:
             diff = gh - ga
             if (diff == 1 and ra < 1 and posse_h >= 45) or (diff == -1 and rh < 1 and posse_a >= 45):
                  SINAIS.append({"tag": "👴 Estratégia do Vovô", "ordem": "👉 <b>FAZER:</b> Back Favorito (Segurar)\n✅ Aposta: <b>Vitória Seca</b>", "stats": "Controle Total", "rh": rh, "ra": ra, "favorito": "FAVORITO"})
 
-        if tempo <= 30 and total_gols >= 2: 
-            if sog_h >= 1 and sog_a >= 1:
+        # --- 6. PORTEIRA ABERTA (AJUSTADO - Remove filtro duplo SOG) ---
+        if tempo <= 35 and total_gols >= 2:  # Janela aumentada: 35 min (antes: 30)
+            if total_chutes_gol >= 3:  # Total geral ao invés de exigir ambos
                 SINAIS.append({"tag": "🟣 Porteira Aberta", "ordem": gerar_ordem_gol(total_gols), "stats": "Jogo Aberto", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-        if total_gols == 0 and (tempo <= 12 and total_chutes >= 4):
+        # --- 7. GOL RELÂMPAGO (AJUSTADO - Mais tolerante) ---
+        if total_gols == 0 and tempo <= 15 and total_chutes >= 3:  # Janela: 15 min, Chutes: 3 (antes: 12 min, 4 chutes)
             SINAIS.append({"tag": "⚡ Gol Relâmpago", "ordem": gerar_ordem_gol(0, "HT"), "stats": "Início Intenso", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
+        # --- 8. BLITZ (AJUSTADO - Remove filtro post_h + Reduz requisitos) ---
         if tempo <= 60:
-            if (gh <= ga and (rh >= 3 or sh_h >= 10)) or (ga <= gh and (ra >= 3 or sh_a >= 10)):
-                if post_h == 0: 
-                    tag_blitz = "🟢 Blitz Casa" if gh <= ga else "🟢 Blitz Visitante"
-                    SINAIS.append({"tag": tag_blitz, "ordem": gerar_ordem_gol(total_gols), "stats": "Pressão Limpa", "rh": rh, "ra": ra, "favorito": "GOLS"})
+            if (gh <= ga and (rh >= 2 or sh_h >= 8)) or (ga <= gh and (ra >= 2 or sh_a >= 8)):  # Reduzido
+                tag_blitz = "🟢 Blitz Casa" if gh <= ga else "🟢 Blitz Visitante"
+                SINAIS.append({"tag": tag_blitz, "ordem": gerar_ordem_gol(total_gols), "stats": "Pressão Limpa", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-        if 15 <= tempo <= 25 and total_chutes >= 8 and (sog_h + sog_a) >= 4:
+        # --- 9. TIROTEIO ELITE (AJUSTADO) ---
+        if 12 <= tempo <= 28 and total_chutes >= 6 and (sog_h + sog_a) >= 3:  # Janela: 12-28, Chutes: 6, SOG: 3
              SINAIS.append({"tag": "🏹 Tiroteio Elite", "ordem": gerar_ordem_gol(total_gols), "stats": "Muitos Chutes", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-        if 60 <= tempo <= 88 and abs(gh - ga) >= 3 and (total_chutes >= 16):
-             time_perdendo_chuta = (gh < ga and sog_h >= 2) or (ga < gh and sog_a >= 2)
+        # --- 10. LAY GOLEADA (AJUSTADO) ---
+        if 55 <= tempo <= 90 and abs(gh - ga) >= 3 and total_chutes >= 12:  # Reduzido de 16
+             time_perdendo_chuta = (gh < ga and sog_h >= 1) or (ga < gh and sog_a >= 1)  # Reduzido de 2
              if time_perdendo_chuta:
                  SINAIS.append({"tag": "🔫 Lay Goleada", "ordem": gerar_ordem_gol(total_gols, "Limite"), "stats": "Goleada Viva", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
-        if tempo >= 80 and abs(gh - ga) <= 1:
-            if total_fora <= 6 and ((rh >= 5) or (total_chutes_gol >= 6) or (ra >= 5)): 
+        # --- 11. SNIPER FINAL (AJUSTADO) ---
+        if tempo >= 75 and abs(gh - ga) <= 1:  # Início: 75 min (antes: 80)
+            if total_fora <= 8 and ((rh >= 4) or (total_chutes_gol >= 5) or (ra >= 4)):  # Mais tolerante
                 SINAIS.append({"tag": "💎 Sniper Final", "ordem": "👉 <b>FAZER:</b> Over Gol Limite\n✅ Busque o Gol no Final", "stats": "Pontaria Ajustada", "rh": rh, "ra": ra, "favorito": "GOLS"})
 
         return SINAIS 
-    except: return []
-
-# ==============================================================================
-# 5. FUNÇÕES DE SUPORTE, AUTOMAÇÃO E INTERFACE (O CORPO)
-# ==============================================================================
+    except: 
+        return []
 
 def deve_buscar_stats(tempo, gh, ga, status):
     if status == 'HT': return True
@@ -1986,38 +2261,144 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
         st.session_state['multiplas_pendentes'].append(multipla_obj)
 
 # --- NOVAS FUNÇÕES DO LABORATÓRIO E BI (MANTIDAS DO NOVO) ---
-def analisar_bi_com_ia():
-    if not IA_ATIVADA: return "IA Offline."
-    df = st.session_state.get('historico_full', pd.DataFrame())
-    if df.empty: return "Sem dados."
-    # [MELHORIA V2] Resumo rico: desempenho por Estratégia + Liga
-    df_bi = df.copy()
-    df_bi = df_bi[df_bi['Resultado'].isin(['✅ GREEN','❌ RED'])].copy()
-    if df_bi.empty:
-        return 'Sem dados finalizados.'
-    pivot = df_bi.groupby(['Estrategia','Liga'])['Resultado'].apply(lambda x: pd.Series({'WR': (x.str.contains('GREEN').sum()/len(x)*100) if len(x)>0 else 0, 'Total': len(x)})).unstack()
-    resumo_rico = pivot.to_string()
-    prompt = f"""ATUE COMO ANALISTA QUANT.
-Analise o desempenho por Estratégia + Liga:
-{resumo_rico}
 
-Identifique:
-1) Estratégia+Liga com WR > 70% e bom volume
-2) Ligas com prejuízo consistente
-3) Combinações perfeitas para repetir
-Seja objetivo e acionável."""
+def analisar_bi_com_ia():
+    """
+    [MELHORIA #2 V2] Análise Profunda de BI com IA
+    - Analisa performance por Estratégia + Liga
+    - Identifica Golden Combos e Red Zones
+    - Gera recomendações personalizadas
+    """
+    if not IA_ATIVADA:
+        return "IA Offline. Não é possível gerar análise."
+
+    df = st.session_state.get('historico_full', pd.DataFrame())
+    if df is None or df.empty:
+        return "Sem dados históricos para análise."
+
     try:
-        response = model_ia.generate_content(prompt)
+        df_analise = df.copy()
+        df_analise = df_analise[df_analise['Resultado'].isin(['✅ GREEN', '❌ RED'])].copy()
+        if len(df_analise) < 10:
+            return "Amostra muito pequena (mínimo 10 apostas). Continue operando."
+
+        total_apostas = len(df_analise)
+        greens = df_analise['Resultado'].str.contains('GREEN', na=False).sum()
+        reds = df_analise['Resultado'].str.contains('RED', na=False).sum()
+        winrate_global = (greens / total_apostas) * 100
+
+        pivot_strat = df_analise.groupby('Estrategia')['Resultado'].apply(
+            lambda x: pd.Series({
+                'Total': len(x),
+                'Greens': x.str.contains('GREEN', na=False).sum(),
+                'Reds': x.str.contains('RED', na=False).sum(),
+                'WR': (x.str.contains('GREEN', na=False).sum() / len(x)) * 100
+            })
+        ).unstack()
+        pivot_strat = pivot_strat[pivot_strat['Total'] >= 3]
+
+        pivot_liga = df_analise.groupby('Liga')['Resultado'].apply(
+            lambda x: pd.Series({
+                'Total': len(x),
+                'Greens': x.str.contains('GREEN', na=False).sum(),
+                'Reds': x.str.contains('RED', na=False).sum(),
+                'WR': (x.str.contains('GREEN', na=False).sum() / len(x)) * 100
+            })
+        ).unstack()
+        pivot_liga = pivot_liga[pivot_liga['Total'] >= 3]
+
+        pivot_combo = df_analise.groupby(['Estrategia', 'Liga'])['Resultado'].apply(
+            lambda x: pd.Series({
+                'Total': len(x),
+                'WR': (x.str.contains('GREEN', na=False).sum() / len(x)) * 100
+            })
+        ).unstack()
+        pivot_combo = pivot_combo[pivot_combo['Total'] >= 3]
+
+        golden_combos = pivot_combo[pivot_combo['WR'] >= 80].sort_values('WR', ascending=False)
+        red_zones = pivot_combo[pivot_combo['WR'] < 40].sort_values('WR', ascending=True)
+
+        top_5_estrategias = pivot_strat.nlargest(5, 'WR')[['Total', 'WR']].to_string() if not pivot_strat.empty else 'Sem dados.'
+        worst_3_estrategias = pivot_strat.nsmallest(3, 'WR')[['Total', 'Reds', 'WR']].to_string() if not pivot_strat.empty else 'Sem dados.'
+        top_5_ligas = pivot_liga.nlargest(5, 'WR')[['Total', 'WR']].to_string() if not pivot_liga.empty else 'Sem dados.'
+        worst_3_ligas = pivot_liga.nsmallest(3, 'WR')[['Total', 'Reds', 'WR']].to_string() if not pivot_liga.empty else 'Sem dados.'
+
+        golden_txt = golden_combos.head(5).to_string() if not golden_combos.empty else "Nenhum combo com WR >= 80% ainda."
+        red_txt = red_zones.head(5).to_string() if not red_zones.empty else "Nenhuma zona crítica detectada."
+
+        txt_tendencia = "Sem dados dos últimos 7 dias."
+        try:
+            df_analise['Data_DT'] = pd.to_datetime(df_analise['Data'], errors='coerce')
+            hoje = pd.to_datetime(get_time_br().date())
+            df_7d = df_analise[df_analise['Data_DT'] >= (hoje - timedelta(days=7))]
+            if not df_7d.empty:
+                wr_7d = (df_7d['Resultado'].str.contains('GREEN', na=False).sum() / len(df_7d)) * 100
+                tendencia = "📈 SUBINDO" if wr_7d > winrate_global else "📉 CAINDO" if wr_7d < winrate_global else "➡️ ESTÁVEL"
+                txt_tendencia = f"Winrate 7 dias: {wr_7d:.1f}% (Global: {winrate_global:.1f}%) - {tendencia}"
+        except:
+            txt_tendencia = "Erro ao calcular tendência."
+
+        prompt = f"""ATUE COMO UM ANALISTA QUANT SÊNIOR (Hedge Fund).
+Você tem acesso ao desempenho completo do usuário. Seja direto e acionável.
+
+📊 DADOS GLOBAIS:
+- Total de Apostas: {total_apostas}
+- Greens: {greens} | Reds: {reds}
+- Winrate Global: {winrate_global:.1f}%
+- {txt_tendencia}
+
+🏆 TOP 5 ESTRATÉGIAS (Melhores):
+{top_5_estrategias}
+
+💀 WORST 3 ESTRATÉGIAS (Piores):
+{worst_3_estrategias}
+
+🌍 TOP 5 LIGAS (Melhores):
+{top_5_ligas}
+
+⚠️ WORST 3 LIGAS (Piores):
+{worst_3_ligas}
+
+💎 GOLDEN COMBOS (WR >= 80%):
+{golden_txt}
+
+🚨 RED ZONES (WR < 40%):
+{red_txt}
+
+SUA MISSÃO (4 BLOCOS):
+1) DIAGNÓSTICO (2 linhas)
+2) GOLDEN COMBOS (repetir)
+3) RED ZONES (parar)
+4) AÇÃO IMEDIATA (1 mudança para hoje)
+
+Seja curto e direto. Máximo 250 palavras.
+"""
+
+        response = model_ia.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(temperature=0.2, max_output_tokens=500)
+        )
         st.session_state['gemini_usage']['used'] += 1
         analise_txt = response.text
-        # [NOVO] Salva análises BI em memória
+
         try:
-            if 'analises_ia_bi' not in st.session_state: st.session_state['analises_ia_bi'] = []
-            st.session_state['analises_ia_bi'].append({'data': get_time_br().strftime('%Y-%m-%d %H:%M'), 'analise': analise_txt})
-        except:
-            pass
+            if 'analises_ia_bi' not in st.session_state:
+                st.session_state['analises_ia_bi'] = []
+            st.session_state['analises_ia_bi'].append({
+                'data': get_time_br().strftime('%Y-%m-%d %H:%M'),
+                'analise': analise_txt,
+                'winrate_global': winrate_global,
+                'total_apostas': total_apostas
+            })
+            if len(st.session_state['analises_ia_bi']) > 10:
+                st.session_state['analises_ia_bi'] = st.session_state['analises_ia_bi'][-10:]
+        except Exception as e:
+            print(f"Erro ao salvar análise: {e}")
+
         return analise_txt
-    except: return "Erro IA."
+
+    except Exception as e:
+        return f"Erro ao gerar análise: {str(e)}"
 
 def criar_estrategia_nova_ia(foco_usuario):
     if not IA_ATIVADA or not db_firestore: return "Offline."
@@ -2188,15 +2569,21 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
                     else: # Estava empatado (Back Empate?)
                         if gh == ga: res_final = "✅ GREEN"
                         else: res_final = "❌ RED"
-            
+
             # 2. ESTRATÉGIAS DE UNDER (Morno, Arame Liso)
             elif "Under" in strat or "Morno" in strat or "Arame" in strat:
-                # Se saiu gol a mais do que a linha de segurança -> RED IMEDIATO
-                # Ex: Sinal 1x0 (Under 1.5). Se virar 1x1 (2 gols) -> Red.
-                if (gh + ga) > (ph + pa + 1): # Margem de tolerância estourada
-                     res_final = "❌ RED"
-                elif st_short in ['FT', 'AET', 'PEN', 'ABD']:
-                     res_final = "✅ GREEN"
+                # Morno: NÃO pode sair gol. Se saiu qualquer gol após o sinal => RED.
+                if "Morno" in strat:
+                    if (gh + ga) > (ph + pa):
+                        res_final = "❌ RED"
+                    elif st_short in ['FT', 'AET', 'PEN', 'ABD']:
+                        res_final = "✅ GREEN"
+                else:
+                    # Under padrão: tolera no máximo +1 gol
+                    if (gh + ga) > (ph + pa + 1):
+                        res_final = "❌ RED"
+                    elif st_short in ['FT', 'AET', 'PEN', 'ABD']:
+                        res_final = "✅ GREEN"
 
             # 3. ESTRATÉGIAS DE OVER (Gols, Blitz, Sniper, etc) - Padrão
             else:
@@ -2208,6 +2595,57 @@ def check_green_red_hibrido(jogos_live, token, chats, api_key):
 
             # --- ENVIO E SALVAMENTO ---
             if res_final:
+
+                # [MELHORIA] Atualiza banca automaticamente após GREEN/RED (anti-duplicação)
+                try:
+                    if 'banca_updates' not in st.session_state:
+                        st.session_state['banca_updates'] = set()
+                    key_apura = gerar_chave_universal(fid, strat, "GREEN" if "GREEN" in res_final else "RED")
+                    if key_apura not in st.session_state['banca_updates']:
+                        st.session_state['banca_updates'].add(key_apura)
+                
+                        if 'banca_atual' not in st.session_state:
+                            st.session_state['banca_atual'] = float(st.session_state.get('banca_inicial', 1000.0))
+                        saldo = float(st.session_state.get('banca_atual', 1000.0))
+                
+                        # Stake (prioriza Stake_Recomendado_RS, fallback stake_padrao)
+                        stake_val = None
+                        try:
+                            stake_str = str(s.get('Stake_Recomendado_RS', '')).replace('R$','').strip()
+                            stake_str = stake_str.replace('.', '').replace(',', '.')
+                            stake_val = float(stake_str) if stake_str else None
+                        except:
+                            stake_val = None
+                        if not stake_val or stake_val <= 0:
+                            stake_val = float(st.session_state.get('stake_padrao', 10.0))
+                
+                        odd_local = 1.50
+                        try:
+                            odd_local = float(str(s.get('Odd','1.50')).replace(',', '.'))
+                        except:
+                            odd_local = 1.50
+                
+                        if 'GREEN' in res_final:
+                            saldo += stake_val * (odd_local - 1)
+                        else:
+                            saldo -= stake_val
+                
+                        st.session_state['banca_atual'] = float(saldo)
+                
+                        if 'historico_banca' not in st.session_state:
+                            st.session_state['historico_banca'] = []
+                        st.session_state['historico_banca'].append({
+                            'data': get_time_br().strftime('%Y-%m-%d %H:%M'),
+                            'saldo': float(saldo),
+                            'resultado': res_final,
+                            'stake': float(stake_val),
+                            'odd': float(odd_local),
+                            'jogo': s.get('Jogo',''),
+                            'estrategia': strat,
+                            'fid': str(fid)
+                        })
+                except:
+                    pass
                 s['Resultado'] = res_final; updates_buffer.append(s)
                 
                 if deve_enviar:
@@ -2522,9 +2960,54 @@ with st.sidebar:
                     st.error("Firebase não conectado.")
 
     with st.expander("💰 Gestão de Banca", expanded=False):
-        stake_padrao = st.number_input("Valor da Aposta (R$)", value=st.session_state.get('stake_padrao', 10.0), step=5.0)
-        banca_inicial = st.number_input("Banca Inicial (R$)", value=st.session_state.get('banca_inicial', 100.0), step=50.0)
-        st.session_state['stake_padrao'] = stake_padrao; st.session_state['banca_inicial'] = banca_inicial
+        st.markdown("### Configurações")
+
+        # Campos originais (mantidos)
+        stake_padrao = st.number_input("Valor da Aposta (R$)", value=float(st.session_state.get('stake_padrao', 10.0)), step=5.0)
+        banca_inicial = st.number_input("Banca Inicial (R$)", value=float(st.session_state.get('banca_inicial', 100.0)), step=50.0)
+        st.session_state['stake_padrao'] = float(stake_padrao)
+        st.session_state['banca_inicial'] = float(banca_inicial)
+
+        # Defaults
+        if 'banca_atual' not in st.session_state:
+            st.session_state['banca_atual'] = float(st.session_state.get('banca_inicial', 1000.0))
+        if 'modo_gestao_banca' not in st.session_state:
+            st.session_state['modo_gestao_banca'] = 'fracionario'
+
+        modo_gestao = st.radio(
+            "Modo de Gestão:",
+            ["Conservador (Flat 1-2%)", "Kelly Fracionário (Recomendado)", "Kelly Completo (Agressivo)"],
+            index=1,
+            help="""• Conservador: Sempre 1-2% (seguro mas cresce devagar)
+• Kelly Fracionário: Metade do Kelly (equilibrado)
+• Kelly Completo: Kelly puro (agressivo, maior risco)"""
+        )
+
+        if "Conservador" in modo_gestao:
+            modo_codigo = "conservador"
+        elif "Fracionário" in modo_gestao:
+            modo_codigo = "fracionario"
+        else:
+            modo_codigo = "completo"
+        st.session_state['modo_gestao_banca'] = modo_codigo
+
+        banca_atual = st.number_input(
+            "Banca Atual (R$)",
+            value=float(st.session_state.get('banca_atual', banca_inicial)),
+            step=50.0,
+            help="Atualizada automaticamente após cada aposta (GREEN/RED)"
+        )
+        st.session_state['banca_atual'] = float(banca_atual)
+
+        st.markdown('---')
+        st.markdown('### 🧮 Simulador de Stake')
+        col_sim1, col_sim2 = st.columns(2)
+        prob_sim = col_sim1.slider('Probabilidade (%)', 50, 100, 75)
+        odd_sim = col_sim2.number_input('Odd', 1.20, 5.00, 1.80, 0.10)
+
+        stake_simulado = calcular_stake_recomendado(banca_atual, prob_sim, odd_sim, modo_codigo)
+        st.markdown(f"**Resultado:** - Stake: **{stake_simulado['porcentagem']}%** = **R$ {stake_simulado['valor']:.2f}** | Retorno Green: **R$ {(stake_simulado['valor'] * (odd_sim - 1)):.2f}**")
+
         
     with st.expander("📶 Consumo API", expanded=False):
         verificar_reset_diario()
@@ -2741,14 +3224,16 @@ if st.session_state.ROBO_LIGADO:
                         titulo_sinal = f"SINAL {s['tag'].upper()}"
                         texto_acao_original = s['ordem']
                         bloco_aviso_odd = ""
-
-                        if odd_val > 0 and odd_val < ODD_CRITICA_LIVE:
+                        # [MELHORIA V3] Odd mínima por estratégia
+                        odd_min_estrat = obter_odd_minima(s['tag'])
+                        odd_crit_estrat = max(1.10, odd_min_estrat - 0.20)
+                        if odd_val > 0 and odd_val < odd_crit_estrat:
                             emoji_sinal = "⛔"
                             bloco_aviso_odd = f"⚠️ <b>ALERTA: ODD BAIXA (@{odd_val:.2f})</b>\n⏳ <i>Não entre agora. Aguarde ou ignore.</i>\n────────────────\n"
-                        elif odd_val >= ODD_CRITICA_LIVE and odd_val < ODD_MINIMA_LIVE:
+                        elif odd_val >= odd_crit_estrat and odd_val < odd_min_estrat:
                             emoji_sinal = "⏳"
-                            bloco_aviso_odd = f"👀 <b>AGUARDE VALORIZAR (@{odd_val:.2f})</b>\n🎯 <i>Meta: Entrar acima de @{ODD_MINIMA_LIVE:.2f}</i>\n────────────────\n"
-                        elif odd_val >= ODD_MINIMA_LIVE:
+                            bloco_aviso_odd = f"👀 <b>AGUARDE VALORIZAR (@{odd_val:.2f})</b>\n🎯 <i>Meta: Entrar acima de @{odd_min_estrat:.2f}</i>\n────────────────\n"
+                        elif odd_val >= odd_min_estrat:
                             emoji_sinal = "✅"
                             bloco_aviso_odd = f"🔥 <b>ODD DE VALOR: @{odd_val:.2f}</b>\n────────────────\n"
 
@@ -2762,7 +3247,7 @@ if st.session_state.ROBO_LIGADO:
                         if IA_ATIVADA:
                             try:
                                 time.sleep(0.2) 
-                                dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'"}
+                                dados_ia = {'jogo': f"{home} x {away}", 'placar': placar, 'tempo': f"{tempo}'", 'fid': fid, 'odd_atual': odd_val}
                                 time_fav_ia = s.get('favorito', '')
                                 opiniao_txt, prob_txt = consultar_ia_gemini(dados_ia, s['tag'], stats, rh, ra, extra_context=extra_ctx, time_favoravel=time_fav_ia)
                                 if "aprovado" in opiniao_txt.lower() or "diamante" in opiniao_txt.lower(): 
@@ -2956,6 +3441,19 @@ if st.session_state.ROBO_LIGADO:
                     fig_fin.update_layout(xaxis_title="Entradas", yaxis_title="Saldo (R$)", template="plotly_dark")
                     fig_fin.add_hline(y=banca_inicial, line_dash="dot", annotation_text="Início", line_color="gray")
                     st.plotly_chart(fig_fin, use_container_width=True)
+
+            # [MELHORIA] Evolução da Banca (Tempo Real)
+            if 'historico_banca' in st.session_state and st.session_state['historico_banca']:
+                st.markdown('### 📈 Evolução da Banca (Tempo Real)')
+                df_banca = pd.DataFrame(st.session_state['historico_banca'])
+                try:
+                    fig_banca = px.line(df_banca, y='saldo', title='Crescimento da Banca (Gestão Dinâmica)', labels={'index':'Apostas', 'saldo':'Saldo (R$)'})
+                    fig_banca.update_layout(template='plotly_dark')
+                    banca_ini_ref = float(st.session_state.get('banca_inicial', df_banca['saldo'].iloc[0]))
+                    fig_banca.add_hline(y=banca_ini_ref, line_dash='dot', annotation_text='Início', line_color='gray')
+                    st.plotly_chart(fig_banca, use_container_width=True)
+                except:
+                    pass
                 else: st.info("Aguardando fechamento de sinais.")
             else: st.info("Sem dados históricos.")
 
