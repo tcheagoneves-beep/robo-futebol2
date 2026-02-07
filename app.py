@@ -2336,6 +2336,19 @@ if st.session_state.ROBO_LIGADO:
             api_error = bool(res.get('errors'))
             if api_error and "errors" in res: st.error(f"Detalhe do Erro: {res['errors']}")
         except Exception as e: jogos_live = []; api_error = True; st.error(f"Erro de Conexão: {e}")
+# ==============================================================================
+        # [CORREÇÃO CRÍTICA] BAIXAR ESTATÍSTICAS DOS JOGOS (CHUTES, CANTOS, ETC)
+        # ==============================================================================
+        if not api_error and jogos_live:
+            # Seleciona apenas jogos que estão rolando (1º tempo, 2º tempo, Intervalo)
+            jogos_para_baixar = [j for j in jogos_live if j['fixture']['status']['short'] in ['1H', '2H', 'HT', 'ET']]
+            
+            if jogos_para_baixar:
+                # Baixa as stats em paralelo (rápido) e salva na memória do robô
+                stats_novos = atualizar_stats_em_paralelo(jogos_para_baixar, safe_api)
+                for fid_stat, dados_stat in stats_novos.items():
+                    st.session_state[f"st_{fid_stat}"] = dados_stat
+        # ==============================================================================
 
         if not api_error: 
             # 1. Rotinas Padrão
@@ -2949,3 +2962,4 @@ else:
     with placeholder_root.container():
         st.title("❄️ Neves Analytics")
         st.info("💡 Robô em espera. Configure na lateral.")
+
