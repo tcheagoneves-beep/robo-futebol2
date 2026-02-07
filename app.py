@@ -51,7 +51,7 @@ st.markdown("""
 # 2. INICIALIZAÇÃO DE VARIÁVEIS E CONSTANTES
 # ==============================================================================
 # --- Constantes de Valor para o Semáforo ---
-ODD_MINIMA_LIVE = 1.60  # Meta de valor
+ODD_MINIMA_LIVE = 1.60  # Meta de valor
 ODD_CRITICA_LIVE = 1.30 # Abaixo disso é perigo
 # -------------------------------------------
 
