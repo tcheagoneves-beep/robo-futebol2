@@ -819,6 +819,45 @@ def carregar_contexto_global_firebase():
         return f"BIG DATA (Base Massiva {stats_gerais['total']} jogos): Média de Gols {media_gols:.2f} | Taxa Over 0.5 Global: {pct_over05:.1f}%."
     except Exception as e: return f"Erro Firebase: {e}"
 
+
+# [MELHORIA] Anti-correlação para Múltiplas: evita jogos da mesma liga e/ou com horário muito próximo
+def filtrar_multiplas_nao_correlacionadas(itens, janela_min=90):
+    """Remove itens correlacionados (mesma liga ou kickoff dentro da janela_min).
+    Funciona com lista de dicts contendo (fid, league_id, kickoff) ou (fid) usando st.session_state['multipla_meta'].
+    Mantém a ordem original (prioriza o que a IA escolheu primeiro).
+    """
+    try:
+        meta_global = st.session_state.get('multipla_meta', {}) or {}
+        selecionados = []
+        for it in (itens or []):
+            fid = str(it.get('fid', ''))
+            lid = it.get('league_id', None)
+            ko  = it.get('kickoff', None)
+            if (lid is None or ko is None) and fid in meta_global:
+                mg = meta_global.get(fid, {})
+                lid = lid if lid is not None else mg.get('league_id')
+                ko  = ko  if ko  is not None else mg.get('kickoff')
+            correlacionado = False
+            for s in selecionados:
+                fid_s = str(s.get('fid', ''))
+                lid_s = s.get('league_id', None)
+                ko_s  = s.get('kickoff', None)
+                if (lid_s is None or ko_s is None) and fid_s in meta_global:
+                    ms = meta_global.get(fid_s, {})
+                    lid_s = lid_s if lid_s is not None else ms.get('league_id')
+                    ko_s  = ko_s  if ko_s  is not None else ms.get('kickoff')
+                if lid is not None and lid_s is not None and str(lid) == str(lid_s):
+                    correlacionado = True; break
+                try:
+                    if ko and ko_s and abs((ko - ko_s).total_seconds()) <= janela_min * 60:
+                        correlacionado = True; break
+                except:
+                    pass
+            if not correlacionado:
+                selecionados.append(it)
+        return selecionados
+    except:
+        return itens
 def gerar_multipla_matinal_ia(api_key):
     if not IA_ATIVADA: return None, []
     hoje = get_time_br().strftime('%Y-%m-%d')
@@ -835,6 +874,8 @@ def gerar_multipla_matinal_ia(api_key):
         
         lista_jogos_txt = ""
         mapa_jogos = {}
+    # [MELHORIA] Metadados para filtro de correlação (liga/horário)
+    meta_local = {}
         
         count_validos = 0
         random.shuffle(jogos_candidatos)
@@ -864,6 +905,16 @@ def gerar_multipla_matinal_ia(api_key):
                 a_mic = stats['away']['micro']
                 
                 mapa_jogos[fid] = f"{home} x {away}"
+            # [MELHORIA] Guarda liga e kickoff para evitar correlação em múltiplas
+            try:
+                dt_iso = j['fixture']['date']
+                try:
+                    kickoff = datetime.fromisoformat(dt_iso.replace('Z', '+00:00'))
+                except:
+                    kickoff = None
+                meta_local[str(fid)] = {'league_id': j['league'].get('id'), 'kickoff': kickoff, 'name': f"{home} x {away}"}
+            except:
+                pass
                 lista_jogos_txt += f"""
                 - ID {fid}: {home} x {away} ({j['league']['name']})
                   Odd: {odd_val} ({odd_nome})
@@ -890,6 +941,8 @@ def gerar_multipla_matinal_ia(api_key):
         """
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
+        # [MELHORIA] Disponibiliza metadados para validação de correlação na etapa de envio
+        st.session_state['multipla_meta'] = meta_local
         return json.loads(response.text), mapa_jogos
 
     except Exception as e: return None, []
@@ -1383,6 +1436,10 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         if atq_perigo_total == 0 and chutes_totais > 0:
             # Estimativa: 1 chute equivale a aprox 5 a 7 ataques perigosos em termos de métrica
             atq_perigo_total = int(chutes_totais * 6)
+            # [MELHORIA] Ajuste conservador: evita inflar 'Ataques Perigosos' estimados
+            # Mantemos a linha original acima para rastreabilidade, mas recalculamos com fator mais realista (x3).
+            atq_perigo_total = int(chutes_totais * 3)
+            aviso_ia = "(DADOS ESTIMADOS - Ataques Perigosos ausentes. Intensidade recalculada com fator conservador x3. Confie mais nos Chutes.)"
             usou_estimativa = True
 
         # --- 2. ENGENHARIA DE DADOS (KPIs) ---
@@ -1667,6 +1724,11 @@ def enviar_multipla_matinal(token, chat_ids, api_key):
     dados_json, mapa_nomes = gerar_multipla_matinal_ia(api_key)
     if not dados_json or "jogos" not in dados_json: return
     jogos = dados_json['jogos']
+    # [MELHORIA] Anti-correlação: remove jogos da mesma liga/horário para reduzir risco oculto
+    jogos = filtrar_multiplas_nao_correlacionadas(jogos, janela_min=90)
+    # Se sobrar menos de 2 jogos após o filtro, não força múltipla
+    if len(jogos) < 2:
+        return
     
     raw_prob = str(dados_json.get('probabilidade_combinada', '90'))
     if "alta" in raw_prob.lower(): prob = "90"
@@ -1745,8 +1807,22 @@ def verificar_multipla_quebra_empate(jogos_live, token, chat_ids):
             chutes_total = gv(s1, 'Total Shots') + gv(s2, 'Total Shots')
             if chutes_total >= (14 if (gh+ga)==0 else 18):
                 candidatos.append({'fid': str(fid), 'jogo': f"{j['teams']['home']['name']} x {j['teams']['away']['name']}", 'placar': f"{gh}x{ga}", 'stats': f"{chutes_total} Chutes", 'tempo': tempo, 'total_gols_ref': (gh+ga)})
+                # [MELHORIA] Metadados para anti-correlação (liga/horário)
+                try:
+                    candidatos[-1]['league_id'] = j.get('league', {}).get('id')
+                    dt_iso = j.get('fixture', {}).get('date')
+                    try:
+                        candidatos[-1]['kickoff'] = datetime.fromisoformat(str(dt_iso).replace('Z', '+00:00')) if dt_iso else None
+                    except:
+                        candidatos[-1]['kickoff'] = None
+                except:
+                    pass
         except: pass
     if len(candidatos) >= 2:
+        # [MELHORIA] Anti-correlação: remove jogos da mesma liga/horário antes de montar a dupla
+        candidatos = filtrar_multiplas_nao_correlacionadas(candidatos, janela_min=90)
+        if len(candidatos) < 2:
+            return
         dupla = candidatos[:2]
         id_dupla = f"LIVE_{dupla[0]['fid']}_{dupla[1]['fid']}"
         if id_dupla in st.session_state['multiplas_live_cache']: return
@@ -2342,6 +2418,8 @@ if st.session_state.ROBO_LIGADO:
         if not api_error and jogos_live:
             # Seleciona apenas jogos que estão rolando (1º tempo, 2º tempo, Intervalo)
             jogos_para_baixar = [j for j in jogos_live if j['fixture']['status']['short'] in ['1H', '2H', 'HT', 'ET']]
+    # [MELHORIA] Cache de estatísticas: baixa apenas jogos SEM stats em memória
+    jogos_para_baixar = [j for j in jogos_para_baixar if f"st_{j['fixture']['id']}" not in st.session_state]
             
             if jogos_para_baixar:
                 # Baixa as stats em paralelo (rápido) e salva na memória do robô
@@ -2899,6 +2977,32 @@ if st.session_state.ROBO_LIGADO:
                             txt_bigdata_resumo = f"Erro ao calcular dados: {e}"
 
                     # --- 2. CONTEXTO DO PROMPT (A ORDEM PARA A IA) ---
+            # [MELHORIA] Snapshot de jogos AO VIVO para o Chat IA (se o robô estiver monitorando)
+            resumo_live = ''
+            try:
+                live_list = []
+                if 'jogos_live' in locals() and jogos_live:
+                    for lj in jogos_live[:50]:
+                        fid_l = lj['fixture']['id']
+                        st_l = st.session_state.get(f"st_{fid_l}", [])
+                        if not st_l: continue
+                        try:
+                            s1 = st_l[0]['statistics']; s2 = st_l[1]['statistics']
+                            def gv(l, t):
+                                return next((x['value'] for x in l if x['type']==t), 0) or 0
+                            sog = gv(s1,'Shots on Goal') + gv(s2,'Shots on Goal')
+                            sh  = gv(s1,'Total Shots') + gv(s2,'Total Shots')
+                            tm  = lj['fixture']['status'].get('elapsed') or 0
+                            plac = f"{lj['goals']['home']}x{lj['goals']['away']}"
+                            live_list.append((sog, sh, tm, plac, f"{lj['teams']['home']['name']} x {lj['teams']['away']['name']}"))
+                        except:
+                            pass
+                live_list.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                if live_list:
+                    top = live_list[:5]
+                    resumo_live = 'JOGOS AO VIVO (Top Pressão): ' + ' | '.join([f"{nm} ({pl}, {tm}min, SOG:{sog}, SH:{sh})" for sog, sh, tm, pl, nm in top])
+            except:
+                resumo_live = ''
                     contexto_chat = f"""
                     ATUE COMO: Cientista de Dados Sênior do 'Neves Analytics'.
                     
@@ -2907,6 +3011,8 @@ if st.session_state.ROBO_LIGADO:
                     Se o usuário pedir estratégia, crie uma baseada nos NÚMEROS apresentados.
                     
                     {txt_bigdata_resumo}
+
+            {resumo_live}
                     
                     PERGUNTA DO TIAGO: "{prompt}"
                     
