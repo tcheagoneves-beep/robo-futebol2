@@ -912,7 +912,7 @@ def gerar_multipla_matinal_ia(api_key):
                     kickoff = datetime.fromisoformat(dt_iso.replace('Z', '+00:00'))
                 except:
                     kickoff = None
-                meta_local[str(fid)] = {'league_id': j['league'].get('id'), 'kickoff': kickoff, 'name': f"{home} x {away}"}
+                meta_local[str(fid)] = {'league_id': j['league'].get('id'), 'kickoff': kickoff, 'name': f"{home} x {away}", 'recente': int(min(h_mic, a_mic))}
             except:
                 pass
                 lista_jogos_txt += f"""
@@ -932,12 +932,13 @@ def gerar_multipla_matinal_ia(api_key):
         DADOS (JOGOS FILTRADOS NA BET365):
         {lista_jogos_txt}
         
-        CRITÉRIOS:
-        1. Escolha jogos onde a "Recente" (Forma atual) sustenta a aposta.
-        2. Foco em mercados de GOLS (Over 0.5 HT, Over 1.5 FT).
-        3. Se não houver 2 jogos CONFITÁVEIS, não force.
+        CRITÉRIOS OBRIGATÓRIOS:
+1. AMBOS os jogos devem ter Recente >= 60% (forma atual).
+2. Se algum jogo tiver < 60%, NÃO force múltipla.
+3. Priorize ligas diferentes e horários afastados (anti-correlação).
+4. Mercados permitidos: Over 0.5 HT ou Over 1.5 FT.
         
-        SAÍDA JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "..."}} ], "probabilidade_combinada": "90" }}
+        SAÍDA JSON: {{ "jogos": [ {{"fid": 123, "jogo": "A x B", "motivo": "...", "recente": 60}} ], "probabilidade_combinada": "90" }}
         """
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
@@ -974,6 +975,19 @@ def gerar_insights_matinais_ia(api_key):
             away_id = j['teams']['away']['id']
             home = j['teams']['home']['name']
             away = j['teams']['away']['name']
+
+        # [MELHORIA V2] WINRATE PESSOAL (usuário)
+        txt_pessoal = ''
+        try:
+            df_sheets = st.session_state.get('historico_full', pd.DataFrame())
+            if df_sheets is not None and not df_sheets.empty:
+                f_h = df_sheets[df_sheets['Jogo'].str.contains(home, na=False, case=False)]
+                if len(f_h) >= 3:
+                    wr_pessoal = (f_h['Resultado'].str.contains('GREEN', na=False).sum() / len(f_h)) * 100
+                    txt_pessoal = f"WINRATE PESSOAL ({home}): {wr_pessoal:.0f}% ({len(f_h)} apostas)"
+        except:
+            txt_pessoal = ''
+
             liga = j['league']['name']
             
             mapa_jogos[f"{home} x {away}"] = str(fid)
@@ -1000,6 +1014,7 @@ def gerar_insights_matinais_ia(api_key):
                 - Fora: {a_50['win']}% Vitórias | {a_50['over25']}% Over 2.5
                 
                 🔥 FASE ATUAL (10 Jogos - O Momento):
+- {txt_pessoal}
                 - Casa: {micro['home']['resumo']}
                 - Fora: {micro['away']['resumo']}
                 """
@@ -1056,15 +1071,31 @@ def gerar_insights_matinais_ia(api_key):
         📝 Motivo: [Explique: "Dominante com 60% de vitórias no longo prazo..."]
         """
         
-        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.4))
+        response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.0))
         st.session_state['gemini_usage']['used'] += 1
         
-        return response.text, mapa_jogos
+        texto_ia = response.text
+
+        # [VALIDAÇÃO V2] Se IA ignorar filtro de elite, refaz 1 vez
+        try:
+            if ('Falso Favorito' not in texto_ia) and ('50 Jogos' not in texto_ia) and ('50 jogos' not in texto_ia):
+                st.warning('⚠️ IA ignorou filtro de elite. Refazendo análise (1 tentativa)...')
+                prompt2 = prompt + "\n\nIMPORTANTE: cite explicitamente os dados de 50 jogos e mencione ao menos 1 regra do FILTRO DE ELITE."
+                response2 = model_ia.generate_content(prompt2, generation_config=genai.types.GenerationConfig(temperature=0.0))
+                st.session_state['gemini_usage']['used'] += 1
+                texto_ia = response2.text
+        except:
+            pass
+
+        return texto_ia, mapa_jogos
 
     except Exception as e: return f"Erro na análise: {str(e)}", {}
 
 def gerar_analise_mercados_alternativos_ia(api_key):
     if not IA_ATIVADA: return []
+    # [MELHORIA V2] Base de juízes rigorosos (Top Europa - ajuste conforme necessário)
+    JUIZES_RIGOROSOS = ['Michael Oliver','Clément Turpin','Daniele Orsato','Szymon Marciniak','Felix Brych','Antonio Mateu Lahoz','Danny Makkelie','Björn Kuipers','Artur Soares Dias','Jesús Gil Manzano','Carlos del Cerro Grande','José María Sánchez Martínez','Marco Guida','Davide Massa','Slavko Vinčić','Anthony Taylor','Stéphanie Frappart','István Kovács']
+
     hoje = get_time_br().strftime('%Y-%m-%d')
     
     # Ligas Big Markets (Para Player Props - Chutes/Goleiro)
@@ -1092,6 +1123,7 @@ def gerar_analise_mercados_alternativos_ia(api_key):
             away = j['teams']['away']['name']
             liga_nome = j['league']['name']
             juiz = j['fixture'].get('referee', 'Desconhecido')
+            juiz_rigor = 'SIM' if any(jr.lower() in str(juiz).lower() for jr in JUIZES_RIGOROSOS) else 'NAO'
             
             # --- LÓGICA DE DADOS ---
             permite_player_props = "SIM" if lid in LIGAS_BIG_MARKETS else "NAO"
@@ -1203,7 +1235,15 @@ def gerar_bet_builder_alavancagem(api_key):
                         txt_historico_pessoal = f"Histórico: {home_nm} ({wr_h:.0f}%) | {away_nm} ({wr_a:.0f}%)."
 
                 score = 0
-                if "7" in dados_bd or "8" in dados_bd or "9" in dados_bd: score += 2 
+
+                # [MELHORIA V2] Score numérico real baseado em ratings (evita substring)
+                try:
+                    m_rt = re.search(r'Rating\s*:?\s*(\d+\.\d+)', str(dados_bd))
+                    rv = float(m_rt.group(1)) if m_rt else 0.0
+                    if rv >= 7.0: score += 2
+                    elif rv >= 6.7: score += 1
+                except:
+                    pass 
                 if (len(f_h) > 2 and wr_h < 40) or (len(f_a) > 2 and wr_a < 40): score -= 5
                 
                 if score >= 2:
@@ -1219,7 +1259,8 @@ def gerar_bet_builder_alavancagem(api_key):
         if not lista_provaveis: return []
         
         lista_provaveis.sort(key=lambda x: x['score'], reverse=True)
-        top_picks = lista_provaveis[:3]
+        top_picks = [p for p in lista_provaveis if p.get('score',0) >= 2][:3]
+        if not top_picks: return []
         
         resultados_finais = []
         for pick in top_picks:
@@ -1238,7 +1279,11 @@ def gerar_bet_builder_alavancagem(api_key):
             3. HISTÓRICO USER: {pick['historico']}
             4. JUIZ: {pick['referee']}
             
-            SAÍDA JSON:
+            A REGRA OBRIGATÓRIA:
+- A odd combinada deve ser >= @3.50
+- Se ficar abaixo, remova uma seleção (ex: tire cartões)
+
+SAÍDA JSON:
             {{
                 "titulo": "🚀 ALAVANCAGEM {home} vs {away}",
                 "selecoes": ["Vencedor...", "Gols...", "Cartões..."],
@@ -1442,6 +1487,16 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
             aviso_ia = "(DADOS ESTIMADOS - Ataques Perigosos ausentes. Intensidade recalculada com fator conservador x3. Confie mais nos Chutes.)"
             usou_estimativa = True
 
+
+        # [MELHORIA V2] Instrução explícita para IA quando intensidade é estimada
+        if usou_estimativa:
+            instrucao_ia = f"""
+⚠️ DADOS ESTIMADOS: Ignore a métrica de intensidade. Confie APENAS em:
+- Chutes Totais: {chutes_totais}
+- Chutes no Gol: {total_chutes_gol}
+- Cenário: {quem_manda}
+"""
+
         # --- 2. ENGENHARIA DE DADOS (KPIs) ---
         intensidade_jogo = atq_perigo_total / tempo if tempo > 0 else 0
         
@@ -1467,6 +1522,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         
         # Aviso para a IA se usamos estimativa
         aviso_ia = ""
+        instrucao_ia = 'Use todos os dados normalmente.'
         if usou_estimativa:
             aviso_ia = "(NOTA TÉCNICA: Dados de Ataques Perigosos ausentes na API. Intensidade foi calculada baseada no volume de CHUTES. Confie nos Chutes.)"
 
@@ -1475,6 +1531,7 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         ATUE COMO UM CIENTISTA DE DADOS DE FUTEBOL E TRADER ESPORTIVO.
         Analise a entrada: '{estrategia}' (Tipo: {tipo_sugestao}).
         {aviso_ia}
+{instrucao_ia}
 
         VOCÊ DEVE CRUZAR O "MOMENTO" (O que está acontecendo agora) COM A "VERDADE" (Histórico de 50 jogos).
         
@@ -1507,6 +1564,23 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         JSON: {{ "classe": "...", "probabilidade": "0-100", "motivo_tecnico": "..." }}
         """
         
+        # [MELHORIA V2] Regra explícita: Winrate Pessoal >=80% deve pesar como DIAMANTE
+        
+        try:
+        
+            if 'Winrate Pessoal' in str(extra_context):
+        
+                m_wr = re.search(r'(\d+)%', str(extra_context))
+        
+                if m_wr and int(m_wr.group(1)) >= 80:
+        
+                    prompt += '\n\nREGRA OBRIGATÓRIA: Usuário tem winrate pessoal >=80% com o time citado. Se não houver contradição forte, classifique como DIAMANTE.'
+        
+        except:
+        
+            pass
+
+        
         response = model_ia.generate_content(prompt, generation_config=genai.types.GenerationConfig(response_mime_type="application/json"))
         st.session_state['gemini_usage']['used'] += 1
         
@@ -1520,7 +1594,12 @@ def consultar_ia_gemini(dados_jogo, estrategia, stats_raw, rh, ra, extra_context
         emoji = "✅"
         if "DIAMANTE" in classe or (prob_val >= 85): emoji = "💎"; classe = "DIAMANTE"
         elif "ARRISCADO" in classe: emoji = "⚠️"
-        elif "VETADO" in classe or prob_val < 60: emoji = "⛔"; classe = "VETADO"
+        # [MELHORIA V2] Threshold dinâmico de veto por tipo de estratégia
+        threshold_veto = 60
+        if ('Under' in estrategia) or ('Morno' in estrategia) or ('Arame' in estrategia):
+            threshold_veto = 50
+        if "VETADO" in classe or prob_val < threshold_veto:
+            emoji = "⛔"; classe = "VETADO"
 
         prob_str = f"{prob_val}%"
         
@@ -1719,6 +1798,60 @@ def salvar_snipers_do_texto(texto_ia):
             adicionar_historico(item_sniper)
     except: pass
 
+# ==============================================================================
+# [MELHORIA V2] Sniper Matinal - salvar com filtro de qualidade (não remove o original)
+# ==============================================================================
+def salvar_snipers_do_texto_v2(texto_ia):
+    if not texto_ia or 'Sem jogos' in str(texto_ia):
+        return
+
+    zonas = ['ZONA DE GOLS', 'ZONA DE TRINCHEIRA', 'ZONA DE MATCH ODDS']
+    texto = str(texto_ia)
+    if not any(z in texto for z in zonas):
+        return
+
+    try:
+        jogos_encontrados = []
+        for zona in zonas:
+            if zona not in texto:
+                continue
+            bloco = texto.split(zona, 1)[1]
+            for z2 in zonas:
+                if z2 != zona and z2 in bloco:
+                    bloco = bloco.split(z2, 1)[0]
+            for linha in bloco.splitlines():
+                if 'Jogo:' in linha:
+                    nome = linha.replace('⚽', '').strip()
+                    if nome and nome not in jogos_encontrados:
+                        jogos_encontrados.append(nome)
+                if len(jogos_encontrados) >= 5:
+                    break
+            if len(jogos_encontrados) >= 5:
+                break
+
+        for jogo_nome in jogos_encontrados[:5]:
+            item_sniper = {
+                'FID': f"SNIPER_{random.randint(10000, 99999)}",
+                'Data': get_time_br().strftime('%Y-%m-%d'),
+                'Hora': '08:00',
+                'Liga': 'Sniper Matinal',
+                'Jogo': jogo_nome.strip(),
+                'Placar_Sinal': '0x0',
+                'Estrategia': 'Sniper Matinal',
+                'Resultado': 'Pendente',
+                'Opiniao_IA': 'Sniper',
+                'Probabilidade': 'Alta',
+                'Tipo_Sinal': 'MATINAL',
+                'Confidence_Score': '85'
+            }
+            adicionar_historico(item_sniper)
+    except:
+        pass
+
+# Ativa versão v2 (mantém a antiga intacta)
+salvar_snipers_do_texto = salvar_snipers_do_texto_v2
+
+
 def enviar_multipla_matinal(token, chat_ids, api_key):
     if st.session_state.get('multipla_matinal_enviada'): return
     dados_json, mapa_nomes = gerar_multipla_matinal_ia(api_key)
@@ -1747,7 +1880,18 @@ def enviar_multipla_matinal(token, chat_ids, api_key):
     msg += f"\n⚠️ <b>Conclusão:</b> Probabilidade combinada de {prob}%."
     
     enviar_telegram(token, chat_ids, msg)
-    multipla_obj = {"id_unico": f"MULT_{'_'.join(ids_compostos)}", "tipo": "MATINAL", "fids": ids_compostos, "nomes": nomes_compostos, "status": "Pendente", "data": get_time_br().strftime('%Y-%m-%d')}
+    multipla_obj = {
+        "id_unico": f"MULT_{'_'.join(ids_compostos)}",
+        "tipo": "MATINAL",
+        "fids": ids_compostos,
+        "nomes": nomes_compostos,
+        "status": "Pendente",
+        "data": get_time_br().strftime('%Y-%m-%d'),
+        # [NOVO] Metadados para auditoria
+        "prob_combinada": str(dados_json.get('probabilidade_combinada', '90')),
+        "recente_avg": (sum([int(j.get('recente', 50)) for j in jogos]) / len(jogos)) if jogos else 0,
+        "motivo_ia": [j.get('motivo','') for j in jogos],
+    }
     if 'multiplas_pendentes' not in st.session_state: st.session_state['multiplas_pendentes'] = []
     st.session_state['multiplas_pendentes'].append(multipla_obj)
     st.session_state['multipla_matinal_enviada'] = True
@@ -1757,6 +1901,9 @@ def enviar_alerta_alternativos(token, chat_ids, api_key):
     sinais = gerar_analise_mercados_alternativos_ia(api_key)
     if not sinais: return
     for s in sinais:
+        # [FILTRO V2] Só envia sinais com fundamentação mínima
+        if len(str(s.get('destaque',''))) < 50:
+            continue
         msg = f"<b>{s['titulo']}</b>\n\n⚽ <b>{s['jogo']}</b>\n\n🔎 <b>Análise:</b>\n{s['destaque']}\n\n🎯 <b>INDICAÇÃO:</b> {s['indicacao']}"
         if s['tipo'] == 'GOLEIRO': msg += "\n⚠️ <i>Regra: Aposte no 'Goleiro do Time', não no nome do jogador.</i>"
         enviar_telegram(token, chat_ids, msg)
@@ -1843,12 +1990,33 @@ def analisar_bi_com_ia():
     if not IA_ATIVADA: return "IA Offline."
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados."
-    resumo = df.groupby('Estrategia')['Resultado'].value_counts().unstack().fillna(0).to_string()
-    prompt = f"ATUE COMO ANALISTA DE DADOS. Analise: {resumo}. Dê 3 insights sobre o que está dando lucro e o que dar prejuízo."
+    # [MELHORIA V2] Resumo rico: desempenho por Estratégia + Liga
+    df_bi = df.copy()
+    df_bi = df_bi[df_bi['Resultado'].isin(['✅ GREEN','❌ RED'])].copy()
+    if df_bi.empty:
+        return 'Sem dados finalizados.'
+    pivot = df_bi.groupby(['Estrategia','Liga'])['Resultado'].apply(lambda x: pd.Series({'WR': (x.str.contains('GREEN').sum()/len(x)*100) if len(x)>0 else 0, 'Total': len(x)})).unstack()
+    resumo_rico = pivot.to_string()
+    prompt = f"""ATUE COMO ANALISTA QUANT.
+Analise o desempenho por Estratégia + Liga:
+{resumo_rico}
+
+Identifique:
+1) Estratégia+Liga com WR > 70% e bom volume
+2) Ligas com prejuízo consistente
+3) Combinações perfeitas para repetir
+Seja objetivo e acionável."""
     try:
         response = model_ia.generate_content(prompt)
         st.session_state['gemini_usage']['used'] += 1
-        return response.text
+        analise_txt = response.text
+        # [NOVO] Salva análises BI em memória
+        try:
+            if 'analises_ia_bi' not in st.session_state: st.session_state['analises_ia_bi'] = []
+            st.session_state['analises_ia_bi'].append({'data': get_time_br().strftime('%Y-%m-%d %H:%M'), 'analise': analise_txt})
+        except:
+            pass
+        return analise_txt
     except: return "Erro IA."
 
 def criar_estrategia_nova_ia(foco_usuario):
@@ -1870,6 +2038,19 @@ def otimizar_estrategias_existentes_ia():
     df = st.session_state.get('historico_full', pd.DataFrame())
     if df.empty: return "Sem dados."
     reds = df[df['Resultado'].str.contains('RED', na=False)]['Estrategia'].value_counts().to_string()
+    # [MELHORIA V2] Confidence Score Médio dos REDs (se a coluna existir)
+    try:
+        if 'Confidence_Score' in df.columns:
+            reds_detalhados = df[df['Resultado'].str.contains('RED', na=False)].copy()
+            if not reds_detalhados.empty:
+                reds_detalhados['Conf_Score'] = pd.to_numeric(reds_detalhados['Confidence_Score'].astype(str).str.replace('%','', regex=False), errors='coerce')
+                media_conf_reds = reds_detalhados['Conf_Score'].mean()
+                if pd.notna(media_conf_reds):
+                    reds = reds + f"\n\n🧠 Confidence Score Médio dos REDs: {media_conf_reds:.1f} (se <60, o sistema já alertava)"
+
+    except:
+        pass
+
     prompt = f"ATUE COMO GESTOR DE RISCO. Estou tomando RED nestas estratégias: {reds}. Sugira uma trava de segurança técnica."
     try:
         response = model_ia.generate_content(prompt)
