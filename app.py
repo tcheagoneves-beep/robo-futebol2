@@ -2977,64 +2977,64 @@ if st.session_state.ROBO_LIGADO:
                             txt_bigdata_resumo = f"Erro ao calcular dados: {e}"
 
                     # --- 2. CONTEXTO DO PROMPT (A ORDEM PARA A IA) ---
-            # [MELHORIA] Snapshot de jogos AO VIVO para o Chat IA (se o robô estiver monitorando)
-            resumo_live = ''
-            try:
-                live_list = []
-                if 'jogos_live' in locals() and jogos_live:
-                    for lj in jogos_live[:50]:
-                        fid_l = lj['fixture']['id']
-                        st_l = st.session_state.get(f"st_{fid_l}", [])
-                        if not st_l: continue
-                        try:
-                            s1 = st_l[0]['statistics']; s2 = st_l[1]['statistics']
-                            def gv(l, t):
-                                return next((x['value'] for x in l if x['type']==t), 0) or 0
-                            sog = gv(s1,'Shots on Goal') + gv(s2,'Shots on Goal')
-                            sh  = gv(s1,'Total Shots') + gv(s2,'Total Shots')
-                            tm  = lj['fixture']['status'].get('elapsed') or 0
-                            plac = f"{lj['goals']['home']}x{lj['goals']['away']}"
-                            live_list.append((sog, sh, tm, plac, f"{lj['teams']['home']['name']} x {lj['teams']['away']['name']}"))
-                        except:
-                            pass
-                live_list.sort(key=lambda x: (x[0], x[1]), reverse=True)
-                if live_list:
-                    top = live_list[:5]
-                    resumo_live = 'JOGOS AO VIVO (Top Pressão): ' + ' | '.join([f"{nm} ({pl}, {tm}min, SOG:{sog}, SH:{sh})" for sog, sh, tm, pl, nm in top])
-            except:
-                resumo_live = ''
-            contexto_chat = f"""
-                    ATUE COMO: Cientista de Dados Sênior do 'Neves Analytics'.
+                    # [MELHORIA] Snapshot de jogos AO VIVO para o Chat IA (se o robô estiver monitorando)
+                    resumo_live = ''
+                    try:
+                        live_list = []
+                        if 'jogos_live' in locals() and jogos_live:
+                            for lj in jogos_live[:50]:
+                                fid_l = lj['fixture']['id']
+                                st_l = st.session_state.get(f"st_{fid_l}", [])
+                                if not st_l: continue
+                                try:
+                                    s1 = st_l[0]['statistics']; s2 = st_l[1]['statistics']
+                                    def gv(l, t):
+                                        return next((x['value'] for x in l if x['type']==t), 0) or 0
+                                    sog = gv(s1,'Shots on Goal') + gv(s2,'Shots on Goal')
+                                    sh  = gv(s1,'Total Shots') + gv(s2,'Total Shots')
+                                    tm  = lj['fixture']['status'].get('elapsed') or 0
+                                    plac = f"{lj['goals']['home']}x{lj['goals']['away']}"
+                                    live_list.append((sog, sh, tm, plac, f"{lj['teams']['home']['name']} x {lj['teams']['away']['name']}"))
+                                except:
+                                    pass
+                        live_list.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                        if live_list:
+                            top = live_list[:5]
+                            resumo_live = 'JOGOS AO VIVO (Top Pressão): ' + ' | '.join([f"{nm} ({pl}, {tm}min, SOG:{sog}, SH:{sh})" for sog, sh, tm, pl, nm in top])
+                    except:
+                        resumo_live = ''
+                    contexto_chat = f"""
+                            ATUE COMO: Cientista de Dados Sênior do 'Neves Analytics'.
                     
-                    SUA MISSÃO: 
-                    Não dê aulas teóricas. Use os DADOS REAIS abaixo para responder.
-                    Se o usuário pedir estratégia, crie uma baseada nos NÚMEROS apresentados.
+                            SUA MISSÃO: 
+                            Não dê aulas teóricas. Use os DADOS REAIS abaixo para responder.
+                            Se o usuário pedir estratégia, crie uma baseada nos NÚMEROS apresentados.
                     
-                    {txt_bigdata_resumo}
+                            {txt_bigdata_resumo}
+                            {resumo_live}
 
-            {resumo_live}
                     
-                    PERGUNTA DO TIAGO: "{prompt}"
+                            PERGUNTA DO TIAGO: "{prompt}"
                     
-                    FORMATO DA RESPOSTA:
-                    1. 🔢 **Os Números:** (Cite a média e a correlação calculada acima).
-                    2. 🎯 **O Veredicto:** (Vale a pena operar? Sim/Não).
-                    3. 🛠️ **Estratégia Sugerida:** (Ex: "Como a média é {media_cantos:.1f}, busque a linha de Over X...").
-                    Seja objetivo e numérico.
-                    """
+                            FORMATO DA RESPOSTA:
+                            1. 🔢 **Os Números:** (Cite a média e a correlação calculada acima).
+                            2. 🎯 **O Veredicto:** (Vale a pena operar? Sim/Não).
+                            3. 🛠️ **Estratégia Sugerida:** (Ex: "Como a média é {media_cantos:.1f}, busque a linha de Over X...").
+                            Seja objetivo e numérico.
+                            """
 
-            try:
-                with st.spinner("🤖 Calculando estatísticas e gerando resposta..."):
-                    response = model_ia.generate_content(contexto_chat)
-                    st.session_state['gemini_usage']['used'] += 1
-                    msg_ia = response.text
+                    try:
+                        with st.spinner("🤖 Calculando estatísticas e gerando resposta..."):
+                            response = model_ia.generate_content(contexto_chat)
+                            st.session_state['gemini_usage']['used'] += 1
+                            msg_ia = response.text
                 
-                st.session_state.messages.append({"role": "assistant", "content": msg_ia})
-                st.chat_message("assistant").write(msg_ia)
-                if len(st.session_state["messages"]) > 6:
-                    time.sleep(0.5); st.rerun()
+                        st.session_state.messages.append({"role": "assistant", "content": msg_ia})
+                        st.chat_message("assistant").write(msg_ia)
+                        if len(st.session_state["messages"]) > 6:
+                            time.sleep(0.5); st.rerun()
                     
-            except Exception as e: st.error(f"Erro na IA: {e}")
+                    except Exception as e: st.error(f"Erro na IA: {e}")
 
         with abas[10]:
             st.markdown("### 📈 Trading Pré-Live (Drop Odds)")
