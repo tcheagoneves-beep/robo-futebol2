@@ -2133,8 +2133,10 @@ MOVIMENTO DE ODD (últimos 5 min):
         
         return html_analise, prob_str
 
-    except Exception as e:
-        # [PATCH V6.2] API falhou? Aprova com 55% ao invés de N/A
+    except Exception as e: 
+        # [PATCH V6.3] Se IA falha, VETA (não envia sinal)
+        # Só enviamos sinais com análise IA real
+        return "", "N/A"
         return ("\n🤖 <b>IA LIVE:</b>\n⚠️ <b>ARRISCADO (55%)</b>\n"
                "📊 <i>IA temporariamente indisponível</i>\n"
                "💡 <i>Análise técnica: Dados indicam oportunidade</i>"), "55%"
@@ -3492,16 +3494,23 @@ if st.session_state.ROBO_LIGADO:
                         else:
                             tipo_info = '⚽ <b>OVER</b>: Sai gol\n'
                         bloco_aviso_odd = ""
-                        # [MELHORIA V3] Odd mínima por estratégia
+                        # [PATCH V6.3] Odd mínima por estratégia + threshold de "valor"
                         odd_min_estrat = obter_odd_minima(s['tag'])
                         odd_crit_estrat = max(1.10, odd_min_estrat - 0.20)
+                        
+                        # NOVO: Threshold para "ODD DE VALOR" (mínimo 1.60)
+                        ODD_VALOR_MINIMA = 1.60
+                        
                         if odd_val > 0 and odd_val < odd_crit_estrat:
                             emoji_sinal = "⛔"
                             bloco_aviso_odd = f"⚠️ <b>ALERTA: ODD BAIXA (@{odd_val:.2f})</b>\n⏳ <i>Não entre agora. Aguarde ou ignore.</i>\n────────────────\n"
                         elif odd_val >= odd_crit_estrat and odd_val < odd_min_estrat:
                             emoji_sinal = "⏳"
                             bloco_aviso_odd = f"👀 <b>AGUARDE VALORIZAR (@{odd_val:.2f})</b>\n🎯 <i>Meta: Entrar acima de @{odd_min_estrat:.2f}</i>\n────────────────\n"
-                        elif odd_val >= odd_min_estrat:
+                        elif odd_val >= odd_min_estrat and odd_val < ODD_VALOR_MINIMA:
+                            emoji_sinal = "✅"
+                            bloco_aviso_odd = f"✅ <b>ODD ACEITÁVEL: @{odd_val:.2f}</b>\n────────────────\n"
+                        elif odd_val >= ODD_VALOR_MINIMA:
                             emoji_sinal = "✅"
                             bloco_aviso_odd = f"🔥 <b>ODD DE VALOR: @{odd_val:.2f}</b>\n────────────────\n"
 
