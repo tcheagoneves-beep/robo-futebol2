@@ -425,34 +425,6 @@ def calcular_gols_atuais(placar_str: str) -> int:
         return 0
 
 
-def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
-    '''
-    [PATCH EMERGENCIAL] Threshold LIBERAL por estratégia (30-60%).
-    REDUÇÃO: UNDER 65→45%, Golden 75→50%, OVER 50→35%
-    '''
-    estr = str(estrategia or '')
-    tipo = classificar_tipo_estrategia(estr)
-    
-    if tipo == 'UNDER':
-        thr = 45
-    elif 'golden' in estr.lower() or 'diamante' in estr.lower():
-        thr = 50
-    else:
-        thr = 35
-    
-    try:
-        odd = float(odd_atual)
-        if odd >= 2.00:
-            thr -= 10
-        elif odd >= 1.80:
-            thr -= 5
-        elif odd <= 1.30:
-            thr += 5
-    except:
-        pass
-    
-    return int(max(30, min(thr, 60)))
-
 
 def rastrear_movimento_odd(fid, estrategia, odd_atual, janela_min=5):
     '''Rastreia movimento de odd em memória (últimos X min).'''
@@ -2068,11 +2040,23 @@ MOVIMENTO DE ODD (últimos 5 min):
         st.session_state['gemini_usage']['used'] += 1
         
         txt_limpo = response.text.replace("```json", "").replace("```", "").strip()
-        r_json = json.loads(txt_limpo)
-        
+        r_json = json.loads(response.text)
         classe = r_json.get('classe', 'PADRAO').upper()
         prob_val = int(r_json.get('probabilidade', 70))
         motivo = r_json.get('motivo_tecnico', 'Análise baseada em KPIs.')
+        
+        # [RESTAURADO] Lógica Simples: Só classifica, NÃO veta
+        emoji = "✅"
+        
+        if classe == "DIAMANTE":
+            emoji = "💎"
+            classe = "DIAMANTE"
+        elif classe == "ARRISCADO":
+            emoji = "⚠️"
+            classe = "ARRISCADO"
+        else:
+            emoji = "✅"
+            classe = "APROVADO"
         # ==============================================================================
         # [MELHORIA V3] Aplicar proteções (anti-veto/anti-perda) + validação de odd
         # ==============================================================================
@@ -3617,13 +3601,16 @@ if st.session_state.ROBO_LIGADO:
                                 
                                 if opiniao_db == "Aprovado":
                                     enviar_telegram(safe_token, safe_chat, msg)
+                                    sent_status = True
                                     st.toast(f"✅ Sinal Enviado: {s['tag']}")
                                 elif opiniao_db == "Arriscado":
-                                    msg += "\n👀 <i>Obs: Risco moderado.</i>"
-                                    enviar_telegram(safe_token, safe_chat, msg)
+                                    msg += "\n👀 <i>Obs: Risco moderado detectado.</i>"
+                                    enviar_telegram(safe_token, safe_chat, msg)  # ← ENVIA ARRISCADO!
+                                    sent_status = True
                                     st.toast(f"⚠️ Sinal Arriscado Enviado: {s['tag']}")
                                 else:
-                                    st.toast(f"🛑 Sinal Retido pela IA: {s['tag']}")
+                                    # Só retém se for "⛔ VETADO" (raridade)
+                                    st.toast(f"🛑 Sinal Retido: {s['tag']}")
 
                             except Exception as e: print(f"Erro ao enviar sinal: {e}")
 
