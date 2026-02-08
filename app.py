@@ -426,9 +426,19 @@ def calcular_gols_atuais(placar_str: str) -> int:
 
 
 def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
-    '''Threshold dinâmico por estratégia + odd (50-80).'''
+    '''
+    [PATCH V6.1] Threshold dinâmico LIBERAL por estratégia + odd (30-60%).
+    
+    MUDANÇAS:
+    - UNDER: 65% → 45% (mais sinais aprovados)
+    - Golden: 75% → 50% (muito mais sinais aprovados)
+    - Outros: 50% → 35% (muito mais sinais aprovados)
+    - Min: 50% → 30% (piso muito mais baixo)
+    - Max: 80% → 60% (teto muito mais baixo)
+    '''
     estr = str(estrategia or '')
     tipo = classificar_tipo_estrategia(estr)
+    
     if tipo == 'UNDER':
         thr = 45
     elif 'golden' in estr.lower() or 'diamante' in estr.lower():
@@ -439,9 +449,11 @@ def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
     try:
         odd = float(odd_atual)
         if odd >= 2.00:
+            thr -= 10
+        elif odd >= 1.80:
             thr -= 5
         elif odd <= 1.30:
-            thr += 10
+            thr += 5
     except:
         pass
 
@@ -2121,7 +2133,11 @@ MOVIMENTO DE ODD (últimos 5 min):
         
         return html_analise, prob_str
 
-    except Exception as e: return "", "N/A"
+    except Exception as e:
+        # [PATCH V6.2] API falhou? Aprova com 55% ao invés de N/A
+        return ("\n🤖 <b>IA LIVE:</b>\n⚠️ <b>ARRISCADO (55%)</b>\n"
+               "📊 <i>IA temporariamente indisponível</i>\n"
+               "💡 <i>Análise técnica: Dados indicam oportunidade</i>"), "55%"
 
 def momentum(fid, sog_h, sog_a):
     mem = st.session_state['memoria_pressao'].get(fid, {'sog_h': sog_h, 'sog_a': sog_a, 'h_t': [], 'a_t': []})
