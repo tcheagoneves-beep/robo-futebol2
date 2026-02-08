@@ -427,14 +427,8 @@ def calcular_gols_atuais(placar_str: str) -> int:
 
 def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
     '''
-    [PATCH V6.1] Threshold dinâmico LIBERAL por estratégia + odd (30-60%).
-    
-    MUDANÇAS:
-    - UNDER: 65% → 45% (mais sinais aprovados)
-    - Golden: 75% → 50% (muito mais sinais aprovados)
-    - Outros: 50% → 35% (muito mais sinais aprovados)
-    - Min: 50% → 30% (piso muito mais baixo)
-    - Max: 80% → 60% (teto muito mais baixo)
+    [PATCH EMERGENCIAL] Threshold LIBERAL por estratégia (30-60%).
+    REDUÇÃO: UNDER 65→45%, Golden 75→50%, OVER 50→35%
     '''
     estr = str(estrategia or '')
     tipo = classificar_tipo_estrategia(estr)
@@ -445,7 +439,7 @@ def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
         thr = 50
     else:
         thr = 35
-
+    
     try:
         odd = float(odd_atual)
         if odd >= 2.00:
@@ -456,7 +450,7 @@ def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
             thr += 5
     except:
         pass
-
+    
     return int(max(30, min(thr, 60)))
 
 
