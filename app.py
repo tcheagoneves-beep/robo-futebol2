@@ -430,11 +430,11 @@ def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
     estr = str(estrategia or '')
     tipo = classificar_tipo_estrategia(estr)
     if tipo == 'UNDER':
-        thr = 65
+        thr = 45
     elif 'golden' in estr.lower() or 'diamante' in estr.lower():
-        thr = 75
-    else:
         thr = 50
+    else:
+        thr = 35
 
     try:
         odd = float(odd_atual)
@@ -445,7 +445,7 @@ def calcular_threshold_dinamico(estrategia: str, odd_atual: float) -> int:
     except:
         pass
 
-    return int(max(50, min(thr, 80)))
+    return int(max(30, min(thr, 60)))
 
 
 def rastrear_movimento_odd(fid, estrategia, odd_atual, janela_min=5):
