@@ -1295,7 +1295,17 @@ def gerar_multipla_matinal_ia(api_key):
                 a_mic = stats['away']['micro']
                 
                 mapa_jogos[fid] = f"{home} x {away}"
-            # [MELHORIA] Guarda liga e kickoff para evitar correlação em múltiplas
+                
+                # Adiciona à lista ANTES do try (sempre executa)
+                lista_jogos_txt += f"""
+                - ID {fid}: {home} x {away} ({j['league']['name']})
+                  Odd: {odd_val} ({odd_nome})
+                  Casa: Recente {h_mic}% Over
+                  Fora: Recente {a_mic}% Over
+                """
+                count_validos += 1
+                
+            # [MELHORIA] Guarda liga e kickoff
             try:
                 dt_iso = j['fixture']['date']
                 try:
@@ -1304,14 +1314,7 @@ def gerar_multipla_matinal_ia(api_key):
                     kickoff = None
                 meta_local[str(fid)] = {'league_id': j['league'].get('id'), 'kickoff': kickoff, 'name': f"{home} x {away}", 'recente': int(min(h_mic, a_mic))}
             except:
-                pass
-                lista_jogos_txt += f"""
-                - ID {fid}: {home} x {away} ({j['league']['name']})
-                  Odd: {odd_val} ({odd_nome})
-                  Casa: Recente {h_mic}% Over
-                  Fora: Recente {a_mic}% Over
-                """
-                count_validos += 1
+                pass  # Se falhar metadata, não importa
 
         if not lista_jogos_txt: return None, []
         
@@ -1367,16 +1370,16 @@ def gerar_insights_matinais_ia(api_key):
             away = j['teams']['away']['name']
 
         # [MELHORIA V2] WINRATE PESSOAL (usuário)
-        txt_pessoal = ''
-        try:
-            df_sheets = st.session_state.get('historico_full', pd.DataFrame())
-            if df_sheets is not None and not df_sheets.empty:
-                f_h = df_sheets[df_sheets['Jogo'].str.contains(home, na=False, case=False)]
-                if len(f_h) >= 3:
-                    wr_pessoal = (f_h['Resultado'].str.contains('GREEN', na=False).sum() / len(f_h)) * 100
-                    txt_pessoal = f"WINRATE PESSOAL ({home}): {wr_pessoal:.0f}% ({len(f_h)} apostas)"
-        except:
             txt_pessoal = ''
+            try:
+                df_sheets = st.session_state.get('historico_full', pd.DataFrame())
+                if df_sheets is not None and not df_sheets.empty:
+                    f_h = df_sheets[df_sheets['Jogo'].str.contains(home, na=False, case=False)]
+                    if len(f_h) >= 3:
+                        wr_pessoal = (f_h['Resultado'].str.contains('GREEN', na=False).sum() / len(f_h)) * 100
+                        txt_pessoal = f"WINRATE PESSOAL ({home}): {wr_pessoal:.0f}% ({len(f_h)} apostas)"
+            except:
+                txt_pessoal = ''
 
             liga = j['league']['name']
             
@@ -1404,7 +1407,7 @@ def gerar_insights_matinais_ia(api_key):
                 - Fora: {a_50['win']}% Vitórias | {a_50['over25']}% Over 2.5
                 
                 🔥 FASE ATUAL (10 Jogos - O Momento):
-- {txt_pessoal}
+            - {txt_pessoal}
                 - Casa: {micro['home']['resumo']}
                 - Fora: {micro['away']['resumo']}
                 """
@@ -2969,26 +2972,18 @@ def verificar_var_rollback(jogos_live, token, chats):
 def verificar_automacao_bi(token, chat_ids, stake_padrao):
     agora = get_time_br()
     hoje_str = agora.strftime('%Y-%m-%d')
-    
-    # 1. Reset diário das flags
     if st.session_state.get('last_check_date') != hoje_str:
-        st.session_state['bi_enviado'] = False
-        st.session_state['ia_enviada'] = False
-        st.session_state['financeiro_enviado'] = False
-        st.session_state['bigdata_enviado'] = False
+        st.session_state['bi_enviado'] = False; st.session_state['ia_enviada'] = False
+        st.session_state['financeiro_enviado'] = False; st.session_state['bigdata_enviado'] = False
         st.session_state['last_check_date'] = hoje_str
-    
-    # 2. RELATÓRIO BI (23:30)
     if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
-        enviar_relatorio_bi(token, chat_ids)
-        st.session_state['bi_enviado'] = True
-    
-    # 3. RELATÓRIO FINANCEIRO (23:40)
+        enviar_relatorio_bi(token, chat_ids); st.session_state['bi_enviado'] = True
     if agora.hour == 23 and agora.minute >= 40 and not st.session_state['financeiro_enviado']:
         analise_fin = analisar_financeiro_com_ia(stake_padrao, st.session_state.get('banca_inicial', 100))
         msg_fin = f"💰 <b>CONSULTORIA FINANCEIRA</b>\n\n{analise_fin}"
-        enviar_telegram(token, chat_ids, msg_fin)
-        st.session_state['financeiro_enviado'] = True
+        enviar_telegram(token, chat_ids, msg_fin); st.session_state['financeiro_enviado'] = True
+    if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
+        enviar_analise_estrategia(token, chat_ids); st.session_state['bigdata_enviado'] = True
     
     # 4. SUGESTÃO DE ESTRATÉGIA (23:55)
     if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
