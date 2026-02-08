@@ -2969,10 +2969,31 @@ def verificar_var_rollback(jogos_live, token, chats):
 def verificar_automacao_bi(token, chat_ids, stake_padrao):
     agora = get_time_br()
     hoje_str = agora.strftime('%Y-%m-%d')
+    
+    # 1. Reset diário das flags
     if st.session_state.get('last_check_date') != hoje_str:
-        st.session_state['bi_enviado'] = False; st.session_state['ia_enviada'] = False
-        st.session_state['financeiro_enviado'] = False; st.session_state['bigdata_enviado'] = False
+        st.session_state['bi_enviado'] = False
+        st.session_state['ia_enviada'] = False
+        st.session_state['financeiro_enviado'] = False
+        st.session_state['bigdata_enviado'] = False
         st.session_state['last_check_date'] = hoje_str
+    
+    # 2. RELATÓRIO BI (23:30)
+    if agora.hour == 23 and agora.minute >= 30 and not st.session_state['bi_enviado']:
+        enviar_relatorio_bi(token, chat_ids)
+        st.session_state['bi_enviado'] = True
+    
+    # 3. RELATÓRIO FINANCEIRO (23:40)
+    if agora.hour == 23 and agora.minute >= 40 and not st.session_state['financeiro_enviado']:
+        analise_fin = analisar_financeiro_com_ia(stake_padrao, st.session_state.get('banca_inicial', 100))
+        msg_fin = f"💰 <b>CONSULTORIA FINANCEIRA</b>\n\n{analise_fin}"
+        enviar_telegram(token, chat_ids, msg_fin)
+        st.session_state['financeiro_enviado'] = True
+    
+    # 4. SUGESTÃO DE ESTRATÉGIA (23:55)
+    if agora.hour == 23 and agora.minute >= 55 and not st.session_state['bigdata_enviado']:
+        enviar_analise_estrategia(token, chat_ids)
+        st.session_state['bigdata_enviado'] = True
     
 def verificar_mercados_alternativos(api_key):
     hist = st.session_state.get('historico_sinais', [])
