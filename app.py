@@ -3498,7 +3498,7 @@ def verificar_alerta_matinal(token, chat_ids, api_key):
 
     # 1. Sniper Matinal
 
-    if 8 <= agora.hour < 11:
+    if 8 <= agora.hour < 12:
 
         if not st.session_state['matinal_enviado']:
 
