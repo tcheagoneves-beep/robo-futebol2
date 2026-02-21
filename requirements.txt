@@ -7,4 +7,6 @@ matplotlib
 plotly
 google-generativeai>=0.7.0
 firebase-admin
+betfairlightweight
+
 
